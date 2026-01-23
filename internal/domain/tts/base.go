@@ -11,6 +11,7 @@ import (
 	"xiaozhi-esp32-server-golang/internal/domain/tts/edge_offline"
 	"xiaozhi-esp32-server-golang/internal/domain/tts/openai"
 	"xiaozhi-esp32-server-golang/internal/domain/tts/xiaozhi"
+	"xiaozhi-esp32-server-golang/internal/domain/tts/zhipu"
 )
 
 // 基础TTS提供者接口（不含Context方法）
@@ -59,6 +60,8 @@ func GetTTSProvider(providerName string, config map[string]interface{}) (TTSProv
 		baseProvider = xiaozhi.NewXiaozhiProvider(config)
 	case constants.TtsTypeOpenAI:
 		baseProvider = openai.NewOpenAITTSProvider(config)
+	case constants.TtsTypeZhipu:
+		baseProvider = zhipu.NewZhipuTTSProvider(config)
 	default:
 		return nil, fmt.Errorf("不支持的TTS提供者: %s", providerName)
 	}

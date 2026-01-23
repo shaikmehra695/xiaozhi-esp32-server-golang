@@ -199,7 +199,7 @@
           </el-form-item>
         </template>
 
-        <!-- 智谱 TTS 配置（使用 OpenAI 格式） -->
+        <!-- 智谱 TTS 配置 -->
         <template v-if="form.provider === 'zhipu'">
           <el-form-item label="API Key" prop="zhipu.api_key">
             <el-input v-model="form.zhipu.api_key" placeholder="请输入API Key" type="password" show-password />
@@ -223,16 +223,13 @@
           </el-form-item>
           <el-form-item label="响应格式" prop="zhipu.response_format">
             <el-select v-model="form.zhipu.response_format" placeholder="请选择响应格式" style="width: 100%">
-              <el-option label="MP3" value="mp3" />
-              <el-option label="Opus" value="opus" />
-              <el-option label="AAC" value="aac" />
-              <el-option label="FLAC" value="flac" />
               <el-option label="WAV" value="wav" />
               <el-option label="PCM" value="pcm" />
             </el-select>
+            <div style="font-size: 12px; color: #909399; margin-top: 4px;">注意：流式输出时仅支持PCM格式</div>
           </el-form-item>
           <el-form-item label="语速" prop="zhipu.speed">
-            <el-input-number v-model="form.zhipu.speed" :min="0.25" :max="4.0" :step="0.1" style="width: 100%" placeholder="0.25-4.0，默认1.0" />
+            <el-input-number v-model="form.zhipu.speed" :min="0.5" :max="2.0" :step="0.1" style="width: 100%" placeholder="0.5-2.0，默认1.0" />
           </el-form-item>
           <el-form-item label="使用流式" prop="zhipu.stream">
             <el-switch v-model="form.zhipu.stream" />
@@ -429,8 +426,6 @@ const generateConfig = () => {
       config.frame_duration = form.openai.frame_duration
       break
     case 'zhipu':
-      // 智谱使用 OpenAI 格式，需要在 json_data 中设置 provider 为 "openai"
-      config.provider = 'openai'
       config.api_key = form.zhipu.api_key
       config.api_url = form.zhipu.api_url || 'https://open.bigmodel.cn/api/paas/v4/audio/speech'
       config.model = form.zhipu.model || 'glm-tts'
@@ -551,7 +546,6 @@ const editConfig = (config) => {
         form.openai.frame_duration = configData.frame_duration || 60
         break
       case 'zhipu':
-        // 智谱配置从 json_data 中读取，json_data 中应该包含 provider: "openai"
         form.zhipu.api_key = configData.api_key || ''
         form.zhipu.api_url = configData.api_url || 'https://open.bigmodel.cn/api/paas/v4/audio/speech'
         form.zhipu.model = configData.model || 'glm-tts'
