@@ -110,7 +110,8 @@ jobs:
           path: windows-amd64
 
   build-linux-amd64:
-    runs-on: ubuntu-latest
+    # 使用 Ubuntu 20.04 构建，使二进制依赖的 glibc 版本较低，便于在旧系统上运行
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -179,7 +180,8 @@ jobs:
 
       - name: Pack Linux release（目录 linux-amd64/，解压/下载后一层目录）
         run: |
-          PACK_DIR="linux-amd64"
+          PACK_DIR="linux-amd64/xiaozhi_server-linux-amd64"
+          mkdir -p "$PACK_DIR"
           mkdir -p "$PACK_DIR"/ten-vad/lib/Linux/x64 "$PACK_DIR"/logs
           cp xiaozhi_server "$PACK_DIR/"
           patchelf --add-rpath '$ORIGIN/ten-vad/lib/Linux/x64' "$PACK_DIR/xiaozhi_server" 2>/dev/null || true
