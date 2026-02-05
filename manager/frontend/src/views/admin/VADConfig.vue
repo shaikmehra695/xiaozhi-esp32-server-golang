@@ -68,8 +68,6 @@
       >
         <el-form-item label="提供商" prop="provider">
           <el-select v-model="form.provider" placeholder="请选择提供商" style="width: 100%">
-            <el-option label="WebRTC VAD" value="webrtc_vad" />
-            <el-option label="Silero VAD" value="silero_vad" />
             <el-option label="TEN VAD" value="ten_vad" />
           </el-select>
         </el-form-item>
@@ -81,8 +79,6 @@
         <el-form-item label="配置ID" prop="config_id">
           <el-input v-model="form.config_id" placeholder="请输入唯一的配置ID" />
         </el-form-item>
-        
-        <!-- 移除是否默认开关，现在在列表页操作 -->
         
         <!-- WebRTC VAD 配置 -->
         <template v-if="form.provider === 'webrtc_vad'">
@@ -153,7 +149,7 @@
           <el-divider content-position="left">TEN VAD 配置</el-divider>
           <el-form-item label="帧移大小" prop="ten_vad.hop_size">
             <el-input-number v-model="form.ten_vad.hop_size" :min="128" :max="1024" style="width: 100%" />
-            <div style="font-size: 12px; color: #909399; margin-top: 4px;">推荐值：512</div>
+            <div style="font-size: 12px; color: #909399; margin-top: 4px;">默认：320</div>
           </el-form-item>
           <el-form-item label="VAD检测阈值" prop="ten_vad.threshold">
             <el-input-number v-model="form.ten_vad.threshold" :min="0" :max="1" :step="0.1" :precision="2" style="width: 100%" />
@@ -196,7 +192,7 @@ const formRef = ref()
 const form = reactive({
   name: '',
   config_id: '',
-  provider: '',
+  provider: 'ten_vad',
   is_default: false,
   enabled: true,
   webrtc_vad: {
@@ -216,7 +212,7 @@ const form = reactive({
     acquire_timeout_ms: 3000
   },
   ten_vad: {
-    hop_size: 512,
+    hop_size: 320,
     threshold: 0.3,
     pool_size: 10,
     acquire_timeout_ms: 3000
@@ -278,11 +274,8 @@ const editConfig = (config) => {
   form.enabled = config.enabled
   
   // 解析配置JSON并填充到对应字段
-  // 兼容新旧格式：带key的格式（{"webrtc_vad": {...}}）和不带key的格式（{...}）
   try {
     const configObj = JSON.parse(config.json_data || '{}')
-    
-    // 兼容旧格式：带key的格式（{"webrtc_vad": {...}} 或 {"silero_vad": {...}} 或 {"ten_vad": {...}}）
     if (configObj.webrtc_vad) {
       form.webrtc_vad = { ...form.webrtc_vad, ...configObj.webrtc_vad }
     } else if (configObj.silero_vad) {
@@ -290,7 +283,6 @@ const editConfig = (config) => {
     } else if (configObj.ten_vad) {
       form.ten_vad = { ...form.ten_vad, ...configObj.ten_vad }
     } else {
-      // 新格式：不带key，直接是配置对象
       if (config.provider === 'webrtc_vad') {
         form.webrtc_vad = { ...form.webrtc_vad, ...configObj }
       } else if (config.provider === 'silero_vad') {
@@ -411,7 +403,7 @@ const resetForm = () => {
   Object.assign(form, {
     name: '',
     config_id: '',
-    provider: '',
+    provider: 'ten_vad',
     is_default: false,
     enabled: true,
     webrtc_vad: {
@@ -431,7 +423,7 @@ const resetForm = () => {
       acquire_timeout_ms: 3000
     },
     ten_vad: {
-      hop_size: 512,
+      hop_size: 320,
       threshold: 0.3,
       pool_size: 10,
       acquire_timeout_ms: 3000

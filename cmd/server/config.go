@@ -42,6 +42,7 @@ func Init(configFile string) error {
 
 	// 初始化配置系统（包括WebSocket连接）
 	ctx := context.Background()
+	user_config.RegisterManagerSystemConfigHandler(ApplySystemConfigToViper)
 	if err := user_config.InitConfigSystem(ctx); err != nil {
 		fmt.Printf("初始化配置系统失败: %v\n", err)
 	}
@@ -133,6 +134,15 @@ func initConfig(configFile string) error {
 	return nil
 }
 
+// ApplySystemConfigToViper 将系统配置合并到 viper，用于 WebSocket 推送的 system_config 实时更新（回调无返回值）
+func ApplySystemConfigToViper(data map[string]interface{}) {
+	if err := viper.MergeConfigMap(data); err != nil {
+		log.Warnf("合并推送配置到 viper 失败: %v", err)
+		return
+	}
+	log.Info("已从 WebSocket 推送合并系统配置到 viper")
+}
+
 // updateConfigFromAPI 从接口获取配置并更新viper配置
 // 内部会持续重试，直到成功后才返回
 func updateConfigFromAPI() error {
@@ -181,7 +191,7 @@ func updateConfigFromAPI() error {
 			continue
 		}
 
-		log.Debugf("Load config from API: %+v", configMap)
+		//log.Debugf("Load config from API: %+v", configMap)
 
 		// 使用viper.MergeConfigMap设置到viper
 		if err := viper.MergeConfigMap(configMap); err != nil {

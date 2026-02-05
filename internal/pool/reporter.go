@@ -93,7 +93,7 @@ func (r *StatsReporter) reportStats(ctx context.Context) {
 
 	// 如果没有数据，跳过上报
 	if len(stats) == 0 {
-		log.Debugf("当前没有活跃的资源池，跳过上报")
+		//log.Debugf("当前没有活跃的资源池，跳过上报")
 		return
 	}
 
@@ -112,7 +112,7 @@ func (r *StatsReporter) reportStats(ctx context.Context) {
 	if err != nil {
 		log.Warnf("资源池统计上报失败: %v", err)
 	} else {
-		log.Debugf("资源池统计上报成功，资源池数量: %d", len(stats))
+		//log.Debugf("资源池统计上报成功，资源池数量: %d", len(stats))
 	}
 }
 

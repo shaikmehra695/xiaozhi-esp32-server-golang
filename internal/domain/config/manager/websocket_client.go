@@ -62,9 +62,15 @@ type WebSocketResponse struct {
 }
 
 var (
-	defaultClient *WebSocketClient
-	clientOnce    sync.Once
+	defaultClient           *WebSocketClient
+	clientOnce              sync.Once
+	systemConfigPushHandler func(map[string]interface{})
 )
+
+// SetSystemConfigPushHandler 设置收到 system_config 推送时的回调（主程序用于合并到 viper 等），由 user_config 在 Init 时注入
+func SetSystemConfigPushHandler(fn func(map[string]interface{})) {
+	systemConfigPushHandler = fn
+}
 
 func GetDefaultClient() *WebSocketClient {
 	clientOnce.Do(func() {
@@ -592,6 +598,15 @@ func (c *WebSocketClient) GetResponse(requestID string, timeout time.Duration) (
 	}
 }
 
+// handleSystemConfigPush 处理服务端推送的系统配置变更，异步调用已注册的回调
+func (c *WebSocketClient) handleSystemConfigPush(data map[string]interface{}) {
+	if systemConfigPushHandler == nil {
+		log.Debugf("收到 system_config 推送，但未注册处理回调")
+		return
+	}
+	go systemConfigPushHandler(data)
+}
+
 // handleMessages 处理接收到的WebSocket消息
 func (c *WebSocketClient) handleMessages() {
 	for {
@@ -621,8 +636,14 @@ func (c *WebSocketClient) handleMessages() {
 				continue
 			}
 
-			// 根据消息类型判断是请求还是响应
-			if method, exists := rawMessage["method"]; exists && method != nil {
+			// 根据消息类型判断：服务端推送(system_config)、请求、响应
+			if msgType, _ := rawMessage["type"].(string); msgType == "system_config" {
+				if data, ok := rawMessage["data"].(map[string]interface{}); ok {
+					c.handleSystemConfigPush(data)
+				} else {
+					log.Warnf("收到 system_config 推送但 data 格式无效")
+				}
+			} else if method, exists := rawMessage["method"]; exists && method != nil {
 				// 这是收到的请求
 				c.handleIncomingRequest(rawMessage)
 			} else if status, exists := rawMessage["status"]; exists && status != nil {

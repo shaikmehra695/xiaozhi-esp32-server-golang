@@ -3,7 +3,7 @@
 package ten_vad
 
 // #cgo windows,amd64 LDFLAGS: -L${SRCDIR}/../../../../lib/ten-vad/lib/Windows/x64 -lten_vad
-// #cgo linux,amd64   LDFLAGS: -L${SRCDIR}/../../../../lib/ten-vad/lib/Linux/x64 -lten_vad -lc++ -lc++abi -Wl,-z,origin -Wl,-rpath,\$ORIGIN/lib/ten-vad/lib/Linux/x64 -Wl,-rpath,\$ORIGIN/ten-vad/lib/Linux/x64
+// #cgo linux,amd64   LDFLAGS: -L${SRCDIR}/../../../../lib/ten-vad/lib/Linux/x64 -lten_vad -lc++ -lc++abi -Wl,-rpath,\$ORIGIN/ten-vad/lib/Linux/x64
 // #cgo darwin,amd64  LDFLAGS: -F${SRCDIR}/../../../../lib/ten-vad/lib/macOS -framework ten_vad -Wl,-rpath,@executable_path/lib/ten-vad/lib/macOS -Wl,-rpath,@executable_path/ten-vad/lib/macOS
 // #cgo darwin,arm64  LDFLAGS: -F${SRCDIR}/../../../../lib/ten-vad/lib/macOS -framework ten_vad -Wl,-rpath,@executable_path/lib/ten-vad/lib/macOS -Wl,-rpath,@executable_path/ten-vad/lib/macOS
 // #cgo windows,amd64 CFLAGS:  -I${SRCDIR}/../../../../lib/ten-vad/include

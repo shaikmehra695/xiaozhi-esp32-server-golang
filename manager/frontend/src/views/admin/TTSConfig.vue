@@ -69,7 +69,6 @@
         <el-form-item label="提供商" prop="provider">
           <el-select v-model="form.provider" placeholder="请选择提供商" style="width: 100%">
             <el-option label="CosyVoice" value="cosyvoice" />
-            <el-option label="豆包 TTS" value="doubao" />
             <el-option label="豆包 WebSocket" value="doubao_ws" />
             <el-option label="Edge TTS" value="edge" />
             <el-option label="Edge 离线" value="edge_offline" />

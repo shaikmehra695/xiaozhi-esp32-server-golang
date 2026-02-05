@@ -12,6 +12,16 @@ import (
 	"github.com/spf13/viper"
 )
 
+var (
+	// managerSystemConfigHandler 收到 WebSocket system_config 推送时的回调，由主程序注册（如合并到 viper）
+	managerSystemConfigHandler func(map[string]interface{})
+)
+
+// RegisterManagerSystemConfigHandler 注册 manager 模式下系统配置推送的回调，应在 InitConfigSystem 之前调用
+func RegisterManagerSystemConfigHandler(fn func(map[string]interface{})) {
+	managerSystemConfigHandler = fn
+}
+
 // InitConfigSystem 初始化配置系统
 // 根据config_provider.type的值调用对应配置包的Init方法
 func InitConfigSystem(ctx context.Context) error {
@@ -27,6 +37,7 @@ func InitConfigSystem(ctx context.Context) error {
 	// 根据配置提供者类型调用对应的Init方法
 	switch providerType {
 	case "manager":
+		manager.SetSystemConfigPushHandler(managerSystemConfigHandler)
 		return manager.Init(ctx)
 	case "redis":
 		return redis_config.Init(ctx)

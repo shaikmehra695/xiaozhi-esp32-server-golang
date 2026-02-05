@@ -254,13 +254,11 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": response})
 }
 
-// GetSystemConfigs 获取系统配置信息，包括mqtt, mqtt_server, udp, ota, mcp, local_mcp, voice_identify, tts, vad, asr, llm
-func (ac *AdminController) GetSystemConfigs(c *gin.Context) {
-	// 一次性获取所有相关配置（包括启用和未启用的）
+// getSystemConfigsData 获取系统配置数据（与 GetSystemConfigs 返回的 data 一致），供接口与 WebSocket 推送复用
+func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 	var allConfigs []models.Config
-	if err := ac.DB.Where("type IN (?)", []string{"mqtt", "mqtt_server", "udp", "ota", "mcp", "local_mcp", "voice_identify", "tts", "vad", "asr", "llm"}).Find(&allConfigs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get system configs"})
-		return
+	if err := ac.DB.Where("type IN (?)", []string{"mqtt", "mqtt_server", "udp", "ota", "mcp", "local_mcp", "voice_identify", "tts", "vad", "asr", "llm", "vision"}).Find(&allConfigs).Error; err != nil {
+		return nil, err
 	}
 
 	// 按类型分组配置
@@ -659,7 +657,63 @@ func (ac *AdminController) GetSystemConfigs(c *gin.Context) {
 		response["vad"] = selectAndParseConfig(configs)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": response})
+	// 处理 Vision 配置：vision_base 为顶层字段，其余为 vision.vllm[config_id]
+	if visionConfigs, exists := configsByType["vision"]; exists && len(visionConfigs) > 0 {
+		visionMap := make(gin.H)
+		for _, config := range visionConfigs {
+			if !config.Enabled {
+				continue
+			}
+			configData := make(map[string]interface{})
+			if config.JsonData != "" {
+				json.Unmarshal([]byte(config.JsonData), &configData)
+			}
+			if config.ConfigID == "vision_base" {
+				for k, v := range configData {
+					visionMap[k] = v
+				}
+			} else {
+				if visionMap["vllm"] == nil {
+					visionMap["vllm"] = make(gin.H)
+				}
+				if vllmConfig, ok := visionMap["vllm"].(gin.H); ok {
+					if config.IsDefault {
+						vllmConfig["provider"] = config.ConfigID
+					}
+					vllmConfig[config.ConfigID] = configData
+				}
+			}
+		}
+		if len(visionMap) > 0 {
+			response["vision"] = visionMap
+		}
+	}
+
+	return response, nil
+}
+
+// GetSystemConfigs 获取系统配置信息，包括mqtt, mqtt_server, udp, ota, mcp, local_mcp, voice_identify, tts, vad, asr, llm, vision
+func (ac *AdminController) GetSystemConfigs(c *gin.Context) {
+	data, err := ac.getSystemConfigsData()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get system configs"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": data})
+}
+
+// notifySystemConfigChanged 配置变更后通过 WebSocket 异步推送系统配置，不阻塞请求
+func (ac *AdminController) notifySystemConfigChanged() {
+	if ac.WebSocketController == nil {
+		return
+	}
+	go func() {
+		data, err := ac.getSystemConfigsData()
+		if err != nil {
+			return
+		}
+		ac.WebSocketController.BroadcastSystemConfig(data)
+	}()
 }
 
 // GetConfigs 获取所有配置列表
@@ -724,6 +778,7 @@ func (ac *AdminController) CreateConfig(c *gin.Context) {
 		return
 	}
 
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusCreated, gin.H{"data": config})
 }
 
@@ -759,6 +814,7 @@ func (ac *AdminController) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusOK, gin.H{"data": config})
 }
 
@@ -768,6 +824,7 @@ func (ac *AdminController) DeleteConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除配置失败"})
 		return
 	}
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
@@ -791,6 +848,7 @@ func (ac *AdminController) SetDefaultConfig(c *gin.Context) {
 		return
 	}
 
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusOK, gin.H{"message": "设置默认配置成功", "data": config})
 }
 
@@ -1602,6 +1660,7 @@ func (ac *AdminController) UpdateVisionBaseConfig(c *gin.Context) {
 		}
 	}
 
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusOK, gin.H{"message": "Vision base config updated successfully"})
 }
 
@@ -1760,6 +1819,7 @@ func (ac *AdminController) ToggleConfigEnable(c *gin.Context) {
 		return
 	}
 
+	ac.notifySystemConfigChanged()
 	status := "禁用"
 	if config.Enabled {
 		status = "启用"
@@ -1791,6 +1851,7 @@ func (ac *AdminController) createConfigWithType(c *gin.Context, config *models.C
 		return
 	}
 
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusCreated, gin.H{"data": *config})
 }
 
@@ -1831,6 +1892,7 @@ func (ac *AdminController) updateConfigWithType(c *gin.Context, configType strin
 		return
 	}
 
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusOK, gin.H{"data": config})
 }
 
@@ -1840,6 +1902,7 @@ func (ac *AdminController) deleteConfigWithType(c *gin.Context, configType strin
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除配置失败"})
 		return
 	}
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
