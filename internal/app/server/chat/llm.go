@@ -868,6 +868,19 @@ func (l *LLMManager) handleLLMWithContextAndTools(
 				if message == nil {
 					break
 				}
+				if llm.IsLLMErrorMessage(message) {
+					errMsg := llm.LLMErrorMessage(message)
+					log.Warnf("LLM 返回错误: %s", errMsg)
+					select {
+					case <-ctx.Done():
+						return
+					case sentenceChannel <- llm_common.LLMResponseStruct{
+						Text:  errMsg,
+						IsEnd: true,
+					}:
+					}
+					return
+				}
 				if message.Content != "" {
 					fullText += message.Content
 					buffer.WriteString(message.Content)

@@ -10,6 +10,34 @@ import (
 	"xiaozhi-esp32-server-golang/internal/domain/llm/eino_llm"
 )
 
+// LLMExtraErrorKey 错误透传约定：ResponseWithContext 失败时在 Message.Extra 中使用的 key
+const LLMExtraErrorKey = "error"
+
+// IsLLMErrorMessage 判断是否为 LLM 透传的错误消息（Extra 中含 error）
+func IsLLMErrorMessage(msg *schema.Message) bool {
+	if msg == nil || msg.Extra == nil {
+		return false
+	}
+	v, ok := msg.Extra[LLMExtraErrorKey]
+	if !ok || v == nil {
+		return false
+	}
+	_, ok = v.(string)
+	return ok
+}
+
+// LLMErrorMessage 从 Message.Extra 中解析出错误文案（若为错误消息）
+func LLMErrorMessage(msg *schema.Message) string {
+	if msg == nil || msg.Extra == nil {
+		return ""
+	}
+	v, ok := msg.Extra[LLMExtraErrorKey].(string)
+	if !ok {
+		return ""
+	}
+	return v
+}
+
 // LLMProvider 大语言模型提供者接口
 // 所有LLM实现必须遵循此接口，使用Eino原生类型
 type LLMProvider interface {

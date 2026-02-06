@@ -712,7 +712,8 @@ func (c *WebSocketClient) RegisterMessageHandler(ctx context.Context, path strin
 func (c *WebSocketClient) handleDefaultRequest(request *WebSocketRequest) {
 	switch request.Path {
 	case "/api/config/test":
-		c.handleConfigTestRequest(request)
+		// 配置测试可能较耗时（VAD/ASR/LLM/TTS 串行执行），放入独立 goroutine 避免阻塞读循环，支持多请求并发
+		go c.handleConfigTestRequest(request)
 
 	case "/api/mcp/tools":
 		// 处理MCP工具列表请求
@@ -772,6 +773,9 @@ func (c *WebSocketClient) handleDefaultRequest(request *WebSocketRequest) {
 	}
 }
 
+// configTestTotalTimeout 配置测试整体超时（VAD+ASR+LLM+TTS 合计）
+const configTestTotalTimeout = 90 * time.Second
+
 // handleConfigTestRequest 处理配置测试请求：VAD/ASR/LLM/TTS 使用下发的配置与固定 WAV/文本执行轻量测试
 func (c *WebSocketClient) handleConfigTestRequest(request *WebSocketRequest) {
 	data, _ := request.Body["data"].(map[string]interface{})
@@ -786,7 +790,32 @@ func (c *WebSocketClient) handleConfigTestRequest(request *WebSocketRequest) {
 		request.ID, testText,
 		countConfigKeys(data["vad"]), countConfigKeys(data["asr"]),
 		countConfigKeys(data["llm"]), countConfigKeys(data["tts"]))
-	vadR, asrR, llmR, ttsR := RunConfigTest(data, testText)
+
+	type configTestResult struct {
+		vad, asr, llm, tts map[string]interface{}
+	}
+	done := make(chan configTestResult, 1)
+	go func() {
+		vadR, asrR, llmR, ttsR := RunConfigTest(data, testText)
+		done <- configTestResult{vadR, asrR, llmR, ttsR}
+	}()
+
+	var vadR, asrR, llmR, ttsR map[string]interface{}
+	select {
+	case res := <-done:
+		vadR, asrR, llmR, ttsR = res.vad, res.asr, res.llm, res.tts
+	case <-time.After(configTestTotalTimeout):
+		log.Warnf("[config_test] 请求 ID=%s 整体超时 %v", request.ID, configTestTotalTimeout)
+		body := map[string]interface{}{
+			"vad": map[string]interface{}{"_error": map[string]interface{}{"ok": false, "message": "配置测试总超时"}},
+			"asr": map[string]interface{}{"_error": map[string]interface{}{"ok": false, "message": "配置测试总超时"}},
+			"llm": map[string]interface{}{"_error": map[string]interface{}{"ok": false, "message": "配置测试总超时"}},
+			"tts": map[string]interface{}{"_error": map[string]interface{}{"ok": false, "message": "配置测试总超时"}},
+		}
+		_ = c.SendResponse(request.ID, 200, body, "")
+		return
+	}
+
 	// 请求中带了某类型但无任何可测配置时，返回 _none 便于前端展示原因
 	fillEmptyConfigTestResult(data, "vad", vadR)
 	fillEmptyConfigTestResult(data, "asr", asrR)

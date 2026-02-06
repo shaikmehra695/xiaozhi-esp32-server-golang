@@ -134,14 +134,15 @@ func GenerateConfigKey(provider string, config map[string]interface{}) string {
 }
 
 // getOrCreatePool 获取或创建资源池（泛型版本）
+// 使用配置指纹作为 poolKey，同一 config_id 在 host 等配置变更后会使用新池、新配置实例。
 func getOrCreatePool[T any](
 	resourceType, provider string,
 	config map[string]interface{},
 ) (*util.ResourcePool, error) {
 	mgr := GetGlobalResourcePoolManager()
-	// 所有资源池的 key 格式统一为：类型:provider
-	poolKey := fmt.Sprintf("%s:%s", resourceType, provider)
-	configKey := provider // configKey 也使用 provider，用于 ResourceWrapper
+	// 资源池 key 格式统一为：类型:配置指纹（provider+config 的 MD5）
+	configKey := GenerateConfigKey(provider, config)
+	poolKey := fmt.Sprintf("%s:%s", resourceType, configKey)
 
 	mgr.mu.RLock()
 	pool, exists := mgr.pools[poolKey]
@@ -208,7 +209,11 @@ func getOrCreatePool[T any](
 	}
 
 	mgr.pools[poolKey] = pool
-	log.Infof("创建资源池: type=%s, provider=%s, configKey=%s", resourceType, provider, configKey)
+	fpShort := configKey
+	if len(configKey) > 8 {
+		fpShort = configKey[:8] + "..."
+	}
+	log.Infof("创建资源池: type=%s, provider=%s, fingerprint=%s", resourceType, provider, fpShort)
 
 	return pool, nil
 }

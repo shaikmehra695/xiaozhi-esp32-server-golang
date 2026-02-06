@@ -364,8 +364,8 @@ function getJsonData() {
   return JSON.stringify(config)
 }
 
-function validate() {
-  return formRef.value?.validate()
+function validate(callback) {
+  return formRef.value?.validate(callback)
 }
 
 function resetFields() {

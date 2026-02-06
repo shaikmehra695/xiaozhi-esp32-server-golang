@@ -1,0 +1,868 @@
+<template>
+  <div class="config-wizard">
+    <div class="wizard-header">
+      <h2>配置向导</h2>
+      <p class="wizard-desc">按步骤完成 OTA、VAD、ASR、LLM、TTS 基础配置，可随时跳过某步。</p>
+    </div>
+
+    <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps">
+      <el-step title="OTA" description="服务地址" />
+      <el-step title="VAD" description="语音活动检测" />
+      <el-step title="ASR" description="语音识别" />
+      <el-step title="LLM" description="大语言模型" />
+      <el-step title="TTS" description="语音合成" />
+    </el-steps>
+
+    <el-card class="step-card" shadow="hover">
+      <!-- Step 1: OTA -->
+      <template v-if="currentStep === 0">
+        <div class="step-title">OTA 配置</div>
+        <p class="step-hint">填写本服务对外访问的域名或 IP，将自动生成 OTA 地址和 WebSocket 地址（最后一步会展示）。</p>
+        <el-form :model="otaForm" label-width="120px" class="wizard-form">
+          <el-form-item label="域名或 IP" prop="host">
+            <el-input v-model="otaForm.host" placeholder="如 192.168.1.100 或 manager.example.com" clearable />
+          </el-form-item>
+          <el-form-item label="端口" prop="port">
+            <el-input-number v-model="otaForm.port" :min="1" :max="65535" style="width: 100%" />
+          </el-form-item>
+          <el-form-item label="协议" prop="protocol">
+            <el-radio-group v-model="otaForm.protocol">
+              <el-radio value="http">HTTP</el-radio>
+              <el-radio value="https">HTTPS</el-radio>
+            </el-radio-group>
+          </el-form-item>
+        </el-form>
+      </template>
+
+      <!-- Step 2: VAD -->
+      <template v-if="currentStep === 1">
+        <div class="step-title">VAD 配置</div>
+        <VADConfigForm ref="vadFormRef" :model="vadForm" :rules="vadFormRules" class="wizard-form" />
+      </template>
+
+      <!-- Step 3: ASR -->
+      <template v-if="currentStep === 2">
+        <div class="step-title">ASR 配置</div>
+        <ASRConfigForm ref="asrFormRef" :model="asrForm" :rules="asrFormRules" class="wizard-form" />
+      </template>
+
+      <!-- Step 4: LLM -->
+      <template v-if="currentStep === 3">
+        <div class="step-title">LLM 配置</div>
+        <LLMConfigForm ref="llmFormRef" :model="llmForm" :rules="llmFormRules" class="wizard-form" />
+      </template>
+
+      <!-- Step 5: TTS -->
+      <template v-if="currentStep === 4">
+        <div class="step-title">TTS 配置</div>
+        <TTSConfigForm
+          ref="ttsFormRef"
+          :model="ttsForm"
+          :rules="ttsFormRules"
+          :voice-options="voiceOptions"
+          :voice-loading="voiceLoading"
+          class="wizard-form"
+        />
+      </template>
+
+      <!-- 完成页：展示 OTA 地址与 WebSocket 地址 -->
+      <template v-if="currentStep === 5">
+        <div class="step-title">配置完成</div>
+        <p class="step-hint">以下是根据您在 OTA 步骤填写的域名/IP 生成的地址，请下发至设备或固件使用。</p>
+        <div class="result-box">
+          <div class="result-item">
+            <span class="result-label">OTA 地址（API 根地址）：</span>
+            <el-input :model-value="finalOtaUrl" readonly>
+              <template #append>
+                <el-button @click="copyToClipboard(finalOtaUrl)" :icon="CopyDocument">复制</el-button>
+              </template>
+            </el-input>
+          </div>
+          <div class="result-item">
+            <span class="result-label">WebSocket 地址：</span>
+            <el-input :model-value="finalWsUrl" readonly>
+              <template #append>
+                <el-button @click="copyToClipboard(finalWsUrl)" :icon="CopyDocument">复制</el-button>
+              </template>
+            </el-input>
+          </div>
+        </div>
+      </template>
+
+      <div class="step-actions">
+        <el-button v-if="currentStep > 0 && currentStep < 5" @click="prevStep">上一步</el-button>
+        <el-button v-if="currentStep < 5" type="info" plain @click="skipStep">跳过</el-button>
+        <el-button
+          v-if="currentStep >= 1 && currentStep <= 4"
+          type="warning"
+          plain
+          :loading="testingStep"
+          @click="testCurrentStepConfig"
+        >
+          测试当前配置
+        </el-button>
+        <template v-if="currentStep < 5">
+          <el-button type="primary" :loading="saving" @click="saveAndNext">
+            {{ currentStep === 4 ? '保存并完成' : '保存并下一步' }}
+          </el-button>
+        </template>
+        <template v-else>
+          <el-button type="primary" @click="$router.push('/dashboard')">返回首页</el-button>
+          <el-button @click="currentStep = 0">重新配置</el-button>
+        </template>
+      </div>
+    </el-card>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
+import { CopyDocument } from '@element-plus/icons-vue'
+import api from '@/utils/api'
+import { testWithData, parseJsonData } from '@/utils/configTest'
+import VADConfigForm from './forms/VADConfigForm.vue'
+import ASRConfigForm from './forms/ASRConfigForm.vue'
+import LLMConfigForm from './forms/LLMConfigForm.vue'
+import TTSConfigForm from './forms/TTSConfigForm.vue'
+
+const currentStep = ref(0)
+const saving = ref(false)
+const testingStep = ref(false)
+const otaConfigId = ref(null)
+const vadConfigId = ref(null)
+const asrConfigId = ref(null)
+const llmConfigId = ref(null)
+const ttsConfigId = ref(null)
+
+const otaForm = reactive({
+  host: '',
+  port: 8080,
+  protocol: 'http'
+})
+
+const vadForm = reactive({
+  name: '默认VAD',
+  config_id: 'ten_vad_default',
+  provider: 'ten_vad',
+  webrtc_vad: {
+    pool_min_size: 5,
+    pool_max_size: 1000,
+    pool_max_idle: 100,
+    vad_sample_rate: 16000,
+    vad_mode: 2
+  },
+  silero_vad: {
+    model_path: 'config/models/vad/silero_vad.onnx',
+    threshold: 0.5,
+    min_silence_duration_ms: 100,
+    sample_rate: 16000,
+    channels: 1,
+    pool_size: 10,
+    acquire_timeout_ms: 3000
+  },
+  ten_vad: {
+    hop_size: 320,
+    threshold: 0.3,
+    pool_size: 10,
+    acquire_timeout_ms: 3000
+  }
+})
+const vadFormRef = ref()
+const vadFormRules = {
+  name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
+  config_id: [{ required: true, message: '请输入配置ID', trigger: 'blur' }],
+  provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
+  'ten_vad.hop_size': [{ required: true, message: '请输入帧移大小', trigger: 'blur' }],
+  'ten_vad.threshold': [{ required: true, message: '请输入VAD检测阈值', trigger: 'blur' }],
+  'ten_vad.pool_size': [{ required: true, message: '请输入连接池大小', trigger: 'blur' }],
+  'ten_vad.acquire_timeout_ms': [{ required: true, message: '请输入获取超时时间', trigger: 'blur' }]
+}
+
+const asrForm = reactive({
+  name: '默认ASR',
+  config_id: 'funasr_default',
+  provider: 'funasr',
+  funasr: {
+    host: '127.0.0.1',
+    port: 10095,
+    mode: 'offline',
+    sample_rate: 16000,
+    chunk_size: [5, 10, 5],
+    chunk_interval: 10,
+    max_connections: 100,
+    timeout: 30,
+    auto_end: false
+  },
+  doubao: {
+    appid: '',
+    access_token: '',
+    ws_url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream',
+    model_name: 'bigmodel',
+    end_window_size: 800,
+    enable_punc: true,
+    enable_itn: true,
+    enable_ddc: false,
+    chunk_duration: 200,
+    timeout: 30
+  }
+})
+const asrFormRef = ref()
+const asrFormRules = {
+  name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
+  config_id: [{ required: true, message: '请输入配置ID', trigger: 'blur' }],
+  provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
+  'funasr.host': [{ required: true, message: '请输入主机地址', trigger: 'blur' }],
+  'funasr.port': [{ required: true, message: '请输入端口', trigger: 'blur' }],
+  'doubao.appid': [{ required: true, message: '请输入应用ID', trigger: 'blur' }],
+  'doubao.access_token': [{ required: true, message: '请输入访问令牌', trigger: 'blur' }],
+  'doubao.ws_url': [{ required: true, message: '请输入WebSocket URL', trigger: 'blur' }],
+  'doubao.model_name': [{ required: true, message: '请输入模型名称', trigger: 'blur' }]
+}
+
+const llmForm = reactive({
+  name: '默认LLM',
+  config_id: 'openai_default',
+  provider: 'openai',
+  type: 'openai',
+  model_name: 'gpt-3.5-turbo',
+  api_key: '',
+  base_url: 'https://api.openai.com/v1',
+  max_tokens: 4000,
+  temperature: 0.7,
+  top_p: 0.9
+})
+const llmFormRef = ref()
+const llmFormRules = {
+  name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
+  config_id: [{ required: true, message: '请输入配置ID', trigger: 'blur' }],
+  provider: [{ required: false }],
+  type: [{ required: true, message: '请选择模型类型', trigger: 'change' }],
+  model_name: [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
+  api_key: [{ required: true, message: '请输入API密钥', trigger: 'blur' }],
+  base_url: [{ required: true, message: '请输入基础URL', trigger: 'blur' }],
+  max_tokens: [{ required: true, message: '请输入max_tokens', trigger: 'blur' }]
+}
+
+const ttsForm = reactive({
+  name: '默认TTS',
+  config_id: 'minimax_default',
+  provider: 'minimax',
+  qwen_tts: {
+    api_key: '',
+    api_url: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
+    region: 'beijing',
+    model: 'qwen3-tts-flash',
+    voice: 'Cherry',
+    language_type: 'Chinese',
+    stream: true,
+    frame_duration: 60
+  },
+  doubao_ws: {
+    appid: '',
+    access_token: '',
+    cluster: 'volcano_tts',
+    voice: 'zh_female_wanwanxiaohe_moon_bigtts',
+    ws_host: '',
+    use_stream: true
+  },
+  edge: {
+    voice: 'zh-CN-XiaoxiaoNeural',
+    rate: '+0%',
+    volume: '+0%',
+    pitch: '+0Hz',
+    connect_timeout: 10,
+    receive_timeout: 60
+  },
+  edge_offline: {
+    server_url: 'ws://localhost:8080/tts',
+    timeout: 30,
+    sample_rate: 16000,
+    channels: 1,
+    frame_duration: 20
+  },
+  openai: {
+    api_key: '',
+    api_url: 'https://api.openai.com/v1/audio/speech',
+    model: 'tts-1',
+    voice: 'alloy',
+    response_format: 'mp3',
+    speed: 1.0,
+    stream: true,
+    frame_duration: 60
+  },
+  zhipu: {
+    api_key: '',
+    api_url: 'https://open.bigmodel.cn/api/paas/v4/audio/speech',
+    model: 'glm-tts',
+    voice: 'tongtong',
+    response_format: 'pcm',
+    speed: 1.0,
+    volume: 1.0,
+    stream: true,
+    encode_format: 'base64',
+    frame_duration: 60
+  },
+  minimax: {
+    api_key: '',
+    model: 'speech-2.8-hd',
+    voice: 'male-qn-qingse',
+    speed: 1.0,
+    vol: 1.0,
+    pitch: 0,
+    sample_rate: 32000,
+    bitrate: 128000,
+    format: 'mp3',
+    channel: 1
+  }
+})
+const ttsFormRef = ref()
+const voiceOptions = ref([])
+const voiceLoading = ref(false)
+const ttsFormRules = {
+  name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
+  config_id: [{ required: true, message: '请输入配置ID', trigger: 'blur' }],
+  provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
+  'doubao_ws.appid': [{ required: true, message: '请输入应用ID', trigger: 'blur' }],
+  'doubao_ws.access_token': [{ required: true, message: '请输入访问令牌', trigger: 'blur' }],
+  'minimax.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }],
+  'qwen_tts.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }]
+}
+
+const finalOtaUrl = computed(() => {
+  if (!otaForm.host?.trim()) return '请先在 OTA 步骤填写域名或 IP'
+  const proto = otaForm.protocol === 'https' ? 'https' : 'http'
+  return `${proto}://${otaForm.host.trim()}:${otaForm.port}`
+})
+
+const finalWsUrl = computed(() => {
+  if (!otaForm.host?.trim()) return '请先在 OTA 步骤填写域名或 IP'
+  const proto = otaForm.protocol === 'https' ? 'wss' : 'ws'
+  return `${proto}://${otaForm.host.trim()}:${otaForm.port}/xiaozhi/v1/`
+})
+
+function buildWsUrl() {
+  if (!otaForm.host?.trim()) return ''
+  const proto = otaForm.protocol === 'https' ? 'wss' : 'ws'
+  return `${proto}://${otaForm.host.trim()}:${otaForm.port}/xiaozhi/v1/`
+}
+
+async function saveOta() {
+  const wsUrl = buildWsUrl()
+  if (!wsUrl) {
+    ElMessage.warning('请填写域名或 IP')
+    return false
+  }
+  const payload = {
+    name: 'OTA配置',
+    config_id: 'ota_ota_config',
+    provider: 'default',
+    json_data: JSON.stringify({
+      signature_key: 'xiaozhi_ota_signature_key',
+      test: { websocket: { url: wsUrl }, mqtt: { enable: false, endpoint: '' } },
+      external: { websocket: { url: wsUrl }, mqtt: { enable: false, endpoint: '' } }
+    }, null, 2),
+    enabled: true,
+    is_default: true
+  }
+  try {
+    if (otaConfigId.value) {
+      await api.put(`/admin/ota-configs/${otaConfigId.value}`, payload)
+    } else {
+      const res = await api.post('/admin/ota-configs', payload)
+      otaConfigId.value = res.data?.data?.id ?? null
+    }
+    ElMessage.success('OTA 配置已保存')
+    return true
+  } catch (e) {
+    ElMessage.error('OTA 保存失败: ' + (e.response?.data?.message || e.message))
+    return false
+  }
+}
+
+async function saveVad() {
+  if (!vadFormRef.value) return false
+  try {
+    await vadFormRef.value.validate()
+  } catch (_) {
+    return false
+  }
+  const payload = {
+    name: vadForm.name,
+    config_id: vadForm.config_id,
+    provider: vadForm.provider,
+    json_data: vadFormRef.value.getJsonData(),
+    enabled: true,
+    is_default: true
+  }
+  try {
+    if (vadConfigId.value) {
+      await api.put(`/admin/vad-configs/${vadConfigId.value}`, payload)
+    } else {
+      const res = await api.post('/admin/vad-configs', payload)
+      vadConfigId.value = res.data?.data?.id ?? null
+    }
+    ElMessage.success('VAD 配置已保存')
+    return true
+  } catch (e) {
+    ElMessage.error('VAD 保存失败: ' + (e.response?.data?.message || e.message))
+    return false
+  }
+}
+
+async function saveAsr() {
+  if (!asrFormRef.value) return false
+  try {
+    await asrFormRef.value.validate()
+  } catch (_) {
+    return false
+  }
+  const payload = {
+    name: asrForm.name,
+    config_id: asrForm.config_id,
+    provider: asrForm.provider,
+    json_data: asrFormRef.value.getJsonData(),
+    enabled: true,
+    is_default: true
+  }
+  try {
+    if (asrConfigId.value) {
+      await api.put(`/admin/asr-configs/${asrConfigId.value}`, payload)
+    } else {
+      const res = await api.post('/admin/asr-configs', payload)
+      asrConfigId.value = res.data?.data?.id ?? null
+    }
+    ElMessage.success('ASR 配置已保存')
+    return true
+  } catch (e) {
+    ElMessage.error('ASR 保存失败: ' + (e.response?.data?.message || e.message))
+    return false
+  }
+}
+
+async function saveLlm() {
+  if (!llmFormRef.value) return false
+  try {
+    await llmFormRef.value.validate()
+  } catch (_) {
+    return false
+  }
+  const payload = {
+    name: llmForm.name,
+    config_id: llmForm.config_id,
+    provider: llmForm.provider,
+    json_data: llmFormRef.value.getJsonData(),
+    enabled: true,
+    is_default: true
+  }
+  try {
+    if (llmConfigId.value) {
+      await api.put(`/admin/llm-configs/${llmConfigId.value}`, payload)
+    } else {
+      const res = await api.post('/admin/llm-configs', payload)
+      llmConfigId.value = res.data?.data?.id ?? null
+    }
+    ElMessage.success('LLM 配置已保存')
+    return true
+  } catch (e) {
+    ElMessage.error('LLM 保存失败: ' + (e.response?.data?.message || e.message))
+    return false
+  }
+}
+
+async function saveTts() {
+  if (!ttsFormRef.value) return false
+  try {
+    await ttsFormRef.value.validate()
+  } catch (_) {
+    return false
+  }
+  const payload = {
+    name: ttsForm.name,
+    config_id: ttsForm.config_id,
+    provider: ttsForm.provider,
+    json_data: ttsFormRef.value.getJsonData(),
+    enabled: true,
+    is_default: true
+  }
+  try {
+    if (ttsConfigId.value) {
+      await api.put(`/admin/tts-configs/${ttsConfigId.value}`, payload)
+    } else {
+      const res = await api.post('/admin/tts-configs', payload)
+      ttsConfigId.value = res.data?.data?.id ?? null
+    }
+    ElMessage.success('TTS 配置已保存')
+    return true
+  } catch (e) {
+    ElMessage.error('TTS 保存失败: ' + (e.response?.data?.message || e.message))
+    return false
+  }
+}
+
+async function loadVadIfExists() {
+  try {
+    const res = await api.get('/admin/vad-configs')
+    const list = res.data?.data || []
+    const config = list.find(c => c.is_default) || list[0]
+    if (!config) return
+    vadConfigId.value = config.id
+    vadForm.name = config.name
+    vadForm.config_id = config.config_id
+    vadForm.provider = config.provider || 'ten_vad'
+    const data = JSON.parse(config.json_data || '{}')
+    if (config.provider === 'webrtc_vad') {
+      Object.assign(vadForm.webrtc_vad, data.webrtc_vad || data)
+    } else if (config.provider === 'silero_vad') {
+      Object.assign(vadForm.silero_vad, data.silero_vad || data)
+    } else {
+      Object.assign(vadForm.ten_vad, data.ten_vad || data)
+    }
+  } catch (_) {}
+}
+
+async function loadAsrIfExists() {
+  try {
+    const res = await api.get('/admin/asr-configs')
+    const list = res.data?.data || []
+    const config = list.find(c => c.is_default) || list[0]
+    if (!config) return
+    asrConfigId.value = config.id
+    asrForm.name = config.name
+    asrForm.config_id = config.config_id
+    asrForm.provider = config.provider || 'funasr'
+    const data = JSON.parse(config.json_data || '{}')
+    if (config.provider === 'doubao') {
+      Object.assign(asrForm.doubao, data.doubao || data)
+    } else {
+      const obj = data.funasr || data
+      const funasr = { ...asrForm.funasr }
+      if (typeof obj.chunk_size === 'number') funasr.chunk_size = [5, 10, 5]
+      else if (Array.isArray(obj.chunk_size) && obj.chunk_size.length === 3) funasr.chunk_size = [...obj.chunk_size]
+      Object.assign(funasr, obj)
+      asrForm.funasr = funasr
+    }
+  } catch (_) {}
+}
+
+async function loadLlmIfExists() {
+  try {
+    const res = await api.get('/admin/llm-configs')
+    const list = res.data?.data || []
+    const config = list.find(c => c.is_default) || list[0]
+    if (!config) return
+    llmConfigId.value = config.id
+    llmForm.name = config.name
+    llmForm.config_id = config.config_id
+    llmForm.provider = config.provider || 'openai'
+    const data = JSON.parse(config.json_data || '{}')
+    if (data.type !== undefined) llmForm.type = data.type
+    if (data.model_name !== undefined) llmForm.model_name = data.model_name
+    if (data.api_key !== undefined) llmForm.api_key = data.api_key
+    if (data.base_url !== undefined) llmForm.base_url = data.base_url
+    if (data.max_tokens !== undefined) llmForm.max_tokens = data.max_tokens
+    if (data.temperature !== undefined) llmForm.temperature = data.temperature
+    if (data.top_p !== undefined) llmForm.top_p = data.top_p
+  } catch (_) {}
+}
+
+async function loadTtsIfExists() {
+  try {
+    const res = await api.get('/admin/tts-configs')
+    const list = res.data?.data || []
+    const config = list.find(c => c.is_default) || list[0]
+    if (!config) return
+    ttsConfigId.value = config.id
+    ttsForm.name = config.name
+    ttsForm.config_id = config.config_id
+    ttsForm.provider = config.provider || 'minimax'
+    const data = JSON.parse(config.json_data || '{}')
+    const p = config.provider
+    if (p === 'doubao_ws') Object.assign(ttsForm.doubao_ws, data)
+    else if (p === 'edge') Object.assign(ttsForm.edge, data)
+    else if (p === 'edge_offline') Object.assign(ttsForm.edge_offline, data)
+    else if (p === 'aliyun_qwen') Object.assign(ttsForm.qwen_tts, data)
+    else if (p === 'openai') Object.assign(ttsForm.openai, data)
+    else if (p === 'zhipu') Object.assign(ttsForm.zhipu, data)
+    else if (p === 'minimax') Object.assign(ttsForm.minimax, data)
+  } catch (_) {}
+}
+
+async function saveAndNext() {
+  saving.value = true
+  let ok = false
+  try {
+    if (currentStep.value === 0) ok = await saveOta()
+    else if (currentStep.value === 1) ok = await saveVad()
+    else if (currentStep.value === 2) ok = await saveAsr()
+    else if (currentStep.value === 3) ok = await saveLlm()
+    else if (currentStep.value === 4) ok = await saveTts()
+    if (ok) {
+      if (currentStep.value === 4) {
+        currentStep.value = 5
+      } else {
+        currentStep.value++
+      }
+    }
+  } finally {
+    saving.value = false
+  }
+}
+
+function skipStep() {
+  if (currentStep.value === 4) {
+    currentStep.value = 5
+  } else {
+    currentStep.value++
+  }
+}
+
+function prevStep() {
+  if (currentStep.value > 0) currentStep.value--
+}
+
+async function testCurrentStepConfig() {
+  const step = currentStep.value
+  if (step === 1) {
+    if (!vadFormRef.value) return
+    try {
+      await vadFormRef.value.validate()
+    } catch (_) {
+      return
+    }
+    const configId = vadForm.config_id?.trim() || 'vad_wizard'
+    const payload = {
+      name: vadForm.name,
+      config_id: configId,
+      provider: vadForm.provider,
+      is_default: vadForm.is_default,
+      ...parseJsonData(vadFormRef.value.getJsonData())
+    }
+    testingStep.value = true
+    try {
+      const result = await testWithData('vad', { [configId]: payload })
+      if (result.ok) ElMessage.success(result.message || '测试通过')
+      else ElMessage.warning(result.message || '测试未通过')
+    } catch (err) {
+      ElMessage.warning(err.response?.data?.error || '测试请求失败')
+    } finally {
+      testingStep.value = false
+    }
+    return
+  }
+  if (step === 2) {
+    if (!asrFormRef.value) return
+    try {
+      await asrFormRef.value.validate()
+    } catch (_) {
+      return
+    }
+    const configId = asrForm.config_id?.trim() || 'asr_wizard'
+    const payload = {
+      name: asrForm.name,
+      config_id: configId,
+      provider: asrForm.provider,
+      is_default: asrForm.is_default,
+      ...parseJsonData(asrFormRef.value.getJsonData())
+    }
+    testingStep.value = true
+    try {
+      const result = await testWithData('asr', { [configId]: payload })
+      if (result.ok) ElMessage.success(result.message || '测试通过')
+      else ElMessage.warning(result.message || '测试未通过')
+    } catch (err) {
+      ElMessage.warning(err.response?.data?.error || '测试请求失败')
+    } finally {
+      testingStep.value = false
+    }
+    return
+  }
+  if (step === 3) {
+    if (!llmFormRef.value) return
+    try {
+      await llmFormRef.value.validate()
+    } catch (_) {
+      return
+    }
+    const configId = llmForm.config_id?.trim() || 'llm_wizard'
+    const payload = {
+      name: llmForm.name,
+      config_id: configId,
+      provider: llmForm.provider,
+      is_default: llmForm.is_default,
+      ...parseJsonData(llmFormRef.value.getJsonData())
+    }
+    testingStep.value = true
+    try {
+      const result = await testWithData('llm', { [configId]: payload })
+      if (result.ok) ElMessage.success(result.message || '测试通过')
+      else ElMessage.warning(result.message || '测试未通过')
+    } catch (err) {
+      ElMessage.warning(err.response?.data?.error || '测试请求失败')
+    } finally {
+      testingStep.value = false
+    }
+    return
+  }
+  if (step === 4) {
+    if (!ttsFormRef.value) return
+    try {
+      await ttsFormRef.value.validate()
+    } catch (_) {
+      return
+    }
+    const configId = ttsForm.config_id?.trim() || 'tts_wizard'
+    const payload = {
+      name: ttsForm.name,
+      config_id: configId,
+      provider: ttsForm.provider,
+      is_default: ttsForm.is_default,
+      ...parseJsonData(ttsFormRef.value.getJsonData())
+    }
+    testingStep.value = true
+    try {
+      const result = await testWithData('tts', { [configId]: payload })
+      if (result.ok) ElMessage.success(result.message || '测试通过')
+      else ElMessage.warning(result.message || '测试未通过')
+    } catch (err) {
+      ElMessage.warning(err.response?.data?.error || '测试请求失败')
+    } finally {
+      testingStep.value = false
+    }
+  }
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制到剪贴板')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
+
+async function loadOtaIfExists() {
+  try {
+    const res = await api.get('/admin/ota-configs')
+    const list = res.data?.data || []
+    const config = list.find(c => c.is_default) || list[0]
+    if (!config) return
+    otaConfigId.value = config.id
+    const data = JSON.parse(config.json_data || '{}')
+      const ext = data.external?.websocket?.url || ''
+      if (ext) {
+      const m = ext.match(/^(wss?):\/\/([^:/]+):?(\d+)?/)
+      if (m) {
+        otaForm.protocol = m[1] === 'wss' ? 'https' : 'http'
+        otaForm.host = m[2]
+        otaForm.port = m[3] ? parseInt(m[3], 10) : 8080
+      }
+    }
+  } catch (_) {}
+}
+
+// 加载 TTS 音色列表（与 TTS 配置页一致）
+async function loadTtsVoiceOptions(provider) {
+  if (!provider) {
+    voiceOptions.value = []
+    return
+  }
+  const providersWithVoices = ['minimax', 'edge', 'doubao', 'doubao_ws', 'zhipu', 'openai']
+  if (!providersWithVoices.includes(provider)) {
+    voiceOptions.value = []
+    return
+  }
+  voiceLoading.value = true
+  try {
+    const response = await api.get('/user/voice-options', { params: { provider } })
+    voiceOptions.value = response.data.data || []
+  } catch (error) {
+    console.error('加载音色列表失败:', error)
+    voiceOptions.value = []
+  } finally {
+    voiceLoading.value = false
+  }
+}
+
+// 进入 TTS 步骤时加载当前 provider 的音色列表
+watch(currentStep, (step) => {
+  if (step === 4 && ttsForm.provider) {
+    nextTick(() => loadTtsVoiceOptions(ttsForm.provider))
+  }
+}, { immediate: true })
+
+// TTS 步骤内切换 provider 时重新加载音色列表
+watch(() => ttsForm.provider, (provider) => {
+  if (currentStep.value === 4 && provider) {
+    loadTtsVoiceOptions(provider)
+  }
+}, { immediate: false })
+
+onMounted(async () => {
+  await loadOtaIfExists()
+  await loadVadIfExists()
+  await loadAsrIfExists()
+  await loadLlmIfExists()
+  await loadTtsIfExists()
+})
+</script>
+
+<style scoped>
+.config-wizard {
+  padding: 20px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.wizard-header {
+  margin-bottom: 24px;
+}
+.wizard-header h2 {
+  margin: 0 0 8px 0;
+  font-size: 22px;
+  color: #303133;
+}
+.wizard-desc {
+  margin: 0;
+  color: #909399;
+  font-size: 14px;
+}
+.wizard-steps {
+  margin-bottom: 24px;
+}
+.step-card {
+  padding: 24px;
+}
+.step-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #303133;
+}
+.step-hint {
+  color: #909399;
+  font-size: 13px;
+  margin-bottom: 20px;
+}
+.wizard-form {
+  margin-bottom: 24px;
+}
+.step-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #ebeef5;
+}
+.result-box {
+  margin: 16px 0;
+}
+.result-item {
+  margin-bottom: 16px;
+}
+.result-label {
+  display: block;
+  font-size: 13px;
+  color: #606266;
+  margin-bottom: 6px;
+}
+</style>

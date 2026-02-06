@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
+	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
@@ -718,11 +720,13 @@ func (ac *AdminController) notifySystemConfigChanged() {
 }
 
 // TestConfigs 一键测试配置：OTA 在 manager 内测，VAD/ASR/LLM/TTS 经 WebSocket 发主程序测，结果按 config_id 对应
+// 请求体可选 data：若提供某类型（vad/asr/llm/tts），则用该 data 覆盖 DB 作为下发主程序的配置（用于未保存草稿测试）
 func (ac *AdminController) TestConfigs(c *gin.Context) {
 	var body struct {
-		Types      []string            `json:"types"`       // 要测试的类型：ota, vad, asr, llm, tts
-		ConfigIDs  map[string][]string `json:"config_ids"`  // 按类型指定 config_id 列表，不传则测该类型全部已启用
-		ClientUUID string              `json:"client_uuid"` // 指定主程序连接，不传则任选一个
+		Types      []string               `json:"types"`       // 要测试的类型：ota, vad, asr, llm, tts
+		ConfigIDs  map[string][]string    `json:"config_ids"`  // 按类型指定 config_id 列表，不传则测该类型全部已启用
+		ClientUUID string                 `json:"client_uuid"` // 指定主程序连接，不传则任选一个
+		Data       map[string]interface{} `json:"data"`        // 可选，按类型覆盖配置源（用于编辑态/向导未保存测试）
 	}
 	_ = c.ShouldBindJSON(&body)
 	if len(body.Types) == 0 {
@@ -740,21 +744,46 @@ func (ac *AdminController) TestConfigs(c *gin.Context) {
 		"tts": gin.H{},
 	}
 
-	// OTA：在 manager 内对每条 OTA 配置做 URL 连通性检查，支持 config_ids 过滤
+	// OTA：优先用请求体 data.ota（页面表单），否则从 DB 加载
 	if contains(body.Types, "ota") {
-		q := ac.DB.Where("type = ? AND enabled = ?", "ota", true)
-		if ids := body.ConfigIDs["ota"]; len(ids) > 0 {
-			q = q.Where("config_id IN ?", ids)
+		var otaData map[string]interface{}
+		if body.Data != nil {
+			otaData, _ = body.Data["ota"].(map[string]interface{})
 		}
-		var otaConfigs []models.Config
-		if err := q.Find(&otaConfigs).Error; err != nil {
-			result["ota"] = gin.H{"_error": gin.H{"ok": false, "message": "获取OTA配置失败"}}
-		} else if len(otaConfigs) == 0 {
-			result["ota"] = gin.H{"_none": gin.H{"ok": false, "message": "未配置或未启用OTA"}}
-		} else {
-			for _, cfg := range otaConfigs {
+		if otaData != nil {
+			for configID, val := range otaData {
+				if configID == "provider" {
+					continue
+				}
+				cfgMap, _ := val.(map[string]interface{})
+				if cfgMap == nil {
+					result["ota"].(gin.H)[configID] = gin.H{"ok": false, "message": "配置格式无效"}
+					continue
+				}
+				jsonBytes, err := json.Marshal(cfgMap)
+				if err != nil {
+					result["ota"].(gin.H)[configID] = gin.H{"ok": false, "message": "配置序列化失败"}
+					continue
+				}
+				cfg := models.Config{ConfigID: configID, JsonData: string(jsonBytes)}
 				ok, msg := ac.testOTAConfig(cfg)
-				result["ota"].(gin.H)[cfg.ConfigID] = gin.H{"ok": ok, "message": msg}
+				result["ota"].(gin.H)[configID] = gin.H{"ok": ok, "message": msg}
+			}
+		} else {
+			q := ac.DB.Where("type = ? AND enabled = ?", "ota", true)
+			if ids := body.ConfigIDs["ota"]; len(ids) > 0 {
+				q = q.Where("config_id IN ?", ids)
+			}
+			var otaConfigs []models.Config
+			if err := q.Find(&otaConfigs).Error; err != nil {
+				result["ota"] = gin.H{"_error": gin.H{"ok": false, "message": "获取OTA配置失败"}}
+			} else if len(otaConfigs) == 0 {
+				result["ota"] = gin.H{"_none": gin.H{"ok": false, "message": "未配置或未启用OTA"}}
+			} else {
+				for _, cfg := range otaConfigs {
+					ok, msg := ac.testOTAConfig(cfg)
+					result["ota"].(gin.H)[cfg.ConfigID] = gin.H{"ok": ok, "message": msg}
+				}
 			}
 		}
 	}
@@ -794,15 +823,25 @@ func (ac *AdminController) TestConfigs(c *gin.Context) {
 						log.Printf("[config_test] fullData[%s] 不存在", typ)
 					}
 				}
-				// 只取请求的类型，并按 config_ids 过滤；指定了 config_ids 时，若 fullData 中无该条（如未启用），则从 DB 按 id 补查
+				// 若请求体带了 data 且某类型有值，则用 body.Data 覆盖该类型的配置源；否则用 fullData
 				subset := gin.H{}
 				for _, typ := range []string{"vad", "asr", "llm", "tts"} {
 					if !contains(body.Types, typ) {
 						continue
 					}
 					var typeMap map[string]interface{}
-					if v, ok := fullData[typ]; ok {
-						typeMap, _ = v.(map[string]interface{})
+					if body.Data != nil {
+						if v, ok := body.Data[typ]; ok {
+							if m, ok := v.(map[string]interface{}); ok && len(m) > 0 {
+								typeMap = m
+								log.Printf("[config_test] 使用请求体 data[%s] 作为配置源", typ)
+							}
+						}
+					}
+					if typeMap == nil {
+						if v, ok := fullData[typ]; ok {
+							typeMap, _ = v.(map[string]interface{})
+						}
 					}
 					ids := body.ConfigIDs[typ]
 					if len(ids) > 0 {
@@ -921,6 +960,10 @@ func (ac *AdminController) getConfigItemByTypeAndID(typ, configID string) map[st
 	for k, v := range configData {
 		item[k] = v
 	}
+	// 补全 provider（引擎类型），主程序资源池创建依赖此字段
+	if config.Provider != "" {
+		item["provider"] = config.Provider
+	}
 	return item
 }
 
@@ -933,7 +976,13 @@ func fillResultError(result gin.H, types []string, keys ...string) {
 	}
 }
 
-// testOTAConfig 对单条 OTA 配置检查 URL 连通性
+const (
+	otaTestDeviceID = "ota-test-device"
+	otaTestClientID = "ota-test-client"
+	otaHTTPPath     = "/xiaozhi/ota/"
+)
+
+// testOTAConfig 两段式检查：1）POST OTA 地址取 JSON 中的 websocket.url；2）对 WebSocket URL 建连验证
 func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message string) {
 	if cfg.JsonData == "" {
 		return false, "配置为空"
@@ -942,28 +991,27 @@ func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message st
 	if err := json.Unmarshal([]byte(cfg.JsonData), &data); err != nil {
 		return false, "配置解析失败"
 	}
-	var wsURL string
+	var wsURLFromConfig string
 	if ext, _ := data["external"].(map[string]interface{}); ext != nil {
 		if ws, _ := ext["websocket"].(map[string]interface{}); ws != nil {
 			if u, _ := ws["url"].(string); u != "" {
-				wsURL = u
+				wsURLFromConfig = u
 			}
 		}
 	}
-	if wsURL == "" {
+	if wsURLFromConfig == "" {
 		if test, _ := data["test"].(map[string]interface{}); test != nil {
 			if ws, _ := test["websocket"].(map[string]interface{}); ws != nil {
 				if u, _ := ws["url"].(string); u != "" {
-					wsURL = u
+					wsURLFromConfig = u
 				}
 			}
 		}
 	}
-	if wsURL == "" {
+	if wsURLFromConfig == "" {
 		return false, "未配置 WebSocket URL"
 	}
-	// 用 HTTP GET 同 host 做连通性检查（避免真正建 WS）
-	parsed, err := url.Parse(wsURL)
+	parsed, err := url.Parse(wsURLFromConfig)
 	if err != nil {
 		return false, "URL 解析失败"
 	}
@@ -971,27 +1019,51 @@ func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message st
 	if parsed.Scheme == "wss" {
 		scheme = "https"
 	}
-	checkURL := scheme + "://" + parsed.Host + "/"
-	req, err := http.NewRequest(http.MethodGet, checkURL, nil)
+	otaHTTPURL := scheme + "://" + parsed.Host + otaHTTPPath
+
+	// Part1: POST OTA 地址，带 Device-ID、Client-ID，解析 JSON 取 websocket.url
+	req, err := http.NewRequest(http.MethodPost, otaHTTPURL, bytes.NewBuffer([]byte("{}")))
 	if err != nil {
-		return false, "创建请求失败"
+		return false, "创建 OTA 请求失败"
 	}
-	req.Header.Set("Device-ID", "ota-test-device")
-	req.Header.Set("Client-ID", "ota-test-client")
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	req.Header.Set("Device-ID", otaTestDeviceID)
+	req.Header.Set("Client-ID", otaTestClientID)
+	req.Header.Set("Content-Type", "application/json")
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return false, "连接失败: " + err.Error()
+		return false, "OTA 请求失败: " + err.Error()
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 200 && resp.StatusCode < 400 && len(body) > 0 {
-		return true, "连接成功"
+	if resp.StatusCode != http.StatusOK {
+		return false, "OTA 返回 HTTP " + strconv.Itoa(resp.StatusCode)
 	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-		return false, "响应为空"
+	var otaResp map[string]interface{}
+	if err := json.Unmarshal(body, &otaResp); err != nil {
+		return false, "OTA 响应非 JSON"
 	}
-	return false, "HTTP " + strconv.Itoa(resp.StatusCode)
+	wsObj, _ := otaResp["websocket"].(map[string]interface{})
+	if wsObj == nil {
+		return false, "OTA 响应中无 websocket 字段"
+	}
+	wsURL, _ := wsObj["url"].(string)
+	if wsURL == "" {
+		return false, "OTA 响应中无 websocket.url"
+	}
+
+	// Part2: WebSocket 建连，带 Device-ID、Client-ID，连通即关闭
+	header := http.Header{}
+	header.Set("Device-ID", otaTestDeviceID)
+	header.Set("Client-ID", otaTestClientID)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
+	if err != nil {
+		return false, "WebSocket 连接失败: " + err.Error()
+	}
+	conn.Close()
+	return true, "OTA 与 WebSocket 均正常"
 }
 
 // GetConfigs 获取所有配置列表

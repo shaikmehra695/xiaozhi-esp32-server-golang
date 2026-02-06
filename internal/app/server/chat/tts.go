@@ -364,17 +364,15 @@ func (t *TTSManager) getTTSProviderInstance() (*pool.ResourceWrapper[tts.TTSProv
 		ttsConfig = t.clientState.DeviceConfig.Tts.Config
 	}
 
-	// 提取音色ID用于组合资源池key
+	// 逻辑标识（用于日志与指纹计算）：provider 或 provider:voiceID
 	voiceID := extractVoiceID(ttsConfig)
-
-	// 组合资源池key：provider:voiceID（如果有音色ID）
-	poolKey := ttsProvider
+	providerLabel := ttsProvider
 	if voiceID != "" {
-		poolKey = fmt.Sprintf("%s:%s", ttsProvider, voiceID)
+		providerLabel = fmt.Sprintf("%s:%s", ttsProvider, voiceID)
 	}
 
-	// 从资源池获取TTS资源（使用provider+音色作为唯一key）
-	ttsWrapper, err := pool.Acquire[tts.TTSProvider]("tts", poolKey, ttsConfig)
+	// 从资源池获取TTS资源（池 key 由配置指纹决定，host/voice 等变更会自动换池）
+	ttsWrapper, err := pool.Acquire[tts.TTSProvider]("tts", providerLabel, ttsConfig)
 	if err != nil {
 		log.Errorf("获取TTS资源失败: %v", err)
 		return nil, fmt.Errorf("获取TTS资源失败: %v", err)

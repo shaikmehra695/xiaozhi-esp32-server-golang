@@ -77,7 +77,7 @@
               <el-form-item label="WebSocket URL" prop="test.websocket.url" class="form-item full-width">
                  <el-input 
                    v-model="form.test.websocket.url" 
-                   placeholder="请输入Test环境WebSocket URL"
+                   placeholder="例如: ws://host:port/xiaozhi/v1/"
                    size="large"
                    :prefix-icon="Link"
                  />
@@ -114,6 +114,12 @@
               </el-form-item>
             </div>
           </div>
+          <div class="card-actions">
+            <el-button type="warning" size="large" :loading="otaTestingTest" @click="testOtaEnv('test')" class="env-test-btn">
+              <el-icon><CircleCheck /></el-icon>
+              测试 Test 环境
+            </el-button>
+          </div>
         </el-card>
         
         <!-- External环境配置卡片 -->
@@ -139,7 +145,7 @@
               <el-form-item label="WebSocket URL" prop="external.websocket.url" class="form-item full-width">
                  <el-input 
                    v-model="form.external.websocket.url" 
-                   placeholder="请输入External环境WebSocket URL"
+                   placeholder="例如: ws://host:port/xiaozhi/v1/"
                    size="large"
                    :prefix-icon="Link"
                  />
@@ -176,6 +182,12 @@
               </el-form-item>
             </div>
           </div>
+          <div class="card-actions">
+            <el-button type="warning" size="large" :loading="otaTestingExternal" @click="testOtaEnv('external')" class="env-test-btn">
+              <el-icon><CircleCheck /></el-icon>
+              测试 External 环境
+            </el-button>
+          </div>
         </el-card>
         
         <!-- 操作按钮 -->
@@ -189,15 +201,6 @@
           >
             <el-icon><Check /></el-icon>
             保存配置
-          </el-button>
-          <el-button
-            type="warning"
-            :loading="otaTesting"
-            size="large"
-            @click="testOtaConfig"
-          >
-            <el-icon><CircleCheck /></el-icon>
-            测试OTA
           </el-button>
         </div>
       </el-form>
@@ -213,11 +216,12 @@ import {
   Edit, Key, Link, User, Lock, Check, QuestionFilled, CircleCheck 
 } from '@element-plus/icons-vue'
 import api from '@/utils/api'
-import { testSingleConfig } from '@/utils/configTest'
+import { testWithData } from '@/utils/configTest'
 
 const loading = ref(false)
 const saving = ref(false)
-const otaTesting = ref(false)
+const otaTestingTest = ref(false)
+const otaTestingExternal = ref(false)
 const configId = ref(null)
 const formRef = ref()
 
@@ -383,19 +387,33 @@ const saveConfig = async () => {
   }
 }
 
-const testOtaConfig = async () => {
-  otaTesting.value = true
+// env: 'test' | 'external'，只测对应环境的 WebSocket 地址（后端优先取 external，无则取 test）
+const testOtaEnv = async (env) => {
+  const payload = {
+    signature_key: form.signature_key,
+    test: {
+      websocket: { url: env === 'test' ? form.test.websocket.url : '' },
+      mqtt: { enable: form.test.mqtt.enable, endpoint: form.test.mqtt.endpoint }
+    },
+    external: {
+      websocket: { url: env === 'external' ? form.external.websocket.url : '' },
+      mqtt: { enable: form.external.mqtt.enable, endpoint: form.external.mqtt.endpoint }
+    }
+  }
+  const loadingRef = env === 'test' ? otaTestingTest : otaTestingExternal
+  loadingRef.value = true
   try {
-    const result = await testSingleConfig('ota', 'ota_ota_config')
+    const result = await testWithData('ota', { ota_ota_config: payload })
+    const label = env === 'test' ? 'Test 环境' : 'External 环境'
     if (result.ok) {
-      ElMessage.success('OTA：' + result.message)
+      ElMessage.success(`${label}：${result.message}`)
     } else {
-      ElMessage.warning('OTA：' + result.message)
+      ElMessage.warning(`${label}：${result.message}`)
     }
   } catch (err) {
     ElMessage.error(err.response?.data?.error || '测试请求失败')
   } finally {
-    otaTesting.value = false
+    loadingRef.value = false
   }
 }
 
@@ -608,6 +626,18 @@ onMounted(() => {
 
 .config-section:last-child {
   margin-bottom: 0;
+}
+
+.card-actions {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #eee;
+}
+
+.env-test-btn {
+  font-size: 1rem;
+  padding: 12px 24px;
+  min-width: 160px;
 }
 
 .section-title {

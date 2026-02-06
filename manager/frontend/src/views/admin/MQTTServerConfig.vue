@@ -169,7 +169,7 @@ const form = reactive({
   listen_port: 1883,
   username: '',
   password: '',
-  signature_key: '',
+  signature_key: 'xiaozhi_ota_signature_key',
   enable_auth: false,
   tls: {
     enable: false,
@@ -245,7 +245,7 @@ const loadConfig = async () => {
         form.listen_port = Number(configData.listen_port) || 1883 // 确保端口是数字类型
         form.username = configData.username || ''
         form.password = configData.password || ''
-        form.signature_key = configData.signature_key || ''
+        form.signature_key = configData.signature_key || 'xiaozhi_ota_signature_key'
         form.enable_auth = configData.enable_auth !== undefined ? configData.enable_auth : false
         
         if (configData.tls) {

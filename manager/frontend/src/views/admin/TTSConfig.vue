@@ -5,6 +5,15 @@
         <h2>TTS配置管理</h2>
       </div>
       <div class="header-right">
+        <el-button
+          type="warning"
+          plain
+          :loading="testingAll"
+          @click="testAllConfigs"
+          :disabled="!getEnabledConfigs().length"
+        >
+          测试全部
+        </el-button>
         <el-button type="primary" @click="showDialog = true">
           <el-icon><Plus /></el-icon>
           添加配置
@@ -32,6 +41,19 @@
             @change="toggleDefault(scope.row)"
             :disabled="scope.row.is_default && getEnabledConfigs().length === 1"
           />
+        </template>
+      </el-table-column>
+      <el-table-column label="测试结果" width="100" align="center">
+        <template #default="scope">
+          <template v-if="testResults[scope.row.config_id]">
+            <el-tooltip v-if="testResults[scope.row.config_id].ok" content="通过" placement="top">
+              <span class="test-result test-ok">正确</span>
+            </el-tooltip>
+            <el-tooltip v-else :content="testResults[scope.row.config_id].message" placement="top" :show-after="200">
+              <span class="test-result test-err">错误</span>
+            </el-tooltip>
+          </template>
+          <span v-else class="test-result test-none">-</span>
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="创建时间" width="180">
@@ -78,6 +100,9 @@
       
       <template #footer>
         <el-button @click="handleDialogClose">取消</el-button>
+        <el-button type="warning" plain @click="testCurrentConfig" :loading="testingCurrent">
+          测试
+        </el-button>
         <el-button type="primary" @click="handleSave" :loading="saving">
           保存
         </el-button>
@@ -91,11 +116,14 @@ import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import api from '../../utils/api'
-import { testSingleConfig } from '../../utils/configTest'
+import { testSingleConfig, testWithData, parseJsonData } from '../../utils/configTest'
 import TTSConfigForm from './forms/TTSConfigForm.vue'
 
 const configs = ref([])
 const testingId = ref(null)
+const testingAll = ref(false)
+const testingCurrent = ref(false)
+const testResults = ref({})
 const loading = ref(false)
 const saving = ref(false)
 const showDialog = ref(false)
@@ -438,6 +466,7 @@ const testConfig = async (row, type) => {
   testingId.value = row.config_id
   try {
     const result = await testSingleConfig(type, row.config_id)
+    testResults.value = { ...testResults.value, [row.config_id]: result }
     if (result.ok) {
       ElMessage.success(`${row.name || row.config_id}：${result.message}`)
     } else {
@@ -447,6 +476,67 @@ const testConfig = async (row, type) => {
     ElMessage.error(err.response?.data?.error || '测试请求失败')
   } finally {
     testingId.value = null
+  }
+}
+
+const testAllConfigs = async () => {
+  const list = getEnabledConfigs()
+  if (!list.length) {
+    ElMessage.warning('没有已启用的配置')
+    return
+  }
+  testingAll.value = true
+  testResults.value = {}
+  let okCount = 0
+  try {
+    for (const row of list) {
+      try {
+        const result = await testSingleConfig('tts', row.config_id)
+        testResults.value = { ...testResults.value, [row.config_id]: result }
+        if (result.ok) okCount++
+      } catch (_) {
+        testResults.value = { ...testResults.value, [row.config_id]: { ok: false, message: '请求失败' } }
+      }
+    }
+    ElMessage.success(`全部测试完成：${okCount}/${list.length} 通过`)
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '测试请求失败')
+  } finally {
+    testingAll.value = false
+  }
+}
+
+const testCurrentConfig = async () => {
+  if (!formRef.value) return
+  try {
+    await formRef.value.validate()
+  } catch (_) {
+    return
+  }
+  const configId = form.config_id?.trim()
+  if (!configId) {
+    ElMessage.warning('请填写配置ID')
+    return
+  }
+  const payload = {
+    name: form.name,
+    config_id: configId,
+    provider: form.provider,
+    is_default: form.is_default,
+    ...parseJsonData(formRef.value.getJsonData())
+  }
+  testingCurrent.value = true
+  try {
+    const result = await testWithData('tts', { [configId]: payload })
+    if (result.ok) {
+      ElMessage.success(result.message || '测试通过')
+    } else {
+      ElMessage.warning(result.message || '测试未通过')
+    }
+  } catch (err) {
+    ElMessage.error(err.response?.data?.error || '测试请求失败')
+  } finally {
+    testingCurrent.value = false
   }
 }
 
@@ -639,4 +729,9 @@ onMounted(() => {
   margin: 0;
   color: #333;
 }
+
+.test-result { font-size: 12px; }
+.test-result.test-ok { color: var(--el-color-success); }
+.test-result.test-err { color: var(--el-color-danger); cursor: help; }
+.test-result.test-none { color: var(--el-text-color-placeholder); }
 </style>

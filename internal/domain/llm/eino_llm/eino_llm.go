@@ -239,6 +239,17 @@ func logMessages(messages []*schema.Message) {
 	}
 }
 
+// llmExtraErrorKey 与 domain/llm.LLMExtraErrorKey 保持一致，失败时透传错误用（避免循环依赖）
+const llmExtraErrorKey = "error"
+
+// sendLLMError 向 channel 发送带 Extra.error 的错误消息
+func sendLLMError(ch chan *schema.Message, err error) {
+	ch <- &schema.Message{
+		Role:  schema.System,
+		Extra: map[string]any{llmExtraErrorKey: err.Error()},
+	}
+}
+
 // EinoResponseWithTools 直接使用Eino类型的带工具响应
 func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID string, messages []*schema.Message, tools []*schema.ToolInfo) chan *schema.Message {
 	responseChan := make(chan *schema.Message, 200)
@@ -254,6 +265,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 			p.chatModel, err = p.chatModel.WithTools(tools)
 			if err != nil {
 				log.Errorf("绑定工具失败: %v", err)
+				sendLLMError(responseChan, err)
 				return
 			}
 		}
@@ -268,6 +280,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 				message, genErr := p.chatModel.Generate(ctx, messages, model.WithMaxTokens(p.maxTokens))
 				if genErr != nil {
 					log.Errorf("Eino工具生成响应失败: %v", genErr)
+					sendLLMError(responseChan, genErr)
 					return
 				}
 				if message != nil {
@@ -300,6 +313,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 					}
 					if err != nil {
 						log.Errorf("接收流式响应失败: %v", err)
+						sendLLMError(responseChan, err)
 						break
 					}
 
@@ -350,6 +364,7 @@ func (p *EinoLLMProvider) EinoResponseWithTools(ctx context.Context, sessionID s
 			message, err := p.chatModel.Generate(ctx, messages, model.WithMaxTokens(p.maxTokens))
 			if err != nil {
 				log.Errorf("Eino工具生成响应失败: %v", err)
+				sendLLMError(responseChan, err)
 				return
 			}
 
