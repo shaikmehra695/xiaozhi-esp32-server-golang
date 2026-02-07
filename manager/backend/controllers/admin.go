@@ -652,6 +652,46 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 		}
 	}
 
+	// 处理 Vision 配置：与 config.yaml 结构一致，vision_base + vllm（顶层 provider + 子项仅业务字段）
+	if visionConfigs, exists := configsByType["vision"]; exists && len(visionConfigs) > 0 {
+		visionResponse := make(gin.H)
+		vllmMap := make(gin.H)
+		var defaultVisionConfigID string
+		for _, config := range visionConfigs {
+			if config.ConfigID == "vision_base" {
+				if config.JsonData != "" {
+					var baseData map[string]interface{}
+					if err := json.Unmarshal([]byte(config.JsonData), &baseData); err == nil {
+						for k, v := range baseData {
+							visionResponse[k] = v
+						}
+					}
+				}
+				continue
+			}
+			if config.Enabled {
+				configData := make(map[string]interface{})
+				if config.JsonData != "" {
+					json.Unmarshal([]byte(config.JsonData), &configData)
+				}
+				if config.IsDefault {
+					defaultVisionConfigID = config.ConfigID
+				}
+				// 与 YAML 一致：子项只存业务配置，不含 name/provider/is_default
+				vllmMap[config.ConfigID] = configData
+			}
+		}
+		if len(vllmMap) > 0 {
+			if defaultVisionConfigID != "" {
+				vllmMap["provider"] = defaultVisionConfigID
+			}
+			visionResponse["vllm"] = vllmMap
+		}
+		if len(visionResponse) > 0 {
+			response["vision"] = visionResponse
+		}
+	}
+
 	// 处理 VAD 配置
 	if configs, exists := configsByType["vad"]; exists && len(configs) > 0 {
 		response["vad"] = selectAndParseConfig(configs)

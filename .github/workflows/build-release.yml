@@ -25,7 +25,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify asr_server submodule
+        run: |
+          if [ ! -f asr_server/server/setup.go ]; then
+            echo "::error::asr_server 子模块未拉取，binary 构建需要 voice_server 包"
+            ls -la asr_server 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -81,19 +91,9 @@ jobs:
         run: |
           upx --lzma xiaozhi_server.exe || true
 
-      - name: Set version for package name
-        id: version
+      - name: Pack Windows release（目录 windows-amd64/，artifact 传目录不传 zip，避免下载后再解压一层 zip）
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=snapshot" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Pack Windows release (exe + build/common + build/windows)
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          PACK_DIR="xiaozhi_server_windows_amd64_${VERSION}"
+          PACK_DIR="windows-amd64/xiaozhi-server-windows-amd64"
           mkdir -p "$PACK_DIR"/data "$PACK_DIR"/logs
 
           cp xiaozhi_server.exe "$PACK_DIR/"
@@ -103,22 +103,30 @@ jobs:
           cp build/windows/start.bat build/windows/README.md "$PACK_DIR/"
           cp build/windows/onnxruntime.dll build/windows/sherpa-onnx-c-api.dll build/windows/sherpa-onnx-cxx-api.dll build/windows/ten_vad.dll "$PACK_DIR/"
 
-          zip -r "${PACK_DIR}.zip" "$PACK_DIR"
-          echo "PACK_ZIP=${PACK_DIR}.zip" >> $GITHUB_ENV
-
-      - name: Upload Windows package
+      - name: Upload Windows package（传目录，下载解压后为 windows-amd64/ 一层）
         uses: actions/upload-artifact@v4
         with:
-          name: windows-amd64-binaries
-          path: ${{ env.PACK_ZIP }}
+          name: xiaozhi-server-windows-amd64
+          path: windows-amd64
 
   build-linux-amd64:
-    runs-on: ubuntu-latest
+    # 使用 Ubuntu 22.04 构建，使二进制依赖的 glibc 版本较低，便于在旧系统上运行
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify asr_server submodule
+        run: |
+          if [ ! -f asr_server/server/setup.go ]; then
+            echo "::error::asr_server 子模块未拉取，binary 构建需要 voice_server 包"
+            ls -la asr_server 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -164,33 +172,28 @@ jobs:
           # ten_vad 为 .so 动态库，不加 -static；rpath 已在 cgo 中指定；含 asr_server 与 Windows 一致
           go build -v -tags "nolibopusfile asr_server manager embed_ui" \
             -ldflags "-s -w" \
-            -o xiaozhi_server_linux_amd64 ./cmd/server
+            -o xiaozhi_server ./cmd/server
 
-      - name: Compress with UPX (optional)
+      - name: UPX 压缩（仅保留此二进制，文件名不带 upx）
         run: |
-          cp xiaozhi_server_linux_amd64 xiaozhi_server_linux_amd64-upx
-          upx --lzma xiaozhi_server_linux_amd64-upx || true
+          upx --lzma xiaozhi_server -o xiaozhi_server.upx && mv xiaozhi_server.upx xiaozhi_server || true
 
-      - name: Pack Linux release (binary + build/common + build/linux .so)
+      - name: Pack Linux release（目录 linux-amd64/，解压/下载后一层目录）
         run: |
-          mkdir -p release_linux_amd64/ten-vad/lib/Linux/x64
-          cp xiaozhi_server_linux_amd64 xiaozhi_server_linux_amd64-upx release_linux_amd64/
-          patchelf --add-rpath '$ORIGIN/ten-vad/lib/Linux/x64' release_linux_amd64/xiaozhi_server_linux_amd64 release_linux_amd64/xiaozhi_server_linux_amd64-upx 2>/dev/null || true
-          cp build/linux/libten_vad.so build/linux/libsherpa-onnx-c-api.so build/linux/libonnxruntime.so release_linux_amd64/ten-vad/lib/Linux/x64/
-          cp build/common/main_config.yaml build/common/manager.json build/common/asr_server.json release_linux_amd64/
-          cp -r build/common/models build/common/data release_linux_amd64/
-          mkdir -p release_linux_amd64/logs
-          chmod +x release_linux_amd64/xiaozhi_server_linux_amd64*
-          zip -r linux-amd64.zip release_linux_amd64/
+          PACK_DIR="linux-amd64/xiaozhi_server-linux-amd64"
+          mkdir -p "$PACK_DIR"/ten-vad/lib/Linux/x64 "$PACK_DIR"/logs
+          cp xiaozhi_server "$PACK_DIR/"
+          patchelf --add-rpath '$ORIGIN/ten-vad/lib/Linux/x64' "$PACK_DIR/xiaozhi_server" 2>/dev/null || true
+          cp build/linux/libten_vad.so build/linux/libsherpa-onnx-c-api.so build/linux/libonnxruntime.so "$PACK_DIR/ten-vad/lib/Linux/x64/"
+          cp build/common/main_config.yaml build/common/manager.json build/common/asr_server.json "$PACK_DIR/"
+          cp -r build/common/models build/common/data "$PACK_DIR/"
+          chmod +x "$PACK_DIR/xiaozhi_server"
 
-      - name: Upload Linux binaries
+      - name: Upload Linux package（传目录 linux-amd64，下载解压后一层 linux-amd64/）
         uses: actions/upload-artifact@v4
         with:
-          name: linux-amd64-binaries
-          path: |
-            release_linux_amd64/xiaozhi_server_linux_amd64
-            release_linux_amd64/xiaozhi_server_linux_amd64-upx
-            linux-amd64.zip
+          name: linux-amd64
+          path: linux-amd64
 
   release:
     needs:
@@ -205,15 +208,15 @@ jobs:
           name: windows-amd64-binaries
           path: release
 
-      - name: Download Linux binaries
+      - name: Download Linux package
         uses: actions/download-artifact@v4
         with:
-          name: linux-amd64-binaries
+          name: linux-amd64
           path: release
 
-      - name: Prepare release assets
+      - name: 打 Release 用 zip（解压后各一层目录 windows-amd64/、linux-amd64/）
         run: |
-          mv release/xiaozhi_server_windows_amd64_*.zip release/windows-amd64.zip
+          cd release && zip -r windows-amd64.zip windows-amd64 && zip -r linux-amd64.zip linux-amd64
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -224,8 +227,6 @@ jobs:
           prerelease: false
           files: |
             release/windows-amd64.zip
-            release/release_linux_amd64/xiaozhi_server_linux_amd64
-            release/release_linux_amd64/xiaozhi_server_linux_amd64-upx
             release/linux-amd64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
