@@ -4,7 +4,7 @@
     "mode": "debug"
   },
   "database": {
-    "type": "mysql",
+    "type": "sqlite",
     "mysql": {
       "host": "192.168.208.214",
       "port": 3306,
@@ -13,7 +13,7 @@
       "database": "xiaozhi_admin_test"
     },
     "sqlite": {
-      "file_path": "./data/xiaozhi.db"
+      "file_path": "./data/xiaozhis.db"
     }
   },
   "jwt": {

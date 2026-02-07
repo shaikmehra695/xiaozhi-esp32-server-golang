@@ -756,8 +756,8 @@ func (ac *AdminController) TestConfigs(c *gin.Context) {
 					continue
 				}
 				cfg := models.Config{ConfigID: configID, JsonData: string(jsonBytes)}
-				ok, msg, ms := ac.testOTAConfig(cfg)
-				result["ota"].(gin.H)[configID] = gin.H{"ok": ok, "message": msg, "first_packet_ms": ms}
+				ok, msg, ms, otaBody := ac.testOTAConfig(cfg)
+				result["ota"].(gin.H)[configID] = gin.H{"ok": ok, "message": msg, "first_packet_ms": ms, "ota_response": otaBody}
 			}
 		} else {
 			q := ac.DB.Where("type = ? AND enabled = ?", "ota", true)
@@ -771,8 +771,8 @@ func (ac *AdminController) TestConfigs(c *gin.Context) {
 				result["ota"] = gin.H{"_none": gin.H{"ok": false, "message": "未配置或未启用OTA"}}
 			} else {
 				for _, cfg := range otaConfigs {
-					ok, msg, ms := ac.testOTAConfig(cfg)
-					result["ota"].(gin.H)[cfg.ConfigID] = gin.H{"ok": ok, "message": msg, "first_packet_ms": ms}
+					ok, msg, ms, otaBody := ac.testOTAConfig(cfg)
+					result["ota"].(gin.H)[cfg.ConfigID] = gin.H{"ok": ok, "message": msg, "first_packet_ms": ms, "ota_response": otaBody}
 				}
 			}
 		}
@@ -972,14 +972,15 @@ const (
 	otaHTTPPath     = "/xiaozhi/ota/"
 )
 
-// testOTAConfig 两段式检查：1）POST OTA 地址取 JSON 中的 websocket.url；2）对 WebSocket URL 建连验证。返回 ok, message, first_packet_ms（到 HTTP 首包或建连成功的耗时）
-func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message string, firstPacketMs int64) {
+// testOTAConfig 两段式检查：1）POST OTA 地址取 JSON 中的 websocket.url；2）对 WebSocket URL 建连验证。
+// 返回 ok, message, first_packet_ms, ota_response（OTA 接口响应 body，便于前端展示）
+func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message string, firstPacketMs int64, otaResponseBody string) {
 	if cfg.JsonData == "" {
-		return false, "配置为空", 0
+		return false, "配置为空", 0, ""
 	}
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(cfg.JsonData), &data); err != nil {
-		return false, "配置解析失败", 0
+		return false, "配置解析失败", 0, ""
 	}
 	var wsURLFromConfig string
 	if ext, _ := data["external"].(map[string]interface{}); ext != nil {
@@ -999,11 +1000,11 @@ func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message st
 		}
 	}
 	if wsURLFromConfig == "" {
-		return false, "未配置 WebSocket URL", 0
+		return false, "未配置 WebSocket URL", 0, ""
 	}
 	parsed, err := url.Parse(wsURLFromConfig)
 	if err != nil {
-		return false, "URL 解析失败", 0
+		return false, "URL 解析失败", 0, ""
 	}
 	scheme := "http"
 	if parsed.Scheme == "wss" {
@@ -1015,7 +1016,7 @@ func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message st
 	// Part1: POST OTA 地址，带 Device-ID、Client-ID，解析 JSON 取 websocket.url
 	req, err := http.NewRequest(http.MethodPost, otaHTTPURL, bytes.NewBuffer([]byte("{}")))
 	if err != nil {
-		return false, "创建 OTA 请求失败", time.Since(t0).Milliseconds()
+		return false, "创建 OTA 请求失败", time.Since(t0).Milliseconds(), ""
 	}
 	req.Header.Set("Device-ID", otaTestDeviceID)
 	req.Header.Set("Client-ID", otaTestClientID)
@@ -1023,25 +1024,26 @@ func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message st
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return false, "OTA 请求失败: " + err.Error(), time.Since(t0).Milliseconds()
+		return false, "OTA 请求失败: " + err.Error(), time.Since(t0).Milliseconds(), ""
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	firstPacketMs = time.Since(t0).Milliseconds()
+	otaResponseBody = string(body)
 	if resp.StatusCode != http.StatusOK {
-		return false, "OTA 返回 HTTP " + strconv.Itoa(resp.StatusCode), firstPacketMs
+		return false, "OTA 返回 HTTP " + strconv.Itoa(resp.StatusCode), firstPacketMs, otaResponseBody
 	}
 	var otaResp map[string]interface{}
 	if err := json.Unmarshal(body, &otaResp); err != nil {
-		return false, "OTA 响应非 JSON", firstPacketMs
+		return false, "OTA 响应非 JSON", firstPacketMs, otaResponseBody
 	}
 	wsObj, _ := otaResp["websocket"].(map[string]interface{})
 	if wsObj == nil {
-		return false, "OTA 响应中无 websocket 字段", firstPacketMs
+		return false, "OTA 响应中无 websocket 字段", firstPacketMs, otaResponseBody
 	}
 	wsURL, _ := wsObj["url"].(string)
 	if wsURL == "" {
-		return false, "OTA 响应中无 websocket.url", firstPacketMs
+		return false, "OTA 响应中无 websocket.url", firstPacketMs, otaResponseBody
 	}
 
 	// Part2: WebSocket 建连，带 Device-ID、Client-ID，连通即关闭（建连耗时计入首包）
@@ -1053,10 +1055,10 @@ func (ac *AdminController) testOTAConfig(cfg models.Config) (ok bool, message st
 	defer cancel()
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
 	if err != nil {
-		return false, "WebSocket 连接失败: " + err.Error(), firstPacketMs + time.Since(wsT0).Milliseconds()
+		return false, "WebSocket 连接失败: " + err.Error(), firstPacketMs + time.Since(wsT0).Milliseconds(), otaResponseBody
 	}
 	conn.Close()
-	return true, "OTA 与 WebSocket 均正常", firstPacketMs + time.Since(wsT0).Milliseconds()
+	return true, "OTA 与 WebSocket 均正常", firstPacketMs + time.Since(wsT0).Milliseconds(), otaResponseBody
 }
 
 // GetConfigs 获取所有配置列表

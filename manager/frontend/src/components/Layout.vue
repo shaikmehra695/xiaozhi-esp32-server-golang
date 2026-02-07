@@ -94,6 +94,31 @@
       <el-header class="header">
         <div class="header-left">
           <span class="page-title">{{ currentPageTitle }}</span>
+          <template v-if="authStore.isAdmin">
+            <div class="header-nav-divider" />
+            <router-link to="/admin/config-wizard" custom v-slot="{ navigate, isActive }">
+              <el-button
+                :type="isActive ? 'primary' : 'default'"
+                plain
+                class="header-nav-btn"
+                @click="navigate"
+              >
+                <el-icon class="header-nav-icon"><Guide /></el-icon>
+                <span>配置向导</span>
+              </el-button>
+            </router-link>
+            <router-link to="/admin/ota-config" custom v-slot="{ navigate, isActive }">
+              <el-button
+                :type="isActive ? 'primary' : 'default'"
+                plain
+                class="header-nav-btn"
+                @click="navigate"
+              >
+                <el-icon class="header-nav-icon"><Upload /></el-icon>
+                <span>OTA配置</span>
+              </el-button>
+            </router-link>
+          </template>
         </div>
         <div class="header-right">
           <el-dropdown @command="handleCommand">
@@ -140,7 +165,9 @@ import {
   Iphone,
   Connection,
   Microphone,
-  DataAnalysis
+  DataAnalysis,
+  Guide,
+  Upload
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -213,10 +240,36 @@ const handleCommand = async (command) => {
   padding: 0 20px;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
 .header-left .page-title {
   font-size: 18px;
   font-weight: 500;
   color: #333;
+}
+
+.header-nav-divider {
+  width: 1px;
+  height: 22px;
+  background-color: #dcdfe6;
+  margin: 0 12px;
+}
+
+.header-nav-btn {
+  padding: 8px 16px;
+  font-size: 15px;
+  font-weight: 500;
+  height: auto;
+}
+
+.header-nav-icon {
+  margin-right: 6px;
+  font-size: 18px;
+  vertical-align: -0.2em;
 }
 
 .header-right .user-info {

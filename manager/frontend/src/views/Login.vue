@@ -152,9 +152,14 @@ const handleLogin = async () => {
       
       if (result.success) {
         ElMessage.success('登录成功')
-        // 根据用户角色跳转到不同页面
+        // 根据用户角色跳转到不同页面；管理员首次登录跳转到配置向导
         if (authStore.user?.role === 'admin') {
-          router.push('/dashboard')
+          const firstLoginDone = localStorage.getItem('admin_first_login_done')
+          if (!firstLoginDone) {
+            router.push('/admin/config-wizard')
+          } else {
+            router.push('/dashboard')
+          }
         } else {
           router.push('/console')
         }

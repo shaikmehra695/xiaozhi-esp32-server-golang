@@ -18,7 +18,7 @@
       <template v-if="currentStep === 0">
         <div class="step-title">OTA 配置</div>
         <p class="step-hint">填写本服务对外访问的域名或 IP，将自动生成 OTA 地址和 WebSocket 地址（最后一步会展示）。</p>
-        <el-form :model="otaForm" label-width="120px" class="wizard-form">
+        <el-form :model="otaForm" label-width="140px" class="wizard-form">
           <el-form-item label="域名或 IP" prop="host">
             <el-input v-model="otaForm.host" placeholder="如 192.168.1.100 或 manager.example.com" clearable />
           </el-form-item>
@@ -31,6 +31,23 @@
               <el-radio value="https">HTTPS</el-radio>
             </el-radio-group>
           </el-form-item>
+          <el-form-item label="签名密钥" prop="signature_key">
+            <el-input v-model="otaForm.signature_key" placeholder="与 MQTT Server 认证共用" clearable />
+          </el-form-item>
+          <el-form-item label="启用 MQTT/UDP" prop="enableMqttUdp">
+            <el-switch v-model="otaForm.enableMqttUdp" active-text="启用" inactive-text="不启用" />
+            <span class="form-hint">启用后将自动配置 MQTT Server、MQTT 客户端与 UDP，终端可通过 MQTT 连接。</span>
+          </el-form-item>
+          <template v-if="otaForm.enableMqttUdp">
+            <el-form-item label="MQTT Server 端口" prop="mqttServerPort" required>
+              <el-input-number v-model="otaForm.mqttServerPort" :min="1" :max="65535" style="width: 100%" placeholder="1883 常用，8883 将启用 TLS" />
+              <span class="form-hint">IP 复用上方域名；8883 时自动启用 TLS，默认开启认证。</span>
+            </el-form-item>
+            <el-form-item label="UDP 端口" prop="udpPort" required>
+              <el-input-number v-model="otaForm.udpPort" :min="1" :max="65535" style="width: 100%" placeholder="如 8990" />
+              <span class="form-hint">外网 IP 复用上方域名，外网端口与监听端口均为本端口；监听主机 0.0.0.0。</span>
+            </el-form-item>
+          </template>
         </el-form>
       </template>
 
@@ -86,6 +103,31 @@
               </template>
             </el-input>
           </div>
+          <div v-if="otaForm.enableMqttUdp && finalMqttEndpoint" class="result-item">
+            <span class="result-label">MQTT 端点（供终端连接）：</span>
+            <el-input :model-value="finalMqttEndpoint" readonly>
+              <template #append>
+                <el-button @click="copyToClipboard(finalMqttEndpoint)" :icon="CopyDocument">复制</el-button>
+              </template>
+            </el-input>
+          </div>
+          <div v-if="otaForm.enableMqttUdp && finalUdpEndpoint" class="result-item">
+            <span class="result-label">UDP 信息（供终端连接）：</span>
+            <el-input :model-value="finalUdpEndpoint" readonly>
+              <template #append>
+                <el-button @click="copyToClipboard(finalUdpEndpoint)" :icon="CopyDocument">复制</el-button>
+              </template>
+            </el-input>
+          </div>
+        </div>
+        <div class="ota-test-section">
+          <el-button type="warning" :loading="otaTestLoading" @click="runOtaTest">
+            OTA 测试
+          </el-button>
+          <div v-if="otaTestResult !== null" class="ota-test-result">
+            <span class="result-label">OTA 接口返回：</span>
+            <pre class="ota-test-json">{{ otaTestResult }}</pre>
+          </div>
         </div>
       </template>
 
@@ -119,6 +161,7 @@
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
+import { useAuthStore } from '@/stores/auth'
 import api from '@/utils/api'
 import { testWithData, parseJsonData } from '@/utils/configTest'
 import VADConfigForm from './forms/VADConfigForm.vue'
@@ -129,6 +172,8 @@ import TTSConfigForm from './forms/TTSConfigForm.vue'
 const currentStep = ref(0)
 const saving = ref(false)
 const testingStep = ref(false)
+const otaTestLoading = ref(false)
+const otaTestResult = ref(null)
 const otaConfigId = ref(null)
 const vadConfigId = ref(null)
 const asrConfigId = ref(null)
@@ -138,7 +183,11 @@ const ttsConfigId = ref(null)
 const otaForm = reactive({
   host: '',
   port: 8080,
-  protocol: 'http'
+  protocol: 'http',
+  signature_key: 'xiaozhi_ota_signature_key',
+  enableMqttUdp: false,
+  mqttServerPort: 1883,
+  udpPort: 8990
 })
 
 const vadForm = reactive({
@@ -341,10 +390,113 @@ const finalWsUrl = computed(() => {
   return `${proto}://${otaForm.host.trim()}:${otaForm.port}/xiaozhi/v1/`
 })
 
+const finalMqttEndpoint = computed(() => {
+  if (!otaForm.enableMqttUdp || !otaForm.host?.trim()) return ''
+  return `${otaForm.host.trim()}:${otaForm.mqttServerPort}`
+})
+
+const finalUdpEndpoint = computed(() => {
+  if (!otaForm.enableMqttUdp || !otaForm.host?.trim()) return ''
+  return `${otaForm.host.trim()}:${otaForm.udpPort}`
+})
+
 function buildWsUrl() {
   if (!otaForm.host?.trim()) return ''
   const proto = otaForm.protocol === 'https' ? 'wss' : 'ws'
   return `${proto}://${otaForm.host.trim()}:${otaForm.port}/xiaozhi/v1/`
+}
+
+const MQTT_SERVER_DEFAULT_USER = 'admin'
+const MQTT_SERVER_DEFAULT_PASS = 'admin123'
+
+async function saveMqttServerConfig() {
+  const port = Number(otaForm.mqttServerPort) || 1883
+  const useTls = port === 8883
+  const configData = {
+    enable: true,
+    listen_host: '0.0.0.0',
+    listen_port: port,
+    username: MQTT_SERVER_DEFAULT_USER,
+    password: MQTT_SERVER_DEFAULT_PASS,
+    signature_key: otaForm.signature_key?.trim() || 'xiaozhi_ota_signature_key',
+    enable_auth: true,
+    tls: {
+      enable: useTls,
+      port: 8883,
+      pem: '',
+      key: ''
+    }
+  }
+  const payload = {
+    name: 'MQTT Server配置',
+    config_id: 'mqtt_server_mqtt_server_config',
+    provider: 'mqtt_server',
+    json_data: JSON.stringify(configData),
+    enabled: true,
+    is_default: true
+  }
+  const res = await api.get('/admin/mqtt-server-configs')
+  const list = res.data?.data || []
+  const existing = list.find(c => c.is_default) || list[0]
+  if (existing?.id) {
+    await api.put(`/admin/mqtt-server-configs/${existing.id}`, payload)
+  } else {
+    await api.post('/admin/mqtt-server-configs', payload)
+  }
+}
+
+async function saveMqttConfig() {
+  const host = otaForm.host?.trim() || '127.0.0.1'
+  const port = Number(otaForm.mqttServerPort) || 1883
+  const useTls = port === 8883
+  const configData = {
+    enable: true,
+    broker: host,
+    type: useTls ? 'ssl' : 'tcp',
+    port,
+    client_id: 'xiaozhi_manager',
+    username: MQTT_SERVER_DEFAULT_USER,
+    password: MQTT_SERVER_DEFAULT_PASS
+  }
+  const payload = {
+    name: 'MQTT配置',
+    config_id: 'mqtt_wizard_default',
+    is_default: true,
+    json_data: JSON.stringify(configData)
+  }
+  const res = await api.get('/admin/mqtt-configs')
+  const list = res.data?.data || []
+  const existing = list.find(c => c.is_default) || list[0]
+  if (existing?.id) {
+    await api.put(`/admin/mqtt-configs/${existing.id}`, payload)
+  } else {
+    await api.post('/admin/mqtt-configs', payload)
+  }
+}
+
+async function saveUdpConfig() {
+  const host = otaForm.host?.trim() || '0.0.0.0'
+  const port = Number(otaForm.udpPort) || 8990
+  const configData = {
+    listen_host: '0.0.0.0',
+    listen_port: port,
+    external_host: host,
+    external_port: port
+  }
+  const payload = {
+    name: 'UDP配置',
+    config_id: 'udp_wizard_default',
+    is_default: true,
+    json_data: JSON.stringify(configData)
+  }
+  const res = await api.get('/admin/udp-configs')
+  const list = res.data?.data || []
+  const existing = list.find(c => c.is_default) || list[0]
+  if (existing?.id) {
+    await api.put(`/admin/udp-configs/${existing.id}`, payload)
+  } else {
+    await api.post('/admin/udp-configs', payload)
+  }
 }
 
 async function saveOta() {
@@ -353,14 +505,46 @@ async function saveOta() {
     ElMessage.warning('请填写域名或 IP')
     return false
   }
+  if (otaForm.enableMqttUdp) {
+    const host = otaForm.host?.trim()
+    if (!host) {
+      ElMessage.warning('请填写域名或 IP')
+      return false
+    }
+    const mqttPort = Number(otaForm.mqttServerPort)
+    const udpPort = Number(otaForm.udpPort)
+    if (!mqttPort || mqttPort < 1 || mqttPort > 65535) {
+      ElMessage.warning('请输入有效的 MQTT Server 端口（1-65535）')
+      return false
+    }
+    if (!udpPort || udpPort < 1 || udpPort > 65535) {
+      ElMessage.warning('请输入有效的 UDP 端口（1-65535）')
+      return false
+    }
+    try {
+      await saveMqttServerConfig()
+      await saveMqttConfig()
+      await saveUdpConfig()
+    } catch (e) {
+      ElMessage.error('MQTT/UDP 配置保存失败: ' + (e.response?.data?.message || e.message))
+      return false
+    }
+  }
+  const mqttEndpoint = otaForm.enableMqttUdp ? finalMqttEndpoint.value : ''
   const payload = {
     name: 'OTA配置',
     config_id: 'ota_ota_config',
     provider: 'default',
     json_data: JSON.stringify({
-      signature_key: 'xiaozhi_ota_signature_key',
-      test: { websocket: { url: wsUrl }, mqtt: { enable: false, endpoint: '' } },
-      external: { websocket: { url: wsUrl }, mqtt: { enable: false, endpoint: '' } }
+      signature_key: otaForm.signature_key?.trim() || 'xiaozhi_ota_signature_key',
+      test: {
+        websocket: { url: wsUrl },
+        mqtt: { enable: otaForm.enableMqttUdp, endpoint: mqttEndpoint }
+      },
+      external: {
+        websocket: { url: wsUrl },
+        mqtt: { enable: otaForm.enableMqttUdp, endpoint: mqttEndpoint }
+      }
     }, null, 2),
     enabled: true,
     is_default: true
@@ -372,7 +556,7 @@ async function saveOta() {
       const res = await api.post('/admin/ota-configs', payload)
       otaConfigId.value = res.data?.data?.id ?? null
     }
-    ElMessage.success('OTA 配置已保存')
+    ElMessage.success(otaForm.enableMqttUdp ? 'OTA 及 MQTT/UDP 配置已保存' : 'OTA 配置已保存')
     return true
   } catch (e) {
     ElMessage.error('OTA 保存失败: ' + (e.response?.data?.message || e.message))
@@ -746,6 +930,52 @@ async function copyToClipboard(text) {
   }
 }
 
+function formatOtaResponseDisplay(str) {
+  if (str == null || str === '') return ''
+  const s = String(str).trim()
+  if (!s) return ''
+  try {
+    const parsed = JSON.parse(s)
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return s
+  }
+}
+
+async function runOtaTest() {
+  otaTestLoading.value = true
+  otaTestResult.value = null
+  try {
+    const res = await api.post('/admin/configs/test', { types: ['ota'] }, { timeout: 30000 })
+    const data = res.data?.data ?? res.data
+    const ota = data?.ota
+    if (ota && typeof ota === 'object') {
+      const entry = Object.entries(ota).find(([k]) => !k.startsWith('_'))
+      if (entry) {
+        const [, v] = entry
+        if (v?.ota_response !== undefined && v.ota_response !== '') {
+          otaTestResult.value = formatOtaResponseDisplay(v.ota_response)
+        } else {
+          otaTestResult.value = '未获取到 OTA 接口响应'
+        }
+        if (v?.ok) ElMessage.success(v.message || 'OTA 测试通过')
+        else ElMessage.warning(v?.message || 'OTA 测试未通过')
+      } else {
+        otaTestResult.value = '未获取到 OTA 测试结果'
+      }
+    } else {
+      otaTestResult.value = typeof data === 'string' ? data : JSON.stringify(data || {}, null, 2)
+    }
+  } catch (e) {
+    otaTestResult.value = (e.response?.data && typeof e.response.data === 'object')
+      ? JSON.stringify(e.response.data, null, 2)
+      : (e.response?.data?.message || e.message || '请求失败')
+    ElMessage.error('OTA 测试请求失败')
+  } finally {
+    otaTestLoading.value = false
+  }
+}
+
 async function loadOtaIfExists() {
   try {
     const res = await api.get('/admin/ota-configs')
@@ -754,14 +984,22 @@ async function loadOtaIfExists() {
     if (!config) return
     otaConfigId.value = config.id
     const data = JSON.parse(config.json_data || '{}')
-      const ext = data.external?.websocket?.url || ''
-      if (ext) {
+    if (data.signature_key) otaForm.signature_key = data.signature_key
+    const ext = data.external?.websocket?.url || ''
+    if (ext) {
       const m = ext.match(/^(wss?):\/\/([^:/]+):?(\d+)?/)
       if (m) {
         otaForm.protocol = m[1] === 'wss' ? 'https' : 'http'
         otaForm.host = m[2]
         otaForm.port = m[3] ? parseInt(m[3], 10) : 8080
       }
+    }
+    const mqttEnabled = data.test?.mqtt?.enable || data.external?.mqtt?.enable
+    otaForm.enableMqttUdp = !!mqttEnabled
+    const endpoint = data.test?.mqtt?.endpoint || data.external?.mqtt?.endpoint || ''
+    if (mqttEnabled && endpoint) {
+      const parts = endpoint.split(':')
+      if (parts.length >= 2 && parts[1]) otaForm.mqttServerPort = parseInt(parts[1], 10) || 1883
     }
   } catch (_) {}
 }
@@ -803,7 +1041,12 @@ watch(() => ttsForm.provider, (provider) => {
   }
 }, { immediate: false })
 
+const authStore = useAuthStore()
+
 onMounted(async () => {
+  if (authStore.isAdmin) {
+    localStorage.setItem('admin_first_login_done', '1')
+  }
   await loadOtaIfExists()
   await loadVadIfExists()
   await loadAsrIfExists()
@@ -848,6 +1091,13 @@ onMounted(async () => {
   font-size: 13px;
   margin-bottom: 20px;
 }
+.form-hint {
+  display: block;
+  color: #909399;
+  font-size: 12px;
+  margin-top: 4px;
+  line-height: 1.4;
+}
 .wizard-form {
   margin-bottom: 24px;
 }
@@ -869,5 +1119,29 @@ onMounted(async () => {
   font-size: 13px;
   color: #606266;
   margin-bottom: 6px;
+}
+.ota-test-section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #ebeef5;
+}
+.ota-test-result {
+  margin-top: 12px;
+}
+.ota-test-result .result-label {
+  margin-bottom: 6px;
+}
+.ota-test-json {
+  margin: 0;
+  padding: 12px;
+  background: #f5f7fa;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 280px;
+  overflow: auto;
 }
 </style>
