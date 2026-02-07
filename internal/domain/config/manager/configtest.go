@@ -97,7 +97,7 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 		pcm = fallbackPCM
 	}
 
-	// VAD
+	// VAD：统计处理耗时（从调用 IsVAD 到返回）
 	if v, ok := data["vad"].(map[string]interface{}); ok {
 		for configID, val := range v {
 			if configID == "provider" {
@@ -114,17 +114,19 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 				continue
 			}
 			vad := wrapper.GetProvider()
+			t0 := time.Now()
 			_, err = vad.IsVAD(pcm[:min(320, len(pcm))])
+			elapsedMs := time.Since(t0).Milliseconds()
 			pool.Release(wrapper)
 			if err != nil {
-				vadResult[configID] = map[string]interface{}{"ok": false, "message": err.Error()}
+				vadResult[configID] = map[string]interface{}{"ok": false, "message": err.Error(), "first_packet_ms": elapsedMs}
 			} else {
-				vadResult[configID] = map[string]interface{}{"ok": true, "message": "通过"}
+				vadResult[configID] = map[string]interface{}{"ok": true, "message": "通过", "first_packet_ms": elapsedMs}
 			}
 		}
 	}
 
-	// ASR：使用 StreamingRecognize 做轻量测试
+	// ASR：使用 StreamingRecognize 做轻量测试，统计整体耗时
 	if v, ok := data["asr"].(map[string]interface{}); ok {
 		for configID, val := range v {
 			if configID == "provider" {
@@ -159,11 +161,12 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 				}
 				close(audioCh)
 			}()
+			t0 := time.Now()
 			resultChan, err := asrProvider.StreamingRecognize(ctx, audioCh)
 			pool.Release(wrapper)
 			if err != nil {
 				cancel()
-				asrResult[configID] = map[string]interface{}{"ok": false, "message": err.Error()}
+				asrResult[configID] = map[string]interface{}{"ok": false, "message": err.Error(), "first_packet_ms": time.Since(t0).Milliseconds()}
 				continue
 			}
 			var asrErr error
@@ -173,11 +176,12 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 					break
 				}
 			}
+			elapsedMs := time.Since(t0).Milliseconds()
 			cancel()
 			if asrErr != nil {
-				asrResult[configID] = map[string]interface{}{"ok": false, "message": asrErr.Error()}
+				asrResult[configID] = map[string]interface{}{"ok": false, "message": asrErr.Error(), "first_packet_ms": elapsedMs}
 			} else {
-				asrResult[configID] = map[string]interface{}{"ok": true, "message": "通过"}
+				asrResult[configID] = map[string]interface{}{"ok": true, "message": "通过", "first_packet_ms": elapsedMs}
 			}
 		}
 	}
@@ -209,32 +213,44 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 			}
 			llmProvider := wrapper.GetProvider()
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			t0 := time.Now()
 			msgChan := llmProvider.ResponseWithContext(ctx, "config_test", []*schema.Message{
 				{Role: "user", Content: testText},
 			}, nil)
 			var gotMessage bool
 			var firstMsg *schema.Message
+			var firstPacketMs int64
 			for msg := range msgChan {
 				if msg != nil {
 					firstMsg = msg
 					gotMessage = true
+					firstPacketMs = time.Since(t0).Milliseconds()
 					break
 				}
 			}
 			cancel()
 			pool.Release(wrapper)
+			resultBase := map[string]interface{}{"first_packet_ms": firstPacketMs}
 			if gotMessage && llm.IsLLMErrorMessage(firstMsg) {
 				errMsg := llm.LLMErrorMessage(firstMsg)
-				llmResult[configID] = map[string]interface{}{"ok": false, "message": errMsg}
+				resultBase["ok"] = false
+				resultBase["message"] = errMsg
+				llmResult[configID] = resultBase
 				log.Debugf("[config_test] LLM config_id=%s 失败(透传错误): %s", configID, errMsg)
 			} else if gotMessage {
-				llmResult[configID] = map[string]interface{}{"ok": true, "message": "通过"}
+				resultBase["ok"] = true
+				resultBase["message"] = "通过"
+				llmResult[configID] = resultBase
 				log.Debugf("[config_test] LLM config_id=%s 通过", configID)
 			} else if ctx.Err() == context.DeadlineExceeded {
-				llmResult[configID] = map[string]interface{}{"ok": false, "message": "超时"}
+				resultBase["ok"] = false
+				resultBase["message"] = "超时"
+				llmResult[configID] = resultBase
 				log.Debugf("[config_test] LLM config_id=%s 超时", configID)
 			} else {
-				llmResult[configID] = map[string]interface{}{"ok": false, "message": "未收到响应或调用失败"}
+				resultBase["ok"] = false
+				resultBase["message"] = "未收到响应或调用失败"
+				llmResult[configID] = resultBase
 				log.Debugf("[config_test] LLM config_id=%s 失败(未收到响应)", configID)
 			}
 		}
@@ -268,19 +284,27 @@ func RunConfigTest(data map[string]interface{}, testText string) (vadResult, asr
 				log.Warnf("TTS config test %s: %v", configID, err)
 				continue
 			}
+			t0 := time.Now()
 			var totalBytes int
+			var firstPacketMs int64 = -1
 			for chunk := range outputChan {
 				if chunk != nil {
+					if firstPacketMs < 0 {
+						firstPacketMs = time.Since(t0).Milliseconds()
+					}
 					totalBytes += len(chunk)
 				}
 			}
 			cancel()
 			pool.Release(wrapper)
+			if firstPacketMs < 0 {
+				firstPacketMs = time.Since(t0).Milliseconds()
+			}
 			if totalBytes == 0 {
-				ttsResult[configID] = map[string]interface{}{"ok": false, "message": "未收到有效音频或合成失败"}
+				ttsResult[configID] = map[string]interface{}{"ok": false, "message": "未收到有效音频或合成失败", "first_packet_ms": firstPacketMs}
 				log.Debugf("[config_test] TTS config_id=%s 失败(未收到有效音频)", configID)
 			} else {
-				ttsResult[configID] = map[string]interface{}{"ok": true, "message": "通过"}
+				ttsResult[configID] = map[string]interface{}{"ok": true, "message": "通过", "first_packet_ms": firstPacketMs}
 			}
 		}
 	}

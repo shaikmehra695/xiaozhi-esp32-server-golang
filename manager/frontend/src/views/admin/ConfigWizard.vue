@@ -621,6 +621,11 @@ function prevStep() {
   if (currentStep.value > 0) currentStep.value--
 }
 
+function formatTestMessage(result) {
+  const base = result.message || ''
+  return result.first_packet_ms != null ? `${base} ${result.first_packet_ms}ms` : base
+}
+
 async function testCurrentStepConfig() {
   const step = currentStep.value
   if (step === 1) {
@@ -641,7 +646,7 @@ async function testCurrentStepConfig() {
     testingStep.value = true
     try {
       const result = await testWithData('vad', { [configId]: payload })
-      if (result.ok) ElMessage.success(result.message || '测试通过')
+      if (result.ok) ElMessage.success(formatTestMessage(result) || '测试通过')
       else ElMessage.warning(result.message || '测试未通过')
     } catch (err) {
       ElMessage.warning(err.response?.data?.error || '测试请求失败')
@@ -668,7 +673,7 @@ async function testCurrentStepConfig() {
     testingStep.value = true
     try {
       const result = await testWithData('asr', { [configId]: payload })
-      if (result.ok) ElMessage.success(result.message || '测试通过')
+      if (result.ok) ElMessage.success(formatTestMessage(result) || '测试通过')
       else ElMessage.warning(result.message || '测试未通过')
     } catch (err) {
       ElMessage.warning(err.response?.data?.error || '测试请求失败')
@@ -695,7 +700,7 @@ async function testCurrentStepConfig() {
     testingStep.value = true
     try {
       const result = await testWithData('llm', { [configId]: payload })
-      if (result.ok) ElMessage.success(result.message || '测试通过')
+      if (result.ok) ElMessage.success(formatTestMessage(result) || '测试通过')
       else ElMessage.warning(result.message || '测试未通过')
     } catch (err) {
       ElMessage.warning(err.response?.data?.error || '测试请求失败')
@@ -722,7 +727,7 @@ async function testCurrentStepConfig() {
     testingStep.value = true
     try {
       const result = await testWithData('tts', { [configId]: payload })
-      if (result.ok) ElMessage.success(result.message || '测试通过')
+      if (result.ok) ElMessage.success(formatTestMessage(result) || '测试通过')
       else ElMessage.warning(result.message || '测试未通过')
     } catch (err) {
       ElMessage.warning(err.response?.data?.error || '测试请求失败')

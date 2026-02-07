@@ -405,8 +405,9 @@ const testOtaEnv = async (env) => {
   try {
     const result = await testWithData('ota', { ota_ota_config: payload })
     const label = env === 'test' ? 'Test 环境' : 'External 环境'
+    const msg = result.first_packet_ms != null ? `${result.message || ''} ${result.first_packet_ms}ms` : (result.message || '')
     if (result.ok) {
-      ElMessage.success(`${label}：${result.message}`)
+      ElMessage.success(`${label}：${msg}`.trim())
     } else {
       ElMessage.warning(`${label}：${result.message}`)
     }

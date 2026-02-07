@@ -43,11 +43,11 @@
           />
         </template>
       </el-table-column>
-      <el-table-column label="测试结果" width="100" align="center">
+      <el-table-column label="测试结果" width="120" align="center">
         <template #default="scope">
           <template v-if="testResults[scope.row.config_id]">
-            <el-tooltip v-if="testResults[scope.row.config_id].ok" content="通过" placement="top">
-              <span class="test-result test-ok">正确</span>
+            <el-tooltip v-if="testResults[scope.row.config_id].ok" :content="formatTestResultTip(testResults[scope.row.config_id])" placement="top">
+              <span class="test-result test-ok">{{ formatTestResultLabel(testResults[scope.row.config_id]) }}</span>
             </el-tooltip>
             <el-tooltip v-else :content="testResults[scope.row.config_id].message" placement="top" :show-after="200">
               <span class="test-result test-err">错误</span>
@@ -333,13 +333,26 @@ const getEnabledConfigs = () => {
   return configs.value.filter(config => config.enabled)
 }
 
+function formatTestResultLabel(r) {
+  if (!r?.ok) return '错误'
+  return r.first_packet_ms != null ? `正确 ${r.first_packet_ms}ms` : '正确'
+}
+function formatTestResultTip(r) {
+  if (!r?.ok) return ''
+  return r.first_packet_ms != null ? `通过，耗时 ${r.first_packet_ms}ms` : '通过'
+}
+function formatTestMessage(result) {
+  const base = result.message || ''
+  return result.first_packet_ms != null ? `${base} ${result.first_packet_ms}ms` : base
+}
+
 const testConfig = async (row, type) => {
   testingId.value = row.config_id
   try {
     const result = await testSingleConfig(type, row.config_id)
     testResults.value = { ...testResults.value, [row.config_id]: result }
     if (result.ok) {
-      ElMessage.success(`${row.name || row.config_id}：${result.message}`)
+      ElMessage.success(`${row.name || row.config_id}：${formatTestMessage(result)}`)
     } else {
       ElMessage.warning(`${row.name || row.config_id}：${result.message}`)
     }
@@ -400,7 +413,7 @@ const testCurrentConfig = async () => {
   try {
     const result = await testWithData('asr', { [configId]: payload })
     if (result.ok) {
-      ElMessage.success(result.message || '测试通过')
+      ElMessage.success(formatTestMessage(result) || '测试通过')
     } else {
       ElMessage.warning(result.message || '测试未通过')
     }
