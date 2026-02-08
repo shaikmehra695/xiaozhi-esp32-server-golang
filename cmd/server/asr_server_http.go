@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultAsrServerConfigPath = "asr_server/config.json"
+	defaultAsrServerConfigPath = "asr_server.json"
 )
 
 var (

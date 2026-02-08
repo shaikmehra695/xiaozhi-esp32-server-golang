@@ -10,5 +10,7 @@
 **/*.exe
 **/*.dll
 **/*.bat
+!build/windows/*.dll
+!build/windows/*.bat
 **/Thumbs.db
 **/Desktop.ini

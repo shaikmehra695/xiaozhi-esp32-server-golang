@@ -18,7 +18,7 @@ import (
 
 const (
 	defaultManagerHTTPPort   = "9000"
-	defaultManagerConfigPath = "manager/backend/config/config.json"
+	defaultManagerConfigPath = "manager.json"
 )
 
 var (

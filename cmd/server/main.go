@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"encoding/json"
@@ -19,9 +19,9 @@ import (
 func main() {
 	// 解析命令行参数
 	configFile := flag.String("c", "config/config.yaml", "配置文件路径")
-	managerEnable := flag.Bool("manager-enable", false, "是否启用内嵌 manager")
+	managerEnable := flag.Bool("manager-enable", defaultManagerEnable, "是否启用内嵌 manager")
 	managerConfig := flag.String("manager-config", "", "manager 配置文件路径，启用时可选，默认 manager/backend/config/config.json")
-	asrEnable := flag.Bool("asr-enable", false, "是否启用内嵌 asr_server")
+	asrEnable := flag.Bool("asr-enable", defaultAsrEnable, "是否启用内嵌 asr_server")
 	asrConfig := flag.String("asr-config", "", "asr_server 配置文件路径，启用时可选，默认 asr_server/config.json")
 	flag.Parse()
 
@@ -42,18 +42,18 @@ func main() {
 		return
 	}
 
-	// 根据配置启动pprof服务
+	// 根据配置启动 pprof 服务
 	if viper.GetBool("server.pprof.enable") {
 		pprofPort := viper.GetInt("server.pprof.port")
 		go func() {
-			log.Infof("启动pprof服务，端口: %d", pprofPort)
+			log.Infof("启动 pprof 服务，端口: %d", pprofPort)
 			if err := http.ListenAndServe(fmt.Sprintf(":%d", pprofPort), nil); err != nil {
-				log.Errorf("pprof服务启动失败: %v", err)
+				log.Errorf("pprof 服务启动失败: %v", err)
 			}
 		}()
-		log.Infof("pprof地址: http://localhost:%d/debug/pprof/", pprofPort)
+		log.Infof("pprof 地址: http://localhost:%d/debug/pprof/", pprofPort)
 	} else {
-		log.Info("pprof服务已禁用")
+		log.Info("pprof 服务已禁用")
 	}
 
 	// 创建服务器
