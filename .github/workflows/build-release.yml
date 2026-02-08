@@ -38,7 +38,7 @@ jobs:
           docker create --name xiaozhi_windows xiaozhi-build-windows
           docker cp xiaozhi_windows:/out ./out
           docker rm xiaozhi_windows
-          VERSION="${{ github.ref_name }}"
+          VERSION="${GITHUB_REF_NAME//\//-}"
           rm -rf "out/xiaozhi_server-windows-amd64-${VERSION}"
           mv out/windows-amd64 "out/xiaozhi_server-windows-amd64-${VERSION}"
 
@@ -72,7 +72,7 @@ jobs:
           docker create --name xiaozhi_linux xiaozhi-build-linux
           docker cp xiaozhi_linux:/out ./out
           docker rm xiaozhi_linux
-          VERSION="${{ github.ref_name }}"
+          VERSION="${GITHUB_REF_NAME//\//-}"
           rm -rf "out/xiaozhi_server-linux-amd64-${VERSION}"
           mv out/linux-amd64 "out/xiaozhi_server-linux-amd64-${VERSION}"
 
@@ -103,7 +103,7 @@ jobs:
 
       - name: Pack release zip
         run: |
-          VERSION="${{ github.ref_name }}"
+          VERSION="${GITHUB_REF_NAME//\//-}"
           cd release && zip -r "xiaozhi_server-windows-amd64-${VERSION}.zip" "xiaozhi_server-windows-amd64-${VERSION}" && zip -r "xiaozhi_server-linux-amd64-${VERSION}.zip" "xiaozhi_server-linux-amd64-${VERSION}"
 
       - name: Create GitHub Release
