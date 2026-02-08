@@ -84,10 +84,132 @@ jobs:
           name: xiaozhi_server-linux-amd64-${{ env.VERSION }}
           path: out/xiaozhi_server-linux-amd64-${{ env.VERSION }}
 
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-13
+          - arch: arm64
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify asr_server submodule
+        run: |
+          if [ ! -f asr_server/server/setup.go ]; then
+            echo "::error::asr_server 子模块未拉取，binary 构建需要 voice_server"
+            ls -la asr_server 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.4"
+
+      - name: Set up Node (frontend)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: manager/frontend/package-lock.json
+
+      - name: Build frontend (embed_ui)
+        run: |
+          cd manager/frontend && npm ci && npm run build
+          mkdir -p ../backend/static/dist
+          cp -r dist/* ../backend/static/dist/
+
+      - name: Download sherpa-onnx-go-macos libs
+        run: |
+          SHERPA_ONNX_GO_VERSION="$(grep -E 'github.com/k2-fsa/sherpa-onnx-go[[:space:]]+v' go.mod | head -n 1 | awk '{print $2}')"
+          if [ -z "$SHERPA_ONNX_GO_VERSION" ]; then
+            echo "sherpa-onnx-go version not found in go.mod" >&2
+            exit 1
+          fi
+          SHERPA_ONNX_GO_MACOS_VERSION="${SHERPA_ONNX_GO_VERSION#v}"
+          curl -L "https://github.com/k2-fsa/sherpa-onnx-go-macos/archive/refs/tags/v${SHERPA_ONNX_GO_MACOS_VERSION}.tar.gz" -o /tmp/sherpa-onnx-go-macos.tar.gz
+          tar -xzf /tmp/sherpa-onnx-go-macos.tar.gz -C /tmp
+          SHERPA_DIR="/tmp/sherpa-onnx-go-macos-${SHERPA_ONNX_GO_MACOS_VERSION}"
+
+          pick_by_arch() {
+            local arch="$1"
+            shift
+            for f in "$@"; do
+              if [ "$arch" = "amd64" ] && lipo -info "$f" | grep -q "x86_64"; then
+                echo "$f"
+                return 0
+              fi
+              if [ "$arch" = "arm64" ] && lipo -info "$f" | grep -q "arm64"; then
+                echo "$f"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          mapfile -t C_API_CANDIDATES < <(find "$SHERPA_DIR" -name "libsherpa-onnx-c-api.dylib")
+          mapfile -t ORT_CANDIDATES < <(find "$SHERPA_DIR" -name "libonnxruntime.dylib")
+          C_API_LIB="$(pick_by_arch "${{ matrix.arch }}" "${C_API_CANDIDATES[@]}")"
+          ORT_LIB="$(pick_by_arch "${{ matrix.arch }}" "${ORT_CANDIDATES[@]}")"
+          if [ -z "$C_API_LIB" ] || [ -z "$ORT_LIB" ]; then
+            echo "Failed to locate sherpa-onnx dylibs for arch=${{ matrix.arch }}" >&2
+            exit 1
+          fi
+
+          echo "C_API_LIB=$C_API_LIB" >> $GITHUB_ENV
+          echo "ORT_LIB=$ORT_LIB" >> $GITHUB_ENV
+
+      - name: Build macOS binary
+        env:
+          GOOS: darwin
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "1"
+        run: |
+          go mod tidy
+          go build -v -tags "nolibopusfile asr_server manager embed_ui" \
+            -ldflags "-s -w" \
+            -o xiaozhi_server ./cmd/server
+
+      - name: Pack macOS release
+        run: |
+          ARCH="${{ matrix.arch }}"
+          PACK_DIR="out/macos-${ARCH}/xiaozhi_server-macos-${ARCH}"
+          mkdir -p "$PACK_DIR/ten-vad/lib/macOS" "$PACK_DIR/logs"
+
+          cp xiaozhi_server "$PACK_DIR/"
+          cp build/common/main_config.yaml build/common/manager.json build/common/asr_server.json "$PACK_DIR/"
+          cp -r build/common/models build/common/data "$PACK_DIR/"
+          cp -R lib/ten-vad/lib/macOS/ten_vad.framework "$PACK_DIR/ten-vad/lib/macOS/"
+          cp "$C_API_LIB" "$PACK_DIR/ten-vad/lib/macOS/"
+          cp "$ORT_LIB" "$PACK_DIR/ten-vad/lib/macOS/"
+          chmod +x "$PACK_DIR/xiaozhi_server"
+          install_name_tool -add_rpath "@executable_path/ten-vad/lib/macOS" "$PACK_DIR/xiaozhi_server" || true
+
+          rm -rf "out/xiaozhi_server-macos-${ARCH}-${VERSION}"
+          mv "out/macos-${ARCH}" "out/xiaozhi_server-macos-${ARCH}-${VERSION}"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaozhi_server-macos-${{ matrix.arch }}-${{ env.VERSION }}
+          path: out/xiaozhi_server-macos-${{ matrix.arch }}-${{ env.VERSION }}
+
   release:
     needs:
       - build-windows-amd64
       - build-linux-amd64
+      - build-macos
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -105,9 +227,22 @@ jobs:
           name: xiaozhi_server-linux-amd64-${{ env.VERSION }}
           path: release
 
+      - name: Download macOS amd64 package
+        uses: actions/download-artifact@v4
+        with:
+          name: xiaozhi_server-macos-amd64-${{ env.VERSION }}
+          path: release
+
+      - name: Download macOS arm64 package
+        uses: actions/download-artifact@v4
+        with:
+          name: xiaozhi_server-macos-arm64-${{ env.VERSION }}
+          path: release
+
       - name: Pack release zip
         run: |
           cd release && zip -r "xiaozhi_server-windows-amd64-${VERSION}.zip" "xiaozhi_server-windows-amd64-${VERSION}" && zip -r "xiaozhi_server-linux-amd64-${VERSION}.zip" "xiaozhi_server-linux-amd64-${VERSION}"
+          cd release && zip -r "xiaozhi_server-macos-amd64-${VERSION}.zip" "xiaozhi_server-macos-amd64-${VERSION}" && zip -r "xiaozhi_server-macos-arm64-${VERSION}.zip" "xiaozhi_server-macos-arm64-${VERSION}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -119,5 +254,7 @@ jobs:
           files: |
             release/xiaozhi_server-windows-amd64-${{ env.VERSION }}.zip
             release/xiaozhi_server-linux-amd64-${{ env.VERSION }}.zip
+            release/xiaozhi_server-macos-amd64-${{ env.VERSION }}.zip
+            release/xiaozhi_server-macos-arm64-${{ env.VERSION }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
