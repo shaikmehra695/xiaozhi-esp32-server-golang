@@ -940,7 +940,9 @@ func (s *ChatSession) Close() {
 		}
 
 		// 取消会话级别的上下文
-		s.cancel()
+		if s.cancel != nil {
+			s.cancel()
+		}
 
 		if s.speakerManager != nil {
 			s.speakerManager.Close()
