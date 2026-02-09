@@ -18,7 +18,7 @@ import (
 
 func main() {
 	// 解析命令行参数
-	configFile := flag.String("c", "config/config.yaml", "配置文件路径")
+	configFile := flag.String("c", defaultConfigFilePath, "配置文件路径")
 	managerEnable := flag.Bool("manager-enable", defaultManagerEnable, "是否启用内嵌 manager")
 	managerConfig := flag.String("manager-config", "", "manager 配置文件路径，启用时可选，默认 manager/backend/config/config.json")
 	asrEnable := flag.Bool("asr-enable", defaultAsrEnable, "是否启用内嵌 asr_server")
