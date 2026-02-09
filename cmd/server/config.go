@@ -161,7 +161,7 @@ func SystemConfigEqual(a, b interface{}) bool {
 		return false
 	}
 	equal := ha == hb
-	log.Debugf("[SystemConfigEqual] 结果: %t (ha=%d hb=%d)", equal, ha, hb)
+	log.Debugf("[SystemConfigEqual] 结果: %t (ha=%d hb=%d), a: %+v, b: %+v", equal, ha, hb, a, b)
 	return equal
 }
 

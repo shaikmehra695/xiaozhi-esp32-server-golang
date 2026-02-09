@@ -99,18 +99,21 @@ func main() {
 		var wg sync.WaitGroup
 		if doMqttServer {
 			go func() {
+				wg.Add(1)
 				defer wg.Done()
 				appInstance.ReloadMqttServer()
 			}()
 		}
 		if doMqttUdp {
 			go func() {
+				wg.Add(1)
 				defer wg.Done()
 				appInstance.ReloadMqttUdp()
 			}()
 		}
 		if doMcpReload {
 			go func() {
+				wg.Add(1)
 				defer wg.Done()
 				appInstance.ReloadMCP()
 			}()
