@@ -95,8 +95,6 @@ nohup ./xiaozhi_server > logs/output.log 2>&1 &
 - **本地访问**：`http://localhost:8080/`
 - **局域网访问**：`http://<服务器IP>:8080/`
 
-默认登录账号密码请查看 `manager.json` 配置文件。
-
 ### 设备/客户端连接
 
 - **WebSocket**：`ws://<服务器IP>:8989/`
