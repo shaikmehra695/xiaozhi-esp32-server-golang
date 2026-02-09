@@ -12,21 +12,18 @@ xiaozhi-esp32-server-golang 是一款高性能、全流式的 AI 后端服务，
 
 ## ✨ 主要特性 | Key Features
 
-- 🚀 **端到端全流式 AI 语音链路**：ASR（自动语音识别）、LLM（大语言模型）、TTS（语音合成）全流程流式处理，极致低延迟，适配实时语音交互场景。
-- 🎤 **声纹识别与动态TTS切换**：支持说话人身份识别，根据识别结果动态切换TTS音色，实现个性化语音交互体验。
-- 🧩 **主逻辑代码梳理与优化**：对主流程代码结构进行系统性梳理与重构，提升可读性、可维护性与扩展性。
-- 🛠️ **Transport 接口层抽象**：将 WebSocket、MQTT、UDP 等协议统一抽象为 Transport 接口层，灵活注入主逻辑，便于协议扩展与切换。
-- 📬 **LLM/TTS 消息队列化处理**：LLM 与 TTS 处理流程采用消息队列方式，支持异步处理与新业务逻辑的灵活注入。
-- 🔗 **多协议高并发接入**：内置 WebSocket、MQTT、UDP 等多种协议服务器，支持大规模设备并发接入与消息推送。
-- ♻️ **高效资源池与连接复用**：外部资源连接池机制，显著降低响应耗时，提升系统吞吐能力。
-- 🧠 **多引擎 AI 能力集成，基于 Eino 框架**：项目基于 Eino 框架开发，支持 FunASR、Eino LLM、OpenAI、Ollama、Doubao、EdgeTTS、CosyVoice 等多种主流 AI 引擎，灵活切换与扩展。
-- 🛡️ **模块化与可扩展架构**：各核心能力（VAD/ASR/LLM/TTS/MCP/视觉）均为独立模块，便于定制、扩展和集成更多 AI 服务。
-- 🎵 **MCP Audio Server 支持**：内置完整的 MCP Audio Server 实现，支持音频资源的分页获取和流式处理，提供音乐播放、音量控制等功能，详见 [MCP 资源处理文档](doc/mcp_resource.md)。
-- 📦 **一键 Docker 部署 & 跨平台支持**：官方 Dockerfile，支持主流 Linux 发行版与本地编译，快速落地部署。
-- 📊 **高性能与低资源占用**：Golang 原生高并发架构，基于 Eino 框架优化，适配边缘设备与云端，资源占用低，稳定性强。
-- 🔒 **安全与权限体系（规划中）**：预留用户认证、权限管理接口，便于后续集成企业级安全体系。
-- 👀 **视觉与多模态能力拓展**：支持视觉模型接入，满足多模态智能终端需求。
-- 🔧 **消息注入与事件通知**：支持在控制台 将消息注入至指定设备，方便扩展与定制。
+- **端到端全流式 AI 语音链路**：ASR → LLM → TTS 全流程流式处理，低延迟实时交互
+- **声纹识别与动态TTS切换**：根据说话人身份自动切换TTS音色，个性化语音体验
+- **Transport 接口层抽象**：WebSocket / MQTT UDP 统一抽象，灵活注入主逻辑，便于协议扩展
+- **消息队列化处理**：LLM 与 TTS 采用消息队列异步处理，支持业务逻辑灵活注入
+- **多协议高并发接入**：支持大规模设备并发接入与消息推送
+- **高效资源池与连接复用**：外部资源连接池机制，降低响应耗时，提升系统吞吐
+- **多引擎AI能力集成**：基于 Eino 框架，支持 FunASR、OpenAI 兼容、Ollama、Doubao、EdgeTTS、CosyVoice 等多种引擎
+- **模块化可扩展架构**：VAD/ASR/LLM/TTS/MCP/视觉等核心模块独立可插拔
+- **MCP Audio Server**：音频资源分页获取与流式处理，音乐播放与音量控制
+- **全功能Web管理控制台**：可视化配置向导、VAD/ASR/LLM/TTS全链路可用性测试、设备管理与消息注入、实时延迟监控与OTA验证
+- **易用的一键部署方案**：预编译 aio 包开箱即用（主程序+控制台+声纹服务）、Docker 一键部署、支持 Linux/Windows/macOS 本地编译
+- **安全与权限体系**（规划中）：预留用户认证与权限管理接口
 
 ---
 
@@ -34,142 +31,135 @@ xiaozhi-esp32-server-golang 是一款高性能、全流式的 AI 后端服务，
 
 ## 🚀 快速开始 | Quick Start
 
-1. **Docker 一键部署**  
-   [查看 Docker-Composer 带控制台 快速开始文档 »](doc/docker_compose.md)  
-   [查看 Docker 快速开始文档(无控制台) »](doc/docker.md)
-2. **本地编译与运行（优化版）**
+### 方式一：一键启动包（推荐）
 
-   1. **安装依赖**
-      - 安装 Go 1.20+（建议与 Dockerfile 中一致的版本）
-      - 安装 Opus 相关依赖：
-        ```bash
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libopus0 libopusfile-dev
-        ```
-      - 安装 ONNX Runtime：
-        ```bash
-        wget https://github.com/microsoft/onnxruntime/releases/download/v1.21.0/onnxruntime-linux-x64-1.21.0.tgz
-        tar -xzf onnxruntime-linux-x64-1.21.0.tgz
-        sudo mkdir -p /usr/local/include/onnxruntime
-        sudo cp -r onnxruntime-linux-x64-1.21.0/include/* /usr/local/include/onnxruntime/
-        sudo cp -r onnxruntime-linux-x64-1.21.0/lib/* /usr/local/lib/
-        sudo ldconfig
-        ```
-      - 安装 ten_vad 依赖：
-        ```bash
-        # 安装 C++ 运行时依赖（ten_vad 需要）
-        sudo apt install libc++1 libc++abi1
-        ```
-        > **注意**：ten_vad 库文件位于 `lib/ten-vad/lib/Linux/x64/` 目录，CGO 配置已通过 rpath 自动处理运行时库路径，无需手动复制到系统目录。
-      - 设置环境变量（可写入 `~/.bashrc` 或 `~/.zshrc`，可选）：
-        ```bash
-        export ONNXRUNTIME_DIR=/usr/local
-        # 如果需要在项目根目录外编译，可以设置以下环境变量（通常不需要，CGO 已自动处理）
-        # export CGO_CFLAGS="-I${ONNXRUNTIME_DIR}/include/onnxruntime"
-        # export CGO_LDFLAGS="-L${ONNXRUNTIME_DIR}/lib -lonnxruntime"
-        # 运行时库路径（如果二进制文件不在项目目录中运行，需要设置）
-        # export LD_LIBRARY_PATH=/path/to/project/lib/ten-vad/lib/Linux/x64:$LD_LIBRARY_PATH
-        ```
-        > **说明**：CGO 配置已通过 `${SRCDIR}` 和 `-Wl,-rpath` 自动处理编译和运行时路径，通常无需手动设置环境变量。仅在特殊场景（如跨目录编译或部署）下才需要设置。
+下载对应平台的压缩包，解压后运行即可：
 
-   2. **部署 FunASR 服务**
-      - 参考 [FunASR 官方文档](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online_zh.md) 部署并启动服务。
+- **Release 页面**：<https://github.com/hackers365/xiaozhi-esp32-server-golang/releases>
+- **使用教程**：[doc/quickstart_bundle_tutorial.md](doc/quickstart_bundle_tutorial.md)
 
-   3. **编译服务**
+启动后访问 **http://localhost:8080** 进入 Web 控制台进行配置。
 
-      - 编译：
-        ```bash
-        go build -o xiaozhi_server ./cmd/server/
-        ```
+### 方式二：Docker 部署
 
-   4. **准备配置文件**
-      - 复制或编辑 `config/config.yaml`，根据实际环境调整参数。
-      - 详细配置说明请参考 [配置文档](doc/config.md)
+- [Docker Compose（带控制台）](doc/docker_compose.md)
+- [Docker（无控制台）](doc/docker.md)
 
-   5. **启动服务**
-      ```bash
-      ./xiaozhi_server -c config/config.yaml
-      ```
+### 方式三：本地编译
 
-   ### 📚 相关文档 | Related Docs
-   - [WebSocket 服务器与 OTA 配置说明 »](doc/websocket_server.md)
-   - [MQTT+UDP 服务器配置流程 »](doc/mqtt_udp.md)
-   - [MQTT UDP 协议与数据流程 »](doc/mqtt_udp_protocol.md)
-   - [Vision 视觉识别 »](doc/vision.md)
-   - [声纹识别功能说明 »](doc/speaker_identification.md)
-   - [MCP 架构 »](doc/mcp.md)
-   - [MCP 音频服务说明(支持分页获取资源) »](doc/mcp_resource.md)
-   - [ESP32 小智AI后端部署与使用指南 »](doc/esp32_xiaozhi_backend_guide.md)
+适用于开发环境或需要定制编译的场景。
 
-   ---
+**安装依赖**（以 Ubuntu 为例）
 
-   > ⚠️ 推荐在 Ubuntu 22.04 环境下操作，确保依赖一致。
-   > 若遇到 ONNX Runtime 相关的 CGO 编译问题，请检查环境变量和依赖路径。
-   > 如果使用 ten_vad，需要确保 lib/ten-vad 目录存在且包含相应的库文件。
-   > 日志和配置目录建议与 Docker 保持一致（`logs/`、`config/`）。
+```bash
+# Go 1.20+
+# Opus 编解码
+sudo apt-get install -y pkg-config libopus0 libopusfile-dev
+
+# ONNX Runtime（1.21.0）
+wget https://github.com/microsoft/onnxruntime/releases/download/v1.21.0/onnxruntime-linux-x64-1.21.0.tgz
+tar -xzf onnxruntime-linux-x64-1.21.0.tgz
+sudo cp -r onnxruntime-linux-x64-1.21.0/include/* /usr/local/include/onnxruntime/
+sudo cp -r onnxruntime-linux-x64-1.21.0/lib/* /usr/local/lib/
+sudo ldconfig
+
+# ten_vad 运行时依赖
+sudo apt install -y libc++1 libc++abi1
+```
+
+> 📖 完整依赖说明与 Windows/macOS 配置请参考 [config.md](doc/config.md)
+
+参考 [FunASR 官方文档](https://github.com/modelscope/FunASR/blob/main/runtime/docs/SDK_advanced_guide_online_zh.md) 部署。
+
+**编译与启动**
+
+```bash
+# 编译
+go build -o xiaozhi_server ./cmd/server/
+
+# 启动（配置文件详见 config/config.yaml）
+./xiaozhi_server -c config/config.yaml
+```
+
+---
+
+## 📚 文档导航 | Docs
+
+### 部署相关
+- [一键启动包教程](doc/quickstart_bundle_tutorial.md)
+- [Docker Compose 部署](doc/docker_compose.md)
+- [Docker 部署](doc/docker.md)
+- [配置详解](doc/config.md)
+
+### 使用指南
+- [管理后台使用指南](doc/manager_console_guide.md)
+- [WebSocket 服务与 OTA 配置](doc/websocket_server.md)
+- [MQTT + UDP 配置](doc/mqtt_udp.md)
+- [MQTT UDP 协议](doc/mqtt_udp_protocol.md)
+
+### 功能模块
+- [视觉能力](doc/vision.md)
+- [声纹识别](doc/speaker_identification.md)
+- [MCP 架构](doc/mcp.md)
+- [MCP 音频资源](doc/mcp_resource.md)
+
+### 设备接入
+- [ESP32 端接入指南](doc/esp32_xiaozhi_backend_guide.md)
+- [OTA MQTT 授权说明](doc/ota_mqtt_auth.md)
 
 ---
 
 ## 🧩 模块架构 | Module Overview
 
-| 模块      | 功能简介                       | 技术栈/说明                |
-|-----------|-------------------------------|----------------------------|
-| VAD       | 声音活动检测（Silero VAD / ten_vad）    | Silero VAD, Webrtc vad, ten_vad                    |
-| ASR       | 语音识别（FunASR对接）        | FunASR, Doubao Asr       |
-| LLM       | 大语言模型（OpenAI兼容接口）  | Eino框架兼容的 LLM, openai, ollama       |
-| TTS       | 语音合成（多引擎支持）        | Doubao, EdgeTTS, CosyVoice |
-| MCP       | 多协议接入 | 支持全局MCP、MCP接入点、端侧MCP Server）       |
-| 视觉      | 视觉处理相关能力                                    |  支持 doubao, aliyun 视觉模型      |
-| 声纹识别  | 说话人身份识别与动态TTS切换    | sherpa-onnx, Qdrant 向量数据库      |
+| 模块 | 功能简介 | 技术栈 |
+|------|----------|--------|
+| VAD | 语音活动检测 | Silero VAD / WebRTC VAD / ten_vad |
+| ASR | 语音识别 | FunASR / Doubao ASR |
+| LLM | 大模型推理 | Eino 框架兼容、OpenAI、Ollama 等 |
+| TTS | 语音合成 | Doubao / EdgeTTS / CosyVoice |
+| MCP | 多协议接入 | MCP Server / 接入点 |
+| 视觉 | 视觉处理 | Doubao / 阿里云视觉 |
+| 声纹识别 | 说话人识别 | sherpa-onnx + 向量数据库 |
 
 ---
 
 ## 📈 性能与测试 | Performance & Testing
 
 - [延迟测试报告](doc/delay_test.md)
-- 高并发场景下稳定运行，资源占用低
+- 管理后台提供 VAD/ASR/LLM/TTS 可用性与延迟测试入口
 
 ---
 
-## 🛠️ TODO & 规划
-- [x] 完善 Docker 化部署
-- [x] 用户认证与权限体系
-- [x] 集成更多云厂商 ASR 服务
-- [x] Web 用户界面
-- [ ] LLM 记忆体增强
+## 🛠️ 规划中 | Roadmap
 
+- LLM 记忆体增强
+- 更多云厂商 ASR/TTS 集成
 
 ---
 
 ## 🤝 贡献 | Contributing
 
-欢迎提交 Issue、PR 或建议！如有合作意向请联系作者。
+欢迎提交 Issue、PR 或建议！
 
 ---
 
 ## 📄 License
 
-本项目遵循 MIT License。
+MIT License
 
 ---
 
 ## 📬 联系方式 | Contact
-交流群二维码
 
-![群二维码(1)](https://github.com/user-attachments/assets/c1c1c4ab-2567-4a6b-92a2-c8fcde7a5dcb)
+**交流群**（二维码过期请联系作者）
 
+![群二维码](https://github.com/user-attachments/assets/c1c1c4ab-2567-4a6b-92a2-c8fcde7a5dcb)
 
+**个人微信**：hackers365
 
-
-
-群二维码过期时，请加我微信拉你入群
-
-个人微信：hackers365
-
-![个人二维码_0618(1)](https://github.com/user-attachments/assets/6b8d3d11-7bf5-4fa4-a73e-5109019dab85)
+![个人微信](https://github.com/user-attachments/assets/6b8d3d11-7bf5-4fa4-a73e-5109019dab85)
 
 ---
 
-> © 2024 xiaozhi-esp32-server-golang. All rights reserved.
-
+> © 2024 xiaozhi-esp32-server-golang
 
