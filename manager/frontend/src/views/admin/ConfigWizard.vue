@@ -182,7 +182,7 @@ const ttsConfigId = ref(null)
 
 const otaForm = reactive({
   host: '',
-  port: 8080,
+  port: 8989,
   protocol: 'http',
   signature_key: 'xiaozhi_ota_signature_key',
   enableMqttUdp: false,
@@ -1025,7 +1025,7 @@ async function loadOtaIfExists() {
       if (m) {
         otaForm.protocol = m[1] === 'wss' ? 'https' : 'http'
         otaForm.host = m[2]
-        otaForm.port = m[3] ? parseInt(m[3], 10) : 8080
+        otaForm.port = m[3] ? parseInt(m[3], 10) : 8989
       }
     }
     const mqttEnabled = data.test?.mqtt?.enable || data.external?.mqtt?.enable
