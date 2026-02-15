@@ -106,7 +106,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import api from '../../utils/api'
@@ -136,7 +136,10 @@ const form = reactive({
   base_url: 'https://api.openai.com/v1',
   max_tokens: 4000,
   temperature: 0.7,
-  top_p: 0.9
+  top_p: 0.9,
+  bot_id: '',
+  user_prefix: '',
+  connector_id: '1024'
 })
 
 const rules = {
@@ -144,10 +147,47 @@ const rules = {
   config_id: [{ required: true, message: '请输入配置ID', trigger: 'blur' }],
   provider: [{ required: false, message: '请选择提供商', trigger: 'change' }],
   type: [{ required: true, message: '请选择模型类型', trigger: 'change' }],
-  model_name: [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
+  model_name: [{
+    validator: (_, value, callback) => {
+      if ((form.type === 'openai' || form.type === 'ollama') && !value) {
+        callback(new Error('请输入模型名称'))
+        return
+      }
+      callback()
+    },
+    trigger: 'blur'
+  }],
   api_key: [{ required: true, message: '请输入API密钥', trigger: 'blur' }],
-  base_url: [{ required: true, message: '请输入基础URL', trigger: 'blur' }],
-  max_tokens: [{ required: true, message: '请输入max_tokens', trigger: 'blur' }, { type: 'number', min: 1, max: 100000, message: 'max_tokens必须在1-100000之间', trigger: 'blur' }],
+  base_url: [{
+    validator: (_, value, callback) => {
+      if (form.type !== 'coze' && !value) {
+        callback(new Error('请输入基础URL'))
+        return
+      }
+      callback()
+    },
+    trigger: 'blur'
+  }],
+  max_tokens: [{
+    validator: (_, value, callback) => {
+      if ((form.type === 'openai' || form.type === 'ollama') && (!value || Number(value) < 1 || Number(value) > 100000)) {
+        callback(new Error('max_tokens必须在1-100000之间'))
+        return
+      }
+      callback()
+    },
+    trigger: 'blur'
+  }],
+  bot_id: [{
+    validator: (_, value, callback) => {
+      if (form.type === 'coze' && !value) {
+        callback(new Error('请输入Coze Bot ID'))
+        return
+      }
+      callback()
+    },
+    trigger: 'blur'
+  }],
   temperature: [{ type: 'number', min: 0, max: 2, message: '温度必须在0-2之间', trigger: 'blur' }],
   top_p: [{ type: 'number', min: 0, max: 1, message: 'Top P必须在0-1之间', trigger: 'blur' }]
 }
@@ -175,13 +215,17 @@ const editConfig = (config) => {
   // 解析配置JSON并填充到对应字段
   try {
     const configObj = JSON.parse(config.json_data || '{}')
-    form.type = configObj.type || 'openai'
-    form.model_name = configObj.model_name || ''
+    const detectedType = configObj.type || (config.provider === 'coze' ? 'coze' : (config.provider === 'dify' ? 'dify' : 'openai'))
+    form.type = detectedType
+    form.model_name = configObj.model_name || (detectedType === 'coze' ? 'coze' : (detectedType === 'dify' ? 'dify' : ''))
     form.api_key = configObj.api_key || ''
-    form.base_url = configObj.base_url || ''
+    form.base_url = configObj.base_url || (detectedType === 'coze' ? 'https://api.coze.com' : (detectedType === 'dify' ? 'https://api.dify.ai/v1' : ''))
     form.max_tokens = configObj.max_tokens || 4000
     form.temperature = configObj.temperature || 0.7
     form.top_p = configObj.top_p || 0.9
+    form.bot_id = configObj.bot_id || ''
+    form.user_prefix = configObj.user_prefix || ''
+    form.connector_id = configObj.connector_id || '1024'
   } catch (error) {
     console.error('解析配置JSON失败:', error)
   }
@@ -394,6 +438,9 @@ const resetForm = () => {
   form.max_tokens = 4000
   form.temperature = 0.7
   form.top_p = 0.9
+  form.bot_id = ''
+  form.user_prefix = ''
+  form.connector_id = '1024'
 }
 
 const handleDialogClose = () => {
