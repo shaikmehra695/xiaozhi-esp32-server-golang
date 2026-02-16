@@ -77,34 +77,44 @@ func (p *McpClientPool) GetWsEndpointMcpTools(agentId string) (map[string]tool.I
 }
 
 func (p *McpClientPool) checkOffline() {
-	for _, client := range p.device2McpClient.Items() {
-		// 检查WebSocket端点MCP连接
-		hasActiveWsConnections := false
-		client.wsEndPointMcp.Range(func(_, value interface{}) bool {
-			wsInstance := value.(*McpClientInstance)
-			if time.Since(wsInstance.lastPing) > 2*time.Minute {
-				wsInstance.connected = false
-				wsInstance.cancel()
-			} else {
-				hasActiveWsConnections = true
-			}
-			return true //continue
-		})
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
-		// 检查IoT over MCP连接
-		hasActiveIotConnection := false
-		if client.iotOverMcp != nil {
-			if time.Since(client.iotOverMcp.lastPing) > 2*time.Minute {
-				client.iotOverMcp.connected = false
-				client.iotOverMcp.cancel()
-			} else {
-				hasActiveIotConnection = true
-			}
-		}
+	for range ticker.C {
+		for _, deviceSession := range p.device2McpClient.Items() {
+			// 检查WebSocket端点MCP连接
+			hasActiveWsConnections := false
+			deviceSession.wsEndPointMcp.Range(func(_, value interface{}) bool {
+				wsInstance := value.(*McpClientInstance)
+				if time.Since(wsInstance.lastPing) > 2*time.Minute {
+					wsInstance.connected = false
+					wsInstance.cancel()
+					deviceSession.RemoveWsEndPointMcp(wsInstance)
+				} else {
+					hasActiveWsConnections = true
+				}
+				return true // continue
+			})
 
-		// 如果没有任何活跃连接，移除客户端
-		if !hasActiveWsConnections && !hasActiveIotConnection {
-			p.RemoveMcpClient(client.deviceID)
+			// 检查IoT over MCP连接
+			hasActiveIotConnection := false
+			deviceSession.iotMux.Lock()
+			if deviceSession.iotOverMcp != nil {
+				if time.Since(deviceSession.iotOverMcp.lastPing) > 2*time.Minute {
+					deviceSession.iotOverMcp.connected = false
+					deviceSession.iotOverMcp.cancel()
+					deviceSession.iotOverMcp = nil
+				} else {
+					hasActiveIotConnection = true
+				}
+			}
+			deviceSession.iotMux.Unlock()
+
+			// 如果没有任何活跃连接，移除设备维度MCP会话
+			if !hasActiveWsConnections && !hasActiveIotConnection {
+				deviceSession.cancel()
+				p.RemoveMcpClient(deviceSession.deviceID)
+			}
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +55,33 @@ func (dcs *DeviceMcpSession) RemoveWsEndPointMcp(mcpClient *McpClientInstance) {
 	dcs.wsEndPointMcp.Delete(mcpClient.serverName)
 }
 
+func (dcs *DeviceMcpSession) removeIotOverMcp(instance *McpClientInstance) {
+	dcs.iotMux.Lock()
+	defer dcs.iotMux.Unlock()
+	if dcs.iotOverMcp != nil && dcs.iotOverMcp == instance {
+		dcs.iotOverMcp = nil
+	}
+}
+
+func (dcs *DeviceMcpSession) hasActiveMcpConnections() bool {
+	hasActiveWs := false
+	dcs.wsEndPointMcp.Range(func(_, value interface{}) bool {
+		mcpInstance := value.(*McpClientInstance)
+		if mcpInstance != nil && mcpInstance.IsConnected() {
+			hasActiveWs = true
+			return false
+		}
+		return true
+	})
+	if hasActiveWs {
+		return true
+	}
+
+	dcs.iotMux.RLock()
+	defer dcs.iotMux.RUnlock()
+	return dcs.iotOverMcp != nil && dcs.iotOverMcp.IsConnected()
+}
+
 // GetDeviceID 获取设备ID
 func (dcs *DeviceMcpSession) GetDeviceID() string {
 	return dcs.deviceID
@@ -63,14 +91,24 @@ func (dcs *DeviceMcpSession) GetDeviceID() string {
 func (dcs *DeviceMcpSession) handleMcpClientClose(instance *McpClientInstance, reason string) {
 	logger.Infof("设备 %s 的MCP客户端 %s 已关闭，原因: %s", dcs.deviceID, instance.serverName, reason)
 
-	// 从会话中移除已关闭的客户端
-	dcs.RemoveWsEndPointMcp(instance)
+	// 从会话中移除已关闭的客户端（按类型分流）
+	if strings.HasPrefix(instance.serverName, "ws_endpoint_mcp_") {
+		dcs.RemoveWsEndPointMcp(instance)
+	} else if strings.HasPrefix(instance.serverName, "iot_over_mcp_") {
+		dcs.removeIotOverMcp(instance)
+	} else {
+		// 兜底：先尝试移除ws映射，再尝试清理iot引用
+		dcs.RemoveWsEndPointMcp(instance)
+		dcs.removeIotOverMcp(instance)
+	}
 
-	// 如果所有WebSocket端点都关闭了，可以考虑清理整个会话
-	/*if len(dcs.wsEndPointMcp) == 0 && dcs.iotOverMcp == nil {
-		logger.Infof("设备 %s 的所有MCP连接已关闭，清理会话", dcs.deviceID)
+	if !dcs.hasActiveMcpConnections() {
+		logger.Infof("设备 %s 的所有MCP连接已关闭，清理设备级MCP会话", dcs.deviceID)
 		dcs.cancel()
-	}*/
+		if err := RemoveDeviceMcpClient(dcs.deviceID); err != nil {
+			logger.Errorf("清理设备 %s 的MCP会话失败: %v", dcs.deviceID, err)
+		}
+	}
 }
 
 // McpClientInstance 代表一个具体的MCP客户端连接
