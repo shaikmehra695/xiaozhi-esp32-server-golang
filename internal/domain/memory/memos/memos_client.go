@@ -66,11 +66,11 @@ func GetWithConfig(config map[string]interface{}) (*Client, error) {
 		httpClient:      &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
 		enableSearch:    enableSearch,
 		searchTopK:      searchTopK,
-		addMessagePath:  getString(config, "endpoint_add_message", "/api/v1/core/add_message"),
-		getMessagesPath: getString(config, "endpoint_get_messages", "/api/v1/core/get_messages"),
-		searchPath:      getString(config, "endpoint_search", "/api/v1/core/search"),
-		flushPath:       getString(config, "endpoint_flush", "/api/v1/core/flush"),
-		resetPath:       getString(config, "endpoint_reset_memory", "/api/v1/core/reset_memory"),
+		addMessagePath:  getString(config, "endpoint_add_message", "/core/add_message"),
+		getMessagesPath: getString(config, "endpoint_get_messages", "/core/get_messages"),
+		searchPath:      getString(config, "endpoint_search", "/core/search"),
+		flushPath:       getString(config, "endpoint_flush", "/core/flush"),
+		resetPath:       getString(config, "endpoint_reset_memory", "/core/reset_memory"),
 	}
 
 	log.Log().Infof("MemOS 客户端初始化成功, base_url: %s", client.baseURL)

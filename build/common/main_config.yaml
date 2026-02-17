@@ -337,16 +337,16 @@ memory:
     search_top_k: 3             #搜索TopK,表示搜索到的memory中,相似度最高的TopK个memory会被加入到llm的输入中
   memos:
     api_key: "your_memos_api_key_here"
-    base_url: "http://localhost:8000"
+    base_url: "http://localhost:8000/api/v1"  # 实际请求 = base_url + endpoint_*
     timeout_ms: 10000
     enable_search: true
     search_top_k: 3
     # 以下 endpoint 默认按官方文档 core 目录语义设置，如你的服务路由不同可覆盖
-    endpoint_add_message: "/api/v1/core/add_message"
-    endpoint_get_messages: "/api/v1/core/get_messages"
-    endpoint_search: "/api/v1/core/search"
-    endpoint_flush: "/api/v1/core/flush"
-    endpoint_reset_memory: "/api/v1/core/reset_memory"
+    endpoint_add_message: "/core/add_message"
+    endpoint_get_messages: "/core/get_messages"
+    endpoint_search: "/core/search"
+    endpoint_flush: "/core/flush"
+    endpoint_reset_memory: "/core/reset_memory"
 
 # 启用欢迎语
 enable_greeting: true

@@ -89,10 +89,11 @@ internal/domain/memory/memos/
 
 ## 6. 当前实现说明
 
+- 实际请求 URL = `base_url + endpoint_path`（例如 `http://host/api/v1` + `/core/add_message`）。
 - 已实现 `memos_client.go`，默认使用以下接口：
-  - `/api/v1/core/add_message`
-  - `/api/v1/core/get_messages`
-  - `/api/v1/core/search`
-  - `/api/v1/core/flush`
-  - `/api/v1/core/reset_memory`
+  - `/core/add_message`
+  - `/core/get_messages`
+  - `/core/search`
+  - `/core/flush`
+  - `/core/reset_memory`
 - 若你的 MemOS 实际路由不同，可通过 `endpoint_*` 配置项覆盖。
