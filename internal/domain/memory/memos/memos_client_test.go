@@ -22,6 +22,9 @@ func TestAddMessage(t *testing.T) {
 		if payload["user_id"] == "" || payload["conversation_id"] == "" {
 			t.Fatalf("user_id/conversation_id should not be empty: %#v", payload)
 		}
+		if payload["agent_id"] == "" {
+			t.Fatalf("agent_id should exist when agentID is provided: %#v", payload)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"code":0,"message":"ok"}`))
 	}))
@@ -61,5 +64,16 @@ func TestGetMessages(t *testing.T) {
 	}
 	if len(msgs) != 2 {
 		t.Fatalf("want 2 messages, got %d", len(msgs))
+	}
+}
+
+func TestAddMessage_EmptyAgentID(t *testing.T) {
+	c, err := GetWithConfig(map[string]interface{}{"base_url": "http://127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.AddMessage(context.Background(), "", schema.Message{Role: schema.User, Content: "hello"})
+	if err == nil {
+		t.Fatal("expected error when agentID is empty")
 	}
 }

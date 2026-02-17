@@ -99,3 +99,10 @@ internal/domain/memory/memos/
   - `/flush`
   - `/reset/memory`
 - 路径采用固定官方语义：`/add/message`、`/get/messages`、`/search`、`/flush`、`/reset/memory`。
+
+
+## 7. Add Message 字段约束（已按文档调整）
+
+- `user_id` / `conversation_id` 为必填。
+- `agent_id` 为可选，仅在有值时传递。
+- 当前实现中使用 `agentID` 同时映射到 `user_id` 与 `conversation_id`；当 `agentID` 为空时直接报错，不再使用默认占位值。

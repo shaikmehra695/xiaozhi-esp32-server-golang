@@ -68,7 +68,10 @@ func GetWithConfig(config map[string]interface{}) (*Client, error) {
 }
 
 func (c *Client) AddMessage(ctx context.Context, agentID string, msg schema.Message) error {
-	payload := c.newIdentityPayload(agentID)
+	payload, err := c.newIdentityPayload(agentID)
+	if err != nil {
+		return err
+	}
 	payload["messages"] = []map[string]string{{
 		"role":    string(msg.Role),
 		"content": msg.Content,
@@ -84,7 +87,10 @@ func (c *Client) GetMessages(ctx context.Context, agentID string, count int) ([]
 	if count <= 0 {
 		count = 20
 	}
-	payload := c.newIdentityPayload(agentID)
+	payload, err := c.newIdentityPayload(agentID)
+	if err != nil {
+		return nil, err
+	}
 	payload["limit"] = count
 	data, err := c.requestJSON(ctx, http.MethodPost, "/get/messages", payload)
 	if err != nil {
@@ -133,7 +139,10 @@ func (c *Client) Search(ctx context.Context, agentID string, query string, topK 
 	if topK <= 0 {
 		topK = c.searchTopK
 	}
-	payload := c.newIdentityPayload(agentID)
+	payload, err := c.newIdentityPayload(agentID)
+	if err != nil {
+		return "", err
+	}
 	payload["query"] = query
 	payload["top_k"] = topK
 	payload["threshold"] = c.searchThreshold
@@ -161,8 +170,11 @@ func (c *Client) Search(ctx context.Context, agentID string, query string, topK 
 }
 
 func (c *Client) Flush(ctx context.Context, agentID string) error {
-	payload := c.newIdentityPayload(agentID)
-	_, err := c.requestJSON(ctx, http.MethodPost, "/flush", payload)
+	payload, err := c.newIdentityPayload(agentID)
+	if err != nil {
+		return err
+	}
+	_, err = c.requestJSON(ctx, http.MethodPost, "/flush", payload)
 	if err != nil {
 		return fmt.Errorf("memos flush failed: %w", err)
 	}
@@ -170,24 +182,33 @@ func (c *Client) Flush(ctx context.Context, agentID string) error {
 }
 
 func (c *Client) ResetMemory(ctx context.Context, agentID string) error {
-	payload := c.newIdentityPayload(agentID)
-	_, err := c.requestJSON(ctx, http.MethodPost, "/reset/memory", payload)
+	payload, err := c.newIdentityPayload(agentID)
+	if err != nil {
+		return err
+	}
+	_, err = c.requestJSON(ctx, http.MethodPost, "/reset/memory", payload)
 	if err != nil {
 		return fmt.Errorf("memos reset_memory failed: %w", err)
 	}
 	return nil
 }
 
-func (c *Client) newIdentityPayload(agentID string) map[string]interface{} {
+func (c *Client) newIdentityPayload(agentID string) (map[string]interface{}, error) {
 	identity := strings.TrimSpace(agentID)
 	if identity == "" {
-		identity = "default"
+		return nil, fmt.Errorf("agentID is empty: user_id and conversation_id are required by MemOS")
 	}
-	return map[string]interface{}{
-		"agent_id":        identity,
+
+	payload := map[string]interface{}{
 		"user_id":         identity,
 		"conversation_id": identity,
 	}
+
+	// agent_id 在 MemOS 文档中为可选字段，仅在有值时传递
+	if identity != "" {
+		payload["agent_id"] = identity
+	}
+	return payload, nil
 }
 
 func (c *Client) requestJSON(ctx context.Context, method, path string, payload map[string]interface{}) (map[string]interface{}, error) {
