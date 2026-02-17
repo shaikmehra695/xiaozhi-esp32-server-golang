@@ -29,15 +29,10 @@ type Client struct {
 	searchTopK      int
 	searchThreshold float64
 
-	addMessagePath  string
-	getMessagesPath string
-	searchPath      string
-	flushPath       string
-	resetPath       string
 }
 
 // GetWithConfig 使用配置初始化 MemOS 客户端。
-// 实际请求 URL = base_url + endpoint_*
+// 实际请求 URL = base_url + 固定路径
 func GetWithConfig(config map[string]interface{}) (*Client, error) {
 	if config == nil {
 		config = map[string]interface{}{}
@@ -67,11 +62,6 @@ func GetWithConfig(config map[string]interface{}) (*Client, error) {
 		enableSearch:    enableSearch,
 		searchTopK:      searchTopK,
 		searchThreshold: searchThreshold,
-		addMessagePath:  getString(config, "endpoint_add_message", "/add/message"),
-		getMessagesPath: getString(config, "endpoint_get_messages", "/get/messages"),
-		searchPath:      getString(config, "endpoint_search", "/search"),
-		flushPath:       getString(config, "endpoint_flush", "/flush"),
-		resetPath:       getString(config, "endpoint_reset_memory", "/reset/memory"),
 	}
 
 	log.Log().Infof("MemOS 客户端初始化成功, base_url: %s", client.baseURL)
@@ -86,7 +76,7 @@ func (c *Client) AddMessage(ctx context.Context, agentID string, msg schema.Mess
 			"content": msg.Content,
 		}},
 	}
-	_, err := c.requestJSON(ctx, http.MethodPost, c.addMessagePath, payload)
+	_, err := c.requestJSON(ctx, http.MethodPost, "/add/message", payload)
 	if err != nil {
 		return fmt.Errorf("memos add_message failed: %w", err)
 	}
@@ -101,7 +91,7 @@ func (c *Client) GetMessages(ctx context.Context, agentID string, count int) ([]
 		"agent_id": agentID,
 		"limit":    count,
 	}
-	data, err := c.requestJSON(ctx, http.MethodPost, c.getMessagesPath, payload)
+	data, err := c.requestJSON(ctx, http.MethodPost, "/get/messages", payload)
 	if err != nil {
 		return nil, fmt.Errorf("memos get_messages failed: %w", err)
 	}
@@ -155,7 +145,7 @@ func (c *Client) Search(ctx context.Context, agentID string, query string, topK 
 		"threshold":       c.searchThreshold,
 		"time_range_days": timeRangeDays,
 	}
-	data, err := c.requestJSON(ctx, http.MethodPost, c.searchPath, payload)
+	data, err := c.requestJSON(ctx, http.MethodPost, "/search", payload)
 	if err != nil {
 		return "", fmt.Errorf("memos search failed: %w", err)
 	}
@@ -179,7 +169,7 @@ func (c *Client) Search(ctx context.Context, agentID string, query string, topK 
 
 func (c *Client) Flush(ctx context.Context, agentID string) error {
 	payload := map[string]interface{}{"agent_id": agentID}
-	_, err := c.requestJSON(ctx, http.MethodPost, c.flushPath, payload)
+	_, err := c.requestJSON(ctx, http.MethodPost, "/flush", payload)
 	if err != nil {
 		return fmt.Errorf("memos flush failed: %w", err)
 	}
@@ -188,7 +178,7 @@ func (c *Client) Flush(ctx context.Context, agentID string) error {
 
 func (c *Client) ResetMemory(ctx context.Context, agentID string) error {
 	payload := map[string]interface{}{"agent_id": agentID}
-	_, err := c.requestJSON(ctx, http.MethodPost, c.resetPath, payload)
+	_, err := c.requestJSON(ctx, http.MethodPost, "/reset/memory", payload)
 	if err != nil {
 		return fmt.Errorf("memos reset_memory failed: %w", err)
 	}

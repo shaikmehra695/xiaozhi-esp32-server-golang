@@ -33,7 +33,7 @@
 
 ## 3. 对接要点（按官方文档）
 
-以下字段作为可覆盖配置，若部署接口有差异请在后台配置中填写 endpoint_*：
+以下字段按官方固定路径对接，不在控制台暴露 endpoint 配置：
 
 1. 鉴权方式
    - Header 名称：
@@ -86,7 +86,7 @@ internal/domain/memory/memos/
 
 当前执行环境对该官方文档站点请求返回 403，无法在本地自动抓取文档内容。
 
-如你确认上面的字段与 endpoint，我会立即提交“独立 MemOS provider 的完整实现 + 测试”。
+当前已按固定路径实现，控制台不提供 endpoint 路径编辑。
 
 
 ## 6. 当前实现说明
@@ -98,4 +98,4 @@ internal/domain/memory/memos/
   - `/search`
   - `/flush`
   - `/reset/memory`
-- 若你的 MemOS 实际路由不同，可通过 `endpoint_*` 配置项覆盖。
+- 路径采用固定官方语义：`/add/message`、`/get/messages`、`/search`、`/flush`、`/reset/memory`。
