@@ -728,6 +728,7 @@ onMounted(() => {
   min-height: 100vh;
   background: #f8f9fa;
   padding: 0;
+  overflow-x: hidden;
 }
 
 /* 页面头部样式 */
@@ -906,6 +907,18 @@ onMounted(() => {
   border-radius: 4px;
   font-weight: 500;
   font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.add-btn :deep(.el-icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  line-height: 1;
 }
 
 /* 设备网格 */
@@ -1234,6 +1247,11 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
+  .user-console {
+    min-height: auto;
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+
   .page-header {
     padding: 16px 0;
   }
@@ -1260,6 +1278,62 @@ onMounted(() => {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
+  }
+
+  .action-buttons {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .action-buttons .add-btn,
+  .section-header > .add-btn {
+    flex: 1;
+    min-width: 120px;
+  }
+
+  .feature-item {
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .feature-label {
+    min-width: 56px;
+    flex: none;
+  }
+
+  .feature-value {
+    flex: 1;
+    min-width: 0;
+    text-align: right;
+    word-break: break-all;
+  }
+
+  .dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  :deep(.el-dialog) {
+    width: calc(100vw - 24px) !important;
+    margin-top: 8vh !important;
+  }
+
+  :deep(.el-dialog__body) {
+    max-height: 65vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  :deep(.el-dialog__header) {
+    margin-right: 0;
+  }
+
+  :deep(.el-form-item__label) {
+    line-height: 20px;
+    padding-bottom: 4px;
   }
 }
 
@@ -1330,9 +1404,44 @@ onMounted(() => {
 }
 
 @media (max-width: 480px) {
+  .avatar-section {
+    align-items: flex-start;
+  }
+
+  .welcome-title {
+    font-size: 18px;
+  }
+
+  .welcome-subtitle {
+    font-size: 13px;
+  }
+
   .quick-stats {
     flex-direction: column;
     gap: 8px;
+  }
+
+  .quick-stats .stat-item {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .section-title {
+    font-size: 16px;
+  }
+
+  .action-buttons .add-btn,
+  .section-header > .add-btn {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .radio-option {
+    margin-left: 0;
+  }
+
+  .radio-desc {
+    white-space: normal;
   }
   
   .devices-grid {
