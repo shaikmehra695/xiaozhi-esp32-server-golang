@@ -1,0 +1,35 @@
+{
+  "pages": [
+    "pages/login/index",
+    "pages/console/index",
+    "pages/agents/index",
+    "pages/devices/index",
+    "pages/profile/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "小智控制台",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "backgroundTextStyle": "light"
+  },
+  "tabBar": {
+    "list": [
+      {
+        "pagePath": "pages/console/index",
+        "text": "控制台"
+      },
+      {
+        "pagePath": "pages/agents/index",
+        "text": "智能体"
+      },
+      {
+        "pagePath": "pages/devices/index",
+        "text": "设备"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "我的"
+      }
+    ]
+  }
+}

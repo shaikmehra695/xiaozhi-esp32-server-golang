@@ -1,0 +1,20 @@
+<view class="container">
+  <view class="card">
+    <view class="title">原生小程序控制台登录</view>
+    <view class="muted">请输入管理后台地址和账号密码</view>
+  </view>
+
+  <view class="card">
+    <input placeholder="后端地址，如 https://example.com" value="{{baseURL}}" bindinput="onBaseURLInput" />
+  </view>
+
+  <view class="card">
+    <input placeholder="用户名" value="{{username}}" bindinput="onUsernameInput" />
+  </view>
+
+  <view class="card">
+    <input placeholder="密码" password="true" value="{{password}}" bindinput="onPasswordInput" />
+  </view>
+
+  <button class="btn-primary" loading="{{loading}}" bindtap="onSubmit">登录</button>
+</view>

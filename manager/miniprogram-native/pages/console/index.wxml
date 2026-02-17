@@ -1,0 +1,15 @@
+<view class="container">
+  <view class="card">
+    <view class="title">欢迎，{{user.username || '用户'}}</view>
+    <view class="muted">角色：{{user.role || '-'}}</view>
+  </view>
+
+  <view class="card" wx:if="{{stats}}">
+    <view class="title">控制台统计</view>
+    <view class="list-item">设备总数：{{stats.device_count || 0}}</view>
+    <view class="list-item">智能体总数：{{stats.agent_count || 0}}</view>
+    <view>在线设备：{{stats.online_device_count || 0}}</view>
+  </view>
+
+  <view class="muted" wx:if="{{loading}}">加载中...</view>
+</view>

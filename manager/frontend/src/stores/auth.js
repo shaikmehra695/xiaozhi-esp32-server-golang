@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api from '../utils/api'
+import { notifyMiniProgram } from '../utils/miniProgram'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token'))
@@ -20,7 +21,8 @@ export const useAuthStore = defineStore('auth', () => {
       
       localStorage.setItem('token', newToken)
       localStorage.setItem('user', JSON.stringify(userData))
-      
+      notifyMiniProgram('auth:login', { user: userData, token: newToken })
+
       return { success: true, user: userData }
     } catch (error) {
       return { 
@@ -47,6 +49,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    notifyMiniProgram('auth:logout')
   }
 
   const getProfile = async () => {

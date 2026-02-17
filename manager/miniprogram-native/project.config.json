@@ -1,0 +1,15 @@
+{
+  "description": "xiaozhi manager native mini program",
+  "packNpmRelationList": [],
+  "setting": {
+    "urlCheck": true,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true
+  },
+  "compileType": "miniprogram",
+  "libVersion": "3.6.0",
+  "appid": "touristappid",
+  "projectname": "xiaozhi-manager-native"
+}

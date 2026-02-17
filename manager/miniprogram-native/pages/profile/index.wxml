@@ -1,0 +1,10 @@
+<view class="container">
+  <view class="card">
+    <view class="title">个人信息</view>
+    <view class="list-item">用户名：{{user.username || '-'}}</view>
+    <view class="list-item">角色：{{user.role || '-'}}</view>
+    <view>服务地址：{{baseURL || '-'}}</view>
+  </view>
+
+  <button type="warn" bindtap="onLogout">退出登录</button>
+</view>

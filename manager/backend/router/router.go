@@ -3,6 +3,7 @@ package router
 import (
 	"io/fs"
 	"net/http"
+	"strings"
 	"xiaozhi/manager/backend/config"
 	"xiaozhi/manager/backend/controllers"
 	"xiaozhi/manager/backend/middleware"
@@ -18,8 +19,35 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 
 	// CORS配置
 	corsConfig := cors.DefaultConfig()
-	corsConfig.AllowAllOrigins = true
-	corsConfig.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"}
+	corsConfig.AllowOriginFunc = func(origin string) bool {
+		if origin == "" {
+			return true
+		}
+
+		lowerOrigin := strings.ToLower(origin)
+		if strings.HasPrefix(lowerOrigin, "http://localhost") ||
+			strings.HasPrefix(lowerOrigin, "http://127.0.0.1") ||
+			strings.HasPrefix(lowerOrigin, "https://localhost") ||
+			strings.HasPrefix(lowerOrigin, "https://127.0.0.1") {
+			return true
+		}
+
+		// 微信小程序 web-view 场景
+		if strings.Contains(lowerOrigin, "servicewechat.com") ||
+			strings.Contains(lowerOrigin, "wechat.com") ||
+			strings.Contains(lowerOrigin, "weixin.qq.com") {
+			return true
+		}
+
+		// 向后兼容：默认放行其他来源（与旧行为一致）
+		return true
+	}
+	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"}
+	corsConfig.AllowHeaders = []string{
+		"Origin", "Content-Length", "Content-Type", "Authorization", "Accept", "User-Agent",
+		"X-Requested-With", "X-WX-EXCLUDE-CREDENTIALS", "X-WX-GATEWAY-ID", "Wechat-Gateway-Request-Id",
+	}
+	corsConfig.ExposeHeaders = []string{"Content-Length", "Content-Type", "Authorization"}
 	corsConfig.AllowCredentials = true
 	r.Use(cors.New(corsConfig))
 

@@ -1,0 +1,14 @@
+<view class="container">
+  <view class="card">
+    <view class="title">我的设备</view>
+    <view class="muted">共 {{list.length}} 台</view>
+  </view>
+
+  <view class="card" wx:for="{{list}}" wx:key="id">
+    <view class="list-item">名称：{{item.device_name || item.name || '-'}}</view>
+    <view class="list-item">状态：{{item.status || '-'}}</view>
+    <view>ID：{{item.id}}</view>
+  </view>
+
+  <view class="muted" wx:if="{{loading}}">加载中...</view>
+</view>

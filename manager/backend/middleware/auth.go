@@ -18,6 +18,24 @@ func min(a, b int) int {
 	return b
 }
 
+func extractToken(c *gin.Context) string {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader != "" {
+		return strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+	}
+
+	if token := strings.TrimSpace(c.GetHeader("X-Access-Token")); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(c.GetHeader("X-WX-Token")); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(c.Query("token")); token != "" {
+		return token
+	}
+	return ""
+}
+
 type Claims struct {
 	UserID   uint   `json:"user_id"`
 	Username string `json:"username"`
@@ -65,20 +83,16 @@ func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 添加调试日志
 		log.Printf("[JWTAuth] 处理请求: %s %s, 客户端IP: %s", c.Request.Method, c.Request.URL.Path, c.ClientIP())
-		
-		authHeader := c.GetHeader("Authorization")
-		log.Printf("[JWTAuth] Authorization头: %s", authHeader)
-		
-		if authHeader == "" {
-			log.Printf("[JWTAuth] ❌ 缺少认证头")
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少认证头"})
+
+		tokenString := extractToken(c)
+		if tokenString == "" {
+			log.Printf("[JWTAuth] ❌ 缺少认证信息（Authorization/X-Access-Token/X-WX-Token/token）")
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少认证信息"})
 			c.Abort()
 			return
 		}
-
-		tokenString := strings.Replace(authHeader, "Bearer ", "", 1)
 		log.Printf("[JWTAuth] 提取的token长度: %d, 前缀: %s", len(tokenString), tokenString[:min(20, len(tokenString))])
-		
+
 		claims, err := ParseToken(tokenString)
 		if err != nil {
 			log.Printf("[JWTAuth] ❌ token解析失败: %v", err)
