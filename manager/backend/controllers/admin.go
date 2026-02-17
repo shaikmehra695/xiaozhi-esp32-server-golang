@@ -4078,8 +4078,8 @@ func (ac *AdminController) CreateMemoryConfig(c *gin.Context) {
 	config.Type = "memory"
 
 	// 验证provider字段
-	if config.Provider != "memobase" && config.Provider != "mem0" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Provider必须是memobase或mem0"})
+	if config.Provider != "memobase" && config.Provider != "mem0" && config.Provider != "memos" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Provider必须是memobase、mem0或memos"})
 		return
 	}
 
@@ -4124,8 +4124,8 @@ func (ac *AdminController) UpdateMemoryConfig(c *gin.Context) {
 	}
 
 	// 验证provider字段
-	if updateData.Provider != "memobase" && updateData.Provider != "mem0" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Provider必须是memobase或mem0"})
+	if updateData.Provider != "memobase" && updateData.Provider != "mem0" && updateData.Provider != "memos" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Provider必须是memobase、mem0或memos"})
 		return
 	}
 
