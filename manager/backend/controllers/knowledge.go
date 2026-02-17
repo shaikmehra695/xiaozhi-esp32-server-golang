@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,10 +73,11 @@ func (uc *UserController) GetKnowledgeBases(c *gin.Context) {
 func (uc *UserController) CreateKnowledgeBase(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	var req struct {
-		Name        string `json:"name" binding:"required,min=1,max=100"`
-		Description string `json:"description"`
-		Content     string `json:"content"`
-		Status      string `json:"status"`
+		Name         string `json:"name" binding:"required,min=1,max=100"`
+		Description  string `json:"description"`
+		Content      string `json:"content"`
+		ExternalKBID string `json:"external_kb_id"`
+		Status       string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
@@ -83,7 +86,7 @@ func (uc *UserController) CreateKnowledgeBase(c *gin.Context) {
 	if req.Status == "" {
 		req.Status = "active"
 	}
-	item := models.KnowledgeBase{UserID: userID.(uint), Name: req.Name, Description: req.Description, Content: req.Content, Status: req.Status}
+	item := models.KnowledgeBase{UserID: userID.(uint), Name: req.Name, Description: req.Description, Content: req.Content, ExternalKBID: strings.TrimSpace(req.ExternalKBID), Status: req.Status}
 	if err := uc.DB.Create(&item).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建知识库失败"})
 		return
@@ -111,10 +114,11 @@ func (uc *UserController) UpdateKnowledgeBase(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name        string `json:"name" binding:"required,min=1,max=100"`
-		Description string `json:"description"`
-		Content     string `json:"content"`
-		Status      string `json:"status"`
+		Name         string `json:"name" binding:"required,min=1,max=100"`
+		Description  string `json:"description"`
+		Content      string `json:"content"`
+		ExternalKBID string `json:"external_kb_id"`
+		Status       string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
@@ -123,6 +127,7 @@ func (uc *UserController) UpdateKnowledgeBase(c *gin.Context) {
 	item.Name = req.Name
 	item.Description = req.Description
 	item.Content = req.Content
+	item.ExternalKBID = strings.TrimSpace(req.ExternalKBID)
 	if req.Status != "" {
 		item.Status = req.Status
 	}
@@ -302,6 +307,14 @@ func (ac *AdminController) callKnowledgeSearchProvider(cfg *models.Config, req K
 	} else {
 		providerData = map[string]interface{}{}
 	}
+
+	if strings.EqualFold(strings.TrimSpace(cfg.Provider), "dify") {
+		return ac.callDifyKnowledgeSearch(providerData, req, knowledgeBases)
+	}
+	return ac.callGenericKnowledgeSearch(cfg, providerData, req, knowledgeBases)
+}
+
+func (ac *AdminController) callGenericKnowledgeSearch(cfg *models.Config, providerData map[string]interface{}, req KnowledgeSearchRequest, knowledgeBases []models.KnowledgeBase) ([]knowledgeSearchHit, error) {
 	endpoint, _ := providerData["endpoint"].(string)
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" {
@@ -337,7 +350,8 @@ func (ac *AdminController) callKnowledgeSearchProvider(cfg *models.Config, req K
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("provider返回状态码: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("provider返回状态码: %d, body: %s", resp.StatusCode, string(body))
 	}
 	var result struct {
 		Data struct {
@@ -352,6 +366,108 @@ func (ac *AdminController) callKnowledgeSearchProvider(cfg *models.Config, req K
 		return result.Data.Hits, nil
 	}
 	return result.Hits, nil
+}
+
+func (ac *AdminController) callDifyKnowledgeSearch(providerData map[string]interface{}, req KnowledgeSearchRequest, knowledgeBases []models.KnowledgeBase) ([]knowledgeSearchHit, error) {
+	baseURL, _ := providerData["base_url"].(string)
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return nil, fmt.Errorf("dify base_url 不能为空")
+	}
+	apiKey, _ := providerData["api_key"].(string)
+	if strings.TrimSpace(apiKey) == "" {
+		return nil, fmt.Errorf("dify api_key 不能为空")
+	}
+	topK := req.TopK
+	if topK <= 0 {
+		topK = 5
+	}
+	scoreThreshold := 0.0
+	if v, ok := providerData["score_threshold"].(float64); ok {
+		scoreThreshold = v
+	}
+	datasetIDs := make([]string, 0)
+	for _, kb := range knowledgeBases {
+		if id := strings.TrimSpace(kb.ExternalKBID); id != "" {
+			datasetIDs = append(datasetIDs, id)
+		}
+	}
+	if len(datasetIDs) == 0 {
+		return nil, fmt.Errorf("未配置任何Dify dataset_id（请在知识库 external_kb_id 中填写）")
+	}
+
+	hits := make([]knowledgeSearchHit, 0)
+	client := &http.Client{Timeout: 8 * time.Second}
+	for _, datasetID := range datasetIDs {
+		retrieveURL := fmt.Sprintf("%s/v1/datasets/%s/retrieve", baseURL, url.PathEscape(datasetID))
+		payload := map[string]interface{}{
+			"query": strings.TrimSpace(req.Query),
+			"retrieval_model": map[string]interface{}{
+				"top_k":                   topK,
+				"score_threshold":         scoreThreshold,
+				"score_threshold_enabled": scoreThreshold > 0,
+				"search_method":           "semantic_search",
+				"reranking_enable":        false,
+			},
+		}
+		body, _ := json.Marshal(payload)
+		httpReq, err := http.NewRequest(http.MethodPost, retrieveURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("创建Dify请求失败: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("调用Dify失败(dataset_id=%s): %w", datasetID, err)
+		}
+		if resp.StatusCode >= 400 {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("Dify返回异常(dataset_id=%s): %d %s", datasetID, resp.StatusCode, string(bodyBytes))
+		}
+
+		var difyResp struct {
+			Records []struct {
+				Score   float64 `json:"score"`
+				Segment struct {
+					Content string `json:"content"`
+				} `json:"segment"`
+			} `json:"records"`
+			Data struct {
+				Records []struct {
+					Score   float64 `json:"score"`
+					Segment struct {
+						Content string `json:"content"`
+					} `json:"segment"`
+				} `json:"records"`
+			} `json:"data"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&difyResp)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("解析Dify返回失败(dataset_id=%s): %w", datasetID, decodeErr)
+		}
+		records := difyResp.Records
+		if len(records) == 0 {
+			records = difyResp.Data.Records
+		}
+		for _, r := range records {
+			content := strings.TrimSpace(r.Segment.Content)
+			if content == "" {
+				continue
+			}
+			hits = append(hits, knowledgeSearchHit{Content: content, Title: datasetID, Score: r.Score})
+		}
+	}
+	if len(hits) == 0 {
+		return hits, nil
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	if len(hits) > topK {
+		hits = hits[:topK]
+	}
+	return hits, nil
 }
 
 func (uc *UserController) assertAgentOwnership(userID uint, agentID uint) error {
@@ -433,10 +549,11 @@ func (ac *AdminController) CreateUserKnowledgeBaseAdmin(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name        string `json:"name" binding:"required,min=1,max=100"`
-		Description string `json:"description"`
-		Content     string `json:"content"`
-		Status      string `json:"status"`
+		Name         string `json:"name" binding:"required,min=1,max=100"`
+		Description  string `json:"description"`
+		Content      string `json:"content"`
+		ExternalKBID string `json:"external_kb_id"`
+		Status       string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
@@ -445,7 +562,7 @@ func (ac *AdminController) CreateUserKnowledgeBaseAdmin(c *gin.Context) {
 	if req.Status == "" {
 		req.Status = "active"
 	}
-	item := models.KnowledgeBase{UserID: uint(userID), Name: req.Name, Description: req.Description, Content: req.Content, Status: req.Status}
+	item := models.KnowledgeBase{UserID: uint(userID), Name: req.Name, Description: req.Description, Content: req.Content, ExternalKBID: strings.TrimSpace(req.ExternalKBID), Status: req.Status}
 	if err := ac.DB.Create(&item).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建知识库失败"})
 		return
@@ -466,10 +583,11 @@ func (ac *AdminController) UpdateUserKnowledgeBaseAdmin(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name        string `json:"name" binding:"required,min=1,max=100"`
-		Description string `json:"description"`
-		Content     string `json:"content"`
-		Status      string `json:"status"`
+		Name         string `json:"name" binding:"required,min=1,max=100"`
+		Description  string `json:"description"`
+		Content      string `json:"content"`
+		ExternalKBID string `json:"external_kb_id"`
+		Status       string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
@@ -478,6 +596,7 @@ func (ac *AdminController) UpdateUserKnowledgeBaseAdmin(c *gin.Context) {
 	item.Name = req.Name
 	item.Description = req.Description
 	item.Content = req.Content
+	item.ExternalKBID = strings.TrimSpace(req.ExternalKBID)
 	if req.Status != "" {
 		item.Status = req.Status
 	}

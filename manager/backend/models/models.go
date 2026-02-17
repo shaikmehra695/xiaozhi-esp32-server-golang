@@ -51,14 +51,15 @@ type Agent struct {
 
 // KnowledgeBase 用户知识库（每用户独立）
 type KnowledgeBase struct {
-	ID          uint      `json:"id" gorm:"primarykey"`
-	UserID      uint      `json:"user_id" gorm:"not null;index"`
-	Name        string    `json:"name" gorm:"type:varchar(100);not null"`
-	Description string    `json:"description" gorm:"type:text"`
-	Content     string    `json:"content" gorm:"type:text"`
-	Status      string    `json:"status" gorm:"type:varchar(20);default:'active';index"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           uint      `json:"id" gorm:"primarykey"`
+	UserID       uint      `json:"user_id" gorm:"not null;index"`
+	Name         string    `json:"name" gorm:"type:varchar(100);not null"`
+	Description  string    `json:"description" gorm:"type:text"`
+	Content      string    `json:"content" gorm:"type:text"`
+	ExternalKBID string    `json:"external_kb_id" gorm:"type:varchar(255);index"` // 外部知识库ID（如Dify dataset_id）
+	Status       string    `json:"status" gorm:"type:varchar(20);default:'active';index"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // AgentKnowledgeBase 智能体与知识库的多对多关联

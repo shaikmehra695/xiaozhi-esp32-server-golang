@@ -9,6 +9,7 @@
       <el-table-column prop="id" label="ID" width="80" />
       <el-table-column prop="name" label="名称" width="180" />
       <el-table-column prop="description" label="描述" />
+      <el-table-column prop="external_kb_id" label="外部知识库ID" width="220" />
       <el-table-column label="内容预览">
         <template #default="scope">
           {{ (scope.row.content || '').slice(0, 100) }}{{ (scope.row.content || '').length > 100 ? '...' : '' }}
@@ -34,6 +35,9 @@
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" />
+        </el-form-item>
+        <el-form-item label="外部ID">
+          <el-input v-model="form.external_kb_id" placeholder="例如 Dify dataset_id（可选）" />
         </el-form-item>
         <el-form-item label="内容">
           <el-input v-model="form.content" type="textarea" :rows="10" placeholder="请输入纯文本知识内容" />
@@ -68,6 +72,7 @@ const form = reactive({
   name: '',
   description: '',
   content: '',
+  external_kb_id: '',
   status: 'active'
 })
 
@@ -87,6 +92,7 @@ const openDialog = (row = null) => {
   form.name = row?.name || ''
   form.description = row?.description || ''
   form.content = row?.content || ''
+  form.external_kb_id = row?.external_kb_id || ''
   form.status = row?.status || 'active'
   dialogVisible.value = true
 }
