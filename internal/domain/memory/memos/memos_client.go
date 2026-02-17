@@ -76,7 +76,7 @@ func (c *Client) AddMessage(ctx context.Context, agentID string, msg schema.Mess
 		"role":    string(msg.Role),
 		"content": msg.Content,
 	}}
-	_, err := c.requestJSON(ctx, http.MethodPost, "/add/message", payload)
+	_, err = c.requestJSON(ctx, http.MethodPost, "/add/message", payload)
 	if err != nil {
 		return fmt.Errorf("memos add_message failed: %w", err)
 	}
