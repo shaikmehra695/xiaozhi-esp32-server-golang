@@ -84,6 +84,7 @@
       v-model="showAddDeviceDialog"
       title="添加设备"
       width="500px"
+      class="device-dialog"
     >
       <el-form
         ref="deviceFormRef"
@@ -116,6 +117,7 @@
       v-model="showAddAgentDialog"
       title="添加智能体"
       width="500px"
+      class="agent-dialog"
       :before-close="handleCloseAddAgent"
     >
       <el-form
@@ -168,6 +170,7 @@
       v-model="showAddDeviceDialog"
       title="添加设备"
       width="400px"
+      class="device-dialog"
       :before-close="handleCloseAddDevice"
     >
       <div class="device-dialog-content">
@@ -207,6 +210,7 @@
       v-model="showMCPDialog"
       title="MCP接入点"
       width="700px"
+      class="mcp-dialog"
     >
       <div v-loading="mcpLoading">
         <!-- 工具列表区域 -->
@@ -1006,6 +1010,50 @@ onMounted(() => {
 
   .agent-actions .el-button:last-child {
     grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .header-right {
+    width: 100%;
+  }
+
+  .header-right .el-button {
+    width: 100%;
+  }
+
+  .agents-grid {
+    padding: 0 12px;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .agent-card {
+    max-width: none;
+  }
+
+  :deep(.agent-dialog),
+  :deep(.device-dialog),
+  :deep(.mcp-dialog) {
+    width: calc(100vw - 24px) !important;
+    margin-top: 8vh !important;
+  }
+
+  :deep(.agent-dialog .el-dialog__body),
+  :deep(.device-dialog .el-dialog__body),
+  :deep(.mcp-dialog .el-dialog__body) {
+    max-height: 68vh;
+    overflow-y: auto;
   }
 }
 

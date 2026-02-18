@@ -286,6 +286,7 @@
       v-model="showInjectMessageDialog"
       title="消息注入"
       width="600px"
+      class="inject-message-dialog"
       :close-on-click-modal="false"
     >
       <el-form
@@ -299,6 +300,7 @@
             v-model="injectForm.device_id"
             placeholder="请选择要注入消息的设备"
             style="width: 100%"
+            popper-class="inject-device-select-popper"
             filterable
           >
             <el-option
@@ -1263,6 +1265,29 @@ onMounted(() => {
   .welcome-title {
     font-size: 20px;
   }
+
+  .quick-stats {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .quick-stats .stat-item {
+    width: 100%;
+    min-width: 0;
+    padding: 12px 10px;
+    gap: 8px;
+  }
+
+  .quick-stats .stat-number {
+    font-size: 16px;
+  }
+
+  .quick-stats .stat-label {
+    white-space: nowrap;
+    font-size: 11px;
+  }
   
   .main-content {
     margin: 16px auto 24px;
@@ -1388,7 +1413,7 @@ onMounted(() => {
 }
 
 .radio-option {
-  margin-left: 8px;
+  margin-left: 0;
 }
 
 .radio-title {
@@ -1401,6 +1426,48 @@ onMounted(() => {
   font-size: 12px;
   color: #6c757d;
   line-height: 1.4;
+  word-break: break-word;
+}
+
+:deep(.inject-device-select-popper .el-select-dropdown__item) {
+  height: auto;
+  line-height: 1.4;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  white-space: normal;
+}
+
+:deep(.inject-device-select-popper .device-option) {
+  padding: 0;
+}
+
+:deep(.inject-message-dialog .el-radio-group) {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 10px;
+}
+
+:deep(.inject-message-dialog .el-radio) {
+  margin-right: 0;
+  align-items: flex-start;
+  height: auto;
+  line-height: 1.4;
+}
+
+:deep(.inject-message-dialog .el-radio__input) {
+  margin-top: 2px;
+}
+
+:deep(.inject-message-dialog .el-radio__label) {
+  display: block;
+  padding-left: 8px;
+  white-space: normal;
+  line-height: 1.4;
+}
+
+:deep(.inject-message-dialog .el-form-item__content) {
+  min-width: 0;
 }
 
 @media (max-width: 480px) {
@@ -1416,14 +1483,23 @@ onMounted(() => {
     font-size: 13px;
   }
 
-  .quick-stats {
-    flex-direction: column;
-    gap: 8px;
+  .quick-stats .stat-item {
+    padding: 10px 8px;
+    gap: 6px;
   }
 
-  .quick-stats .stat-item {
-    width: 100%;
-    box-sizing: border-box;
+  .quick-stats .stat-icon {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+  }
+
+  .quick-stats .stat-number {
+    font-size: 14px;
+  }
+
+  .quick-stats .stat-label {
+    font-size: 10px;
   }
 
   .section-title {

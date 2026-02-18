@@ -43,7 +43,7 @@ const tabs = computed(() => {
     return [
       { name: 'console', label: '首页', icon: 'home-o', path: '/console' },
       { name: 'agents', label: '智能体', icon: 'apps-o', path: '/agents' },
-      { name: 'mine', label: '我的', icon: 'user-o', path: '/user/speakers' }
+      { name: 'speakers', label: '声纹', icon: 'user-o', path: '/user/speakers' }
     ]
   }
 })
