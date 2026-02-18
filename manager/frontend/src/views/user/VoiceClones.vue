@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>声音复刻</h2>
-        <p class="subtitle">支持 Minimax/CosyVoice，支持上传音频与浏览器录音（WAV）</p>
+        <p class="subtitle">支持 Minimax/CosyVoice/千问，支持上传音频与浏览器录音</p>
       </div>
       <el-button type="primary" @click="openCreateDialog">创建复刻音色</el-button>
     </div>
@@ -28,9 +28,35 @@
       <el-table-column label="创建时间" width="160" show-overflow-tooltip>
         <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
       </el-table-column>
-      <el-table-column label="编辑" width="90">
+      <el-table-column label="操作" width="320">
         <template #default="{ row }">
+          <el-button
+            link
+            type="primary"
+            :loading="previewUploadSubmittingID === row.id"
+            @click="previewUploadedAudio(row)"
+          >
+            原音频
+          </el-button>
+          <el-button
+            v-if="canPreviewClonedVoice(row)"
+            link
+            type="success"
+            :loading="previewClonedSubmittingID === row.id"
+            @click="previewClonedVoice(row)"
+          >
+            试听复刻
+          </el-button>
           <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
+          <el-button
+            v-if="canRetryClone(row)"
+            link
+            type="warning"
+            :loading="retrySubmittingID === row.id"
+            @click="retryClone(row)"
+          >
+            重新复刻
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -44,6 +70,15 @@
           <el-select v-model="form.tts_config_id" placeholder="请选择可复刻的TTS配置" style="width: 100%" @change="onConfigChange">
             <el-option v-for="cfg in cloneEnabledConfigs" :key="cfg.config_id" :label="`${cfg.name} (${cfg.config_id})`" :value="cfg.config_id" />
           </el-select>
+          <div v-if="isAliyunQwenProvider" class="help">提示：选择该复刻音色后，运行时会自动切换为模型 {{ qwenCloneRuntimeModel }}</div>
+          <el-alert
+            v-if="createChargeNotice.message"
+            class="clone-charge-alert"
+            :title="createChargeNotice.message"
+            :type="createChargeNotice.type"
+            :closable="false"
+            show-icon
+          />
         </el-form-item>
         <el-form-item label="音频来源">
           <el-radio-group v-model="form.source_type">
@@ -53,7 +88,7 @@
         </el-form-item>
 
         <el-form-item v-if="form.source_type === 'upload'" label="音频文件" required>
-          <input type="file" accept=".wav,audio/wav" @change="handleFileChange" />
+          <input type="file" :accept="uploadAcceptTypes" @change="handleFileChange" />
           <div class="help">{{ audioRequirementText }}</div>
         </el-form-item>
 
@@ -129,12 +164,40 @@
         <el-button type="primary" :loading="editSubmitting" @click="submitEditClone">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="previewPlayerVisible" title="音频试听" width="560px" @close="closePreviewPlayerDialog">
+      <div class="preview-player">
+        <div class="preview-player-meta">
+          <el-tag size="small" effect="plain">{{ previewPlayerSourceLabel || '-' }}</el-tag>
+          <span class="preview-player-name">{{ previewPlayerCloneLabel || '-' }}</span>
+        </div>
+        <audio
+          ref="previewPlayerRef"
+          class="preview-player-audio"
+          :src="previewPlayerURL"
+          controls
+          preload="metadata"
+          @play="onPreviewAudioPlay"
+          @pause="onPreviewAudioPause"
+          @ended="onPreviewAudioEnded"
+          @timeupdate="onPreviewAudioTimeUpdate"
+          @loadedmetadata="onPreviewAudioLoadedMetadata"
+        />
+        <div class="preview-player-actions">
+          <el-button type="primary" :disabled="!previewPlayerURL" @click="togglePreviewPlayback">
+            {{ previewPlayerPlaying ? '暂停' : '播放' }}
+          </el-button>
+          <el-button :disabled="!previewPlayerURL" @click="stopPreviewPlayback">停止</el-button>
+          <span class="preview-player-time">{{ formatPlayerTime(previewPlayerCurrentTime) }} / {{ formatPlayerTime(previewPlayerDuration) }}</span>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onBeforeUnmount, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, ref, onBeforeUnmount, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../../utils/api'
 
 const loading = ref(false)
@@ -146,11 +209,22 @@ const voiceClones = ref([])
 const currentAudios = ref([])
 const ttsConfigs = ref([])
 const MIN_AUDIO_DURATION_SECONDS = 10
-const cloneEnabledProviders = ['minimax', 'cosyvoice']
+const cloneEnabledProviders = ['minimax', 'cosyvoice', 'aliyun_qwen']
 const pendingStatuses = ['queued', 'processing']
 let clonePollingTimer = null
 const clonePollingBusy = ref(false)
 const editSubmitting = ref(false)
+const retrySubmittingID = ref(null)
+const previewUploadSubmittingID = ref(null)
+const previewClonedSubmittingID = ref(null)
+const previewPlayerVisible = ref(false)
+const previewPlayerRef = ref(null)
+const previewPlayerURL = ref('')
+const previewPlayerSourceLabel = ref('')
+const previewPlayerCloneLabel = ref('')
+const previewPlayerPlaying = ref(false)
+const previewPlayerCurrentTime = ref(0)
+const previewPlayerDuration = ref(0)
 
 const form = ref({
   name: '',
@@ -180,10 +254,51 @@ const capability = ref({ enabled: true, requires_transcript: false, min_text_len
 const cloneEnabledConfigs = computed(() => ttsConfigs.value.filter(item => cloneEnabledProviders.includes(item.provider)))
 const selectedCloneConfig = computed(() => cloneEnabledConfigs.value.find(item => item.config_id === form.value.tts_config_id) || null)
 const currentCloneProvider = computed(() => selectedCloneConfig.value?.provider || '')
+const normalizeProvider = (provider) => String(provider || '').trim().toLowerCase()
+const resolveChargeNotice = (provider, scene = 'create') => {
+  const normalized = normalizeProvider(provider)
+  if (normalized === 'aliyun_qwen') {
+    return {
+      message: scene === 'create'
+        ? '计费提醒：千问声音复刻按音色收费，1分钱/个音色。'
+        : '计费提醒：千问声音复刻按音色收费，1分钱/个音色，继续试听请确认。',
+      type: 'warning'
+    }
+  }
+  if (normalized === 'minimax') {
+    return {
+      message: scene === 'create'
+        ? '计费提醒：Minimax 复刻免费，首次试听该复刻音色收费 9.9 元。'
+        : '计费提醒：Minimax 复刻免费，但该复刻音色首次试听收费 9.9 元，继续试听请确认。',
+      type: 'warning'
+    }
+  }
+  if (normalized === 'cosyvoice') {
+    return {
+      message: scene === 'create'
+        ? '计费提醒：CosyVoice 声音复刻与试听免费。'
+        : '计费提醒：CosyVoice 声音复刻与试听免费，继续试听请确认。',
+      type: 'info'
+    }
+  }
+  return { message: '', type: 'info' }
+}
+const createChargeNotice = computed(() => resolveChargeNotice(currentCloneProvider.value, 'create'))
 const requiresMinimaxDuration = computed(() => currentCloneProvider.value === 'minimax')
+const isAliyunQwenProvider = computed(() => currentCloneProvider.value === 'aliyun_qwen')
+const qwenCloneRuntimeModel = 'qwen3-tts-vc-2026-01-22'
+const uploadAcceptTypes = computed(() => {
+  if (isAliyunQwenProvider.value) {
+    return '.wav,.mp3,.m4a,audio/wav,audio/wave,audio/mpeg,audio/mp4,audio/x-m4a'
+  }
+  return '.wav,audio/wav,audio/wave'
+})
 const audioRequirementText = computed(() => {
   if (requiresMinimaxDuration.value) {
     return `要求：WAV 格式，时长不少于 ${MIN_AUDIO_DURATION_SECONDS} 秒`
+  }
+  if (isAliyunQwenProvider.value) {
+    return '要求：WAV/MP3/M4A，建议 10-20 秒（最长 60 秒）'
   }
   return '要求：WAV 格式（CosyVoice 需填写音频对应文字）'
 })
@@ -233,6 +348,99 @@ const getCloneLastError = (row) => {
   if (row?.task_last_error) return row.task_last_error
   const meta = parseMetaJSON(row?.meta_json)
   return meta.last_error || '-'
+}
+const canRetryClone = (row) => normalizeCloneStatus(row) === 'failed'
+const canPreviewClonedVoice = (row) => normalizeCloneStatus(row) === 'active'
+const formatPlayerTime = (seconds) => {
+  const value = Number(seconds || 0)
+  if (!Number.isFinite(value) || value < 0) return '00:00'
+  const total = Math.floor(value)
+  const minute = String(Math.floor(total / 60)).padStart(2, '0')
+  const second = String(total % 60).padStart(2, '0')
+  return `${minute}:${second}`
+}
+const pauseAllOtherAudios = () => {
+  const current = previewPlayerRef.value
+  document.querySelectorAll('audio').forEach(audioEl => {
+    if (audioEl !== current) {
+      try {
+        audioEl.pause()
+      } catch (error) {
+        // ignore pause errors from detached nodes
+      }
+    }
+  })
+}
+const revokePreviewPlayerURL = () => {
+  if (!previewPlayerURL.value) return
+  URL.revokeObjectURL(previewPlayerURL.value)
+  previewPlayerURL.value = ''
+}
+const stopPreviewPlayback = () => {
+  const audioEl = previewPlayerRef.value
+  if (!audioEl) return
+  audioEl.pause()
+  audioEl.currentTime = 0
+  previewPlayerCurrentTime.value = 0
+}
+const closePreviewPlayerDialog = () => {
+  stopPreviewPlayback()
+  previewPlayerPlaying.value = false
+  previewPlayerCurrentTime.value = 0
+  previewPlayerDuration.value = 0
+  previewPlayerSourceLabel.value = ''
+  previewPlayerCloneLabel.value = ''
+  revokePreviewPlayerURL()
+}
+const setPreviewPlayerSource = async (blob, sourceLabel, cloneLabel) => {
+  stopPreviewPlayback()
+  revokePreviewPlayerURL()
+  previewPlayerURL.value = URL.createObjectURL(blob)
+  previewPlayerSourceLabel.value = sourceLabel
+  previewPlayerCloneLabel.value = cloneLabel
+  previewPlayerCurrentTime.value = 0
+  previewPlayerDuration.value = 0
+  previewPlayerVisible.value = true
+  await nextTick()
+  pauseAllOtherAudios()
+  const audioEl = previewPlayerRef.value
+  if (!audioEl) return
+  try {
+    await audioEl.play()
+  } catch (error) {
+    ElMessage.info('音频已加载，点击播放即可试听')
+  }
+}
+const togglePreviewPlayback = async () => {
+  const audioEl = previewPlayerRef.value
+  if (!audioEl) return
+  if (audioEl.paused) {
+    pauseAllOtherAudios()
+    await audioEl.play()
+    return
+  }
+  audioEl.pause()
+}
+const onPreviewAudioPlay = () => {
+  pauseAllOtherAudios()
+  previewPlayerPlaying.value = true
+}
+const onPreviewAudioPause = () => {
+  previewPlayerPlaying.value = false
+}
+const onPreviewAudioEnded = () => {
+  previewPlayerPlaying.value = false
+  previewPlayerCurrentTime.value = previewPlayerDuration.value
+}
+const onPreviewAudioTimeUpdate = () => {
+  const audioEl = previewPlayerRef.value
+  if (!audioEl) return
+  previewPlayerCurrentTime.value = Number(audioEl.currentTime || 0)
+}
+const onPreviewAudioLoadedMetadata = () => {
+  const audioEl = previewPlayerRef.value
+  if (!audioEl) return
+  previewPlayerDuration.value = Number(audioEl.duration || 0)
 }
 const hasPendingCloneTask = (row) => pendingStatuses.includes(normalizeCloneStatus(row))
 const clearClonePollingTimer = () => {
@@ -311,6 +519,22 @@ const isWavFile = (file) => {
   return type.includes('audio/wav') || type.includes('audio/wave') || name.endsWith('.wav')
 }
 
+const isSupportedAliyunQwenAudio = (file) => {
+  const name = (file?.name || '').toLowerCase()
+  const type = (file?.type || '').toLowerCase()
+  if (name.endsWith('.wav') || name.endsWith('.mp3') || name.endsWith('.m4a')) {
+    return true
+  }
+  return type.includes('audio/wav') || type.includes('audio/wave') || type.includes('audio/mpeg') || type.includes('audio/mp4') || type.includes('audio/x-m4a')
+}
+
+const isSupportedUploadAudio = (file) => {
+  if (isAliyunQwenProvider.value) {
+    return isSupportedAliyunQwenAudio(file)
+  }
+  return isWavFile(file)
+}
+
 const getAudioDurationSeconds = (blobOrFile) => new Promise((resolve, reject) => {
   const url = URL.createObjectURL(blobOrFile)
   const audio = new Audio()
@@ -338,11 +562,16 @@ const handleFileChange = async (event) => {
     form.value.audioDurationSec = 0
     return
   }
-  if (!isWavFile(file)) {
-    ElMessage.warning('仅支持 WAV 格式音频')
+  if (!isSupportedUploadAudio(file)) {
+    ElMessage.warning(isAliyunQwenProvider.value ? '仅支持 WAV/MP3/M4A 音频' : '仅支持 WAV 格式音频')
     form.value.audioFile = null
     form.value.audioDurationSec = 0
     event.target.value = ''
+    return
+  }
+  if (!requiresMinimaxDuration.value) {
+    form.value.audioFile = file
+    form.value.audioDurationSec = 0
     return
   }
   try {
@@ -471,6 +700,18 @@ const submitClone = async () => {
   if (!form.value.tts_config_id) {
     ElMessage.warning('请选择可复刻的 TTS 配置')
     return
+  }
+  const createNotice = resolveChargeNotice(currentCloneProvider.value, 'create')
+  if (createNotice.message) {
+    try {
+      await ElMessageBox.confirm(createNotice.message, '创建复刻提醒', {
+        confirmButtonText: '我已知晓，继续',
+        cancelButtonText: '取消',
+        type: createNotice.type
+      })
+    } catch (error) {
+      return
+    }
   }
   if (capability.value.requires_transcript && !form.value.transcript.trim()) {
     ElMessage.warning('该提供商要求填写音频对应文字')
@@ -601,10 +842,66 @@ const submitEditClone = async () => {
   }
 }
 
+const retryClone = async (clone) => {
+  if (!clone?.id || !canRetryClone(clone) || retrySubmittingID.value) return
+  retrySubmittingID.value = clone.id
+  try {
+    await api.post(`/user/voice-clones/${clone.id}/retry`)
+    ElMessage.success('已提交重新复刻任务，正在后台处理')
+    await loadVoiceClones(true)
+  } finally {
+    retrySubmittingID.value = null
+  }
+}
+
 const playAudio = async (audio) => {
   const response = await api.get(`/user/voice-clones/audios/${audio.id}/file`, { responseType: 'blob' })
-  const audioPlayer = new Audio(URL.createObjectURL(response.data))
-  await audioPlayer.play()
+  const label = String(audio?.file_name || '')
+  await setPreviewPlayerSource(response.data, '原音频', label || '复刻原始音频')
+}
+
+const previewUploadedAudio = async (clone) => {
+  if (!clone?.id || previewUploadSubmittingID.value) return
+  previewUploadSubmittingID.value = clone.id
+  try {
+    const res = await api.get(`/user/voice-clones/${clone.id}/audios`)
+    const audios = res.data.data || []
+    if (!audios.length) {
+      ElMessage.warning('未找到已上传音频')
+      return
+    }
+    const audioRes = await api.get(`/user/voice-clones/audios/${audios[0].id}/file`, { responseType: 'blob' })
+    await setPreviewPlayerSource(audioRes.data, '原音频', String(clone?.name || '复刻任务'))
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.error || '预览上传音频失败')
+  } finally {
+    previewUploadSubmittingID.value = null
+  }
+}
+
+const previewClonedVoice = async (clone) => {
+  if (!clone?.id || !canPreviewClonedVoice(clone) || previewClonedSubmittingID.value) return
+  const previewNotice = resolveChargeNotice(clone?.provider, 'preview')
+  if (previewNotice.message) {
+    try {
+      await ElMessageBox.confirm(previewNotice.message, '试听复刻提醒', {
+        confirmButtonText: '继续试听',
+        cancelButtonText: '取消',
+        type: previewNotice.type
+      })
+    } catch (error) {
+      return
+    }
+  }
+  previewClonedSubmittingID.value = clone.id
+  try {
+    const response = await api.get(`/user/voice-clones/${clone.id}/preview`, { responseType: 'blob' })
+    await setPreviewPlayerSource(response.data, '试听复刻', String(clone?.name || '复刻任务'))
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.error || '试听复刻音频失败')
+  } finally {
+    previewClonedSubmittingID.value = null
+  }
 }
 
 onMounted(async () => {
@@ -613,6 +910,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearClonePollingTimer()
+  closePreviewPlayerDialog()
 })
 </script>
 
@@ -636,6 +934,10 @@ onBeforeUnmount(() => {
   margin-top: 4px;
 }
 
+.clone-charge-alert {
+  margin-top: 8px;
+}
+
 .voice-clones-page :deep(.el-table .cell) {
   white-space: nowrap;
 }
@@ -653,5 +955,41 @@ onBeforeUnmount(() => {
   background-color: var(--el-fill-color-light);
   border-color: var(--el-border-color-light);
   color: var(--el-text-color-secondary);
+}
+
+.preview-player {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.preview-player-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.preview-player-name {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-player-audio {
+  width: 100%;
+}
+
+.preview-player-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.preview-player-time {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>
