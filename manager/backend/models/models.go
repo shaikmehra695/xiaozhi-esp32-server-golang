@@ -18,6 +18,20 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// APIToken 对外OpenAPI访问令牌（仅保存哈希，不保存明文）
+type APIToken struct {
+	ID          uint       `json:"id" gorm:"primarykey"`
+	UserID      uint       `json:"user_id" gorm:"not null;index"`
+	Name        string     `json:"name" gorm:"type:varchar(100);not null"`
+	TokenPrefix string     `json:"token_prefix" gorm:"type:varchar(20);index"`
+	TokenHash   string     `json:"-" gorm:"type:char(64);uniqueIndex;not null"`
+	IsActive    bool       `json:"is_active" gorm:"default:true;index"`
+	LastUsedAt  *time.Time `json:"last_used_at"`
+	ExpiresAt   *time.Time `json:"expires_at" gorm:"index"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
 // 设备模型
 type Device struct {
 	ID           uint       `json:"id" gorm:"primarykey"`
