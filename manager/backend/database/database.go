@@ -58,6 +58,7 @@ func Init(cfg config.DatabaseConfig) *gorm.DB {
 		&models.Device{},
 		&models.Agent{},
 		&models.KnowledgeBase{},
+		&models.KnowledgeBaseDocument{},
 		&models.AgentKnowledgeBase{},
 		&models.Config{},
 		&models.GlobalRole{},

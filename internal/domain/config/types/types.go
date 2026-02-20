@@ -40,15 +40,26 @@ type SpeakerGroupInfo struct {
 	Voice       *string  `json:"voice"`
 }
 
+type KnowledgeBaseRef struct {
+	ID                 uint     `json:"id"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description"`
+	Provider           string   `json:"provider"`
+	ExternalKBID       string   `json:"external_kb_id"`
+	RetrievalThreshold *float64 `json:"retrieval_threshold"`
+	Status             string   `json:"status"`
+}
+
 type UConfig struct {
-	SystemPrompt  string                      `json:"system_prompt"`
-	Asr           AsrConfig                   `json:"asr"`
-	Tts           TtsConfig                   `json:"tts"`
-	Llm           LlmConfig                   `json:"llm"`
-	Vad           VadConfig                   `json:"vad"`
-	Memory        MemoryConfig                `json:"memory"`
-	VoiceIdentify map[string]SpeakerGroupInfo `json:"voice_identify"` // 声纹识别配置
-	AgentId       string                      `json:"agent_id"`       //所属agent_id
+	SystemPrompt   string                      `json:"system_prompt"`
+	Asr            AsrConfig                   `json:"asr"`
+	Tts            TtsConfig                   `json:"tts"`
+	Llm            LlmConfig                   `json:"llm"`
+	Vad            VadConfig                   `json:"vad"`
+	Memory         MemoryConfig                `json:"memory"`
+	VoiceIdentify  map[string]SpeakerGroupInfo `json:"voice_identify"` // 声纹识别配置
+	KnowledgeBases []KnowledgeBaseRef          `json:"knowledge_bases"`
+	AgentId        string                      `json:"agent_id"` //所属agent_id
 }
 
 type TtsConfigItem struct {

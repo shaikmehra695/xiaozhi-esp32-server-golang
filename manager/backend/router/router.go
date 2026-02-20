@@ -73,7 +73,6 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		api.POST("/internal/pool/stats", poolStatsController.ReportPoolStats)                             // 上报资源池统计数据（内部服务接口）
 		api.POST("/internal/devices/:device_name/switch-role", adminController.SwitchDeviceRoleByNameInternal)
 		api.POST("/internal/devices/:device_name/restore-default-role", adminController.RestoreDeviceDefaultRoleInternal)
-		api.POST("/internal/knowledge/search", adminController.InternalKnowledgeSearch)
 
 		// 需要认证的路由
 		auth := api.Group("")
@@ -126,6 +125,14 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				user.GET("/knowledge-bases/:id", userController.GetKnowledgeBase)
 				user.PUT("/knowledge-bases/:id", userController.UpdateKnowledgeBase)
 				user.DELETE("/knowledge-bases/:id", userController.DeleteKnowledgeBase)
+				user.POST("/knowledge-bases/:id/sync", userController.SyncKnowledgeBase)
+				user.POST("/knowledge-bases/:id/test-search", userController.TestKnowledgeBaseSearch)
+				user.GET("/knowledge-bases/:id/documents", userController.GetKnowledgeBaseDocuments)
+				user.POST("/knowledge-bases/:id/documents", userController.CreateKnowledgeBaseDocument)
+				user.POST("/knowledge-bases/:id/documents/upload", userController.CreateKnowledgeBaseDocumentByUpload)
+				user.PUT("/knowledge-bases/:id/documents/:doc_id", userController.UpdateKnowledgeBaseDocument)
+				user.DELETE("/knowledge-bases/:id/documents/:doc_id", userController.DeleteKnowledgeBaseDocument)
+				user.POST("/knowledge-bases/:id/documents/:doc_id/sync", userController.SyncKnowledgeBaseDocument)
 
 				// 角色模板和音色选项
 				user.GET("/role-templates", userController.GetRoleTemplates)

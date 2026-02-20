@@ -761,7 +761,8 @@ onMounted(async () => {
   await Promise.all([
     loadLlmConfigs(),
     loadTtsConfigs(),
-    loadRoles()
+    loadRoles(),
+    loadKnowledgeBases()
   ])
   
   if (route.params.id) {

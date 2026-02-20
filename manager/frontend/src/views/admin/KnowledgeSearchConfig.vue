@@ -7,9 +7,9 @@
 
     <el-table :data="items" v-loading="loading" style="width: 100%">
       <el-table-column prop="id" label="ID" width="70" />
+      <el-table-column prop="provider" label="提供商" width="120" />
       <el-table-column prop="name" label="名称" width="160" />
       <el-table-column prop="config_id" label="配置ID" width="170" />
-      <el-table-column prop="provider" label="Provider" width="130" />
       <el-table-column label="配置摘要">
         <template #default="scope">{{ getConfigSummary(scope.row) }}</template>
       </el-table-column>
@@ -30,22 +30,60 @@
 
     <el-dialog v-model="dialogVisible" :title="editing ? '编辑配置' : '新增配置'" width="700px">
       <el-form :model="form" label-width="100px">
-        <el-form-item label="名称"><el-input v-model="form.name" /></el-form-item>
-        <el-form-item label="配置ID"><el-input v-model="form.config_id" /></el-form-item>
-        <el-form-item label="Provider">
-          <el-select v-model="form.provider" style="width: 100%">
+        <el-form-item label="提供商">
+          <el-select v-model="form.provider" style="width: 100%" @change="onProviderChange">
             <el-option value="dify" label="dify" />
-            <el-option value="generic" label="generic" />
+            <el-option value="ragflow" label="ragflow" />
           </el-select>
         </el-form-item>
+        <el-form-item label="名称"><el-input v-model="form.name" /></el-form-item>
+        <el-form-item label="配置ID"><el-input v-model="form.config_id" /></el-form-item>
         <template v-if="form.provider === 'dify'">
-          <el-form-item label="Base URL"><el-input v-model="form.base_url" placeholder="https://api.dify.ai" /></el-form-item>
+          <el-form-item label="Base URL"><el-input v-model="form.base_url" :placeholder="DEFAULT_DIFY_BASE_URL" /></el-form-item>
           <el-form-item label="API Key"><el-input v-model="form.api_key" type="password" show-password /></el-form-item>
           <el-form-item label="阈值"><el-input-number v-model="form.score_threshold" :min="0" :max="1" :step="0.01" :precision="2" style="width:100%" /></el-form-item>
+          <el-form-item label="Dataset权限">
+            <el-select v-model="form.dataset_permission" style="width: 100%" placeholder="请选择">
+              <el-option value="only_me" label="only_me（仅自己可见）" />
+              <el-option value="all_team_members" label="all_team_members（团队可见）" />
+              <el-option value="partial_members" label="partial_members（部分成员可见）" />
+            </el-select>
+            <div style="color:#909399; font-size:12px; line-height:1.4; margin-top:6px;">
+              控制外部知识库平台中该 dataset 的可见范围，不影响本系统用户权限。
+            </div>
+          </el-form-item>
+          <el-form-item label="Dataset提供方"><el-input v-model="form.dataset_provider" placeholder="vendor" /></el-form-item>
+          <el-form-item label="索引策略">
+            <el-select v-model="form.dataset_indexing_technique" style="width: 100%" placeholder="请选择">
+              <el-option value="high_quality" label="high_quality（高质量）" />
+              <el-option value="economy" label="economy（经济）" />
+            </el-select>
+          </el-form-item>
         </template>
-        <template v-else>
-          <el-form-item label="Endpoint"><el-input v-model="form.endpoint" placeholder="外部SaaS检索接口地址" /></el-form-item>
+        <template v-else-if="form.provider === 'ragflow'">
+          <el-form-item label="Base URL"><el-input v-model="form.base_url" :placeholder="DEFAULT_RAGFLOW_BASE_URL" /></el-form-item>
           <el-form-item label="API Key"><el-input v-model="form.api_key" type="password" show-password /></el-form-item>
+          <el-form-item label="相似度阈值"><el-input-number v-model="form.similarity_threshold" :min="0" :max="1" :step="0.01" :precision="2" style="width:100%" /></el-form-item>
+          <el-form-item label="向量权重"><el-input-number v-model="form.vector_similarity_weight" :min="0" :max="1" :step="0.01" :precision="2" style="width:100%" /></el-form-item>
+          <el-form-item label="启用关键词"><el-switch v-model="form.keyword" /></el-form-item>
+          <el-form-item label="启用高亮"><el-switch v-model="form.highlight" /></el-form-item>
+          <el-form-item label="Dataset权限">
+            <el-select v-model="form.dataset_permission" style="width: 100%" placeholder="请选择">
+              <el-option value="me" label="me（仅自己可见）" />
+              <el-option value="team" label="team（团队可见）" />
+            </el-select>
+            <div style="color:#909399; font-size:12px; line-height:1.4; margin-top:6px;">
+              控制外部知识库平台中该 dataset 的可见范围，不影响本系统用户权限。
+            </div>
+          </el-form-item>
+          <el-form-item label="分块策略">
+            <el-select v-model="form.dataset_chunk_method" style="width: 100%" placeholder="请选择">
+              <el-option value="naive" label="naive" />
+              <el-option value="qa" label="qa" />
+              <el-option value="table" label="table" />
+              <el-option value="paper" label="paper" />
+            </el-select>
+          </el-form-item>
         </template>
         <el-form-item label="启用"><el-switch v-model="form.enabled" /></el-form-item>
         <el-form-item label="默认"><el-switch v-model="form.is_default" /></el-form-item>
@@ -69,14 +107,26 @@ const dialogVisible = ref(false)
 const editing = ref(false)
 const currentId = ref(null)
 
+const DEFAULT_DIFY_BASE_URL = 'https://api.dify.ai/v1'
+const DEFAULT_RAGFLOW_BASE_URL = 'http://127.0.0.1'
+const DEFAULT_DIFY_SCORE_THRESHOLD = 0.2
+const DEFAULT_RAGFLOW_SIMILARITY_THRESHOLD = 0.2
+
 const form = reactive({
   name: '',
   config_id: '',
   provider: 'dify',
-  endpoint: '',
-  base_url: '',
+  base_url: DEFAULT_DIFY_BASE_URL,
   api_key: '',
-  score_threshold: 0,
+  score_threshold: DEFAULT_DIFY_SCORE_THRESHOLD,
+  dataset_permission: '',
+  dataset_provider: '',
+  dataset_indexing_technique: '',
+  similarity_threshold: DEFAULT_RAGFLOW_SIMILARITY_THRESHOLD,
+  vector_similarity_weight: 0.3,
+  keyword: false,
+  highlight: false,
+  dataset_chunk_method: '',
   enabled: true,
   is_default: false
 })
@@ -91,19 +141,54 @@ const loadData = async () => {
   }
 }
 
+const applyProviderDefaults = (provider, force = false) => {
+  if (provider === 'dify') {
+    if (force || !form.base_url || form.base_url === DEFAULT_RAGFLOW_BASE_URL) {
+      form.base_url = DEFAULT_DIFY_BASE_URL
+    }
+    if (force || Number.isNaN(Number(form.score_threshold))) {
+      form.score_threshold = DEFAULT_DIFY_SCORE_THRESHOLD
+    }
+    return
+  }
+  if (provider === 'ragflow') {
+    if (force || !form.base_url || form.base_url === DEFAULT_DIFY_BASE_URL) {
+      form.base_url = DEFAULT_RAGFLOW_BASE_URL
+    }
+    if (force || Number.isNaN(Number(form.similarity_threshold))) {
+      form.similarity_threshold = DEFAULT_RAGFLOW_SIMILARITY_THRESHOLD
+    }
+  }
+}
+
+const onProviderChange = (provider) => {
+  applyProviderDefaults(provider, true)
+}
+
 const openDialog = (row = null) => {
   editing.value = !!row
   currentId.value = row?.id || null
   const data = row?.json_data ? JSON.parse(row.json_data || '{}') : {}
+  const provider = row?.provider || 'dify'
   form.name = row?.name || ''
   form.config_id = row?.config_id || ''
-  form.provider = row?.provider || ''
-  form.endpoint = data.endpoint || ''
-  form.base_url = data.base_url || ''
+  form.provider = provider
+  form.base_url = data.base_url || (provider === 'ragflow' ? DEFAULT_RAGFLOW_BASE_URL : DEFAULT_DIFY_BASE_URL)
   form.api_key = data.api_key || ''
-  form.score_threshold = Number(data.score_threshold || 0)
+  form.score_threshold = Number(data.score_threshold ?? DEFAULT_DIFY_SCORE_THRESHOLD)
+  form.dataset_permission = data.dataset_permission || ''
+  form.dataset_provider = data.dataset_provider || ''
+  form.dataset_indexing_technique = data.dataset_indexing_technique || ''
+  form.similarity_threshold = Number(data.similarity_threshold ?? DEFAULT_RAGFLOW_SIMILARITY_THRESHOLD)
+  form.vector_similarity_weight = Number(data.vector_similarity_weight ?? 0.3)
+  form.keyword = !!data.keyword
+  form.highlight = !!data.highlight
+  form.dataset_chunk_method = data.dataset_chunk_method || ''
   form.enabled = row?.enabled ?? true
   form.is_default = row?.is_default ?? false
+  if (!row) {
+    applyProviderDefaults(provider, true)
+  }
   dialogVisible.value = true
 }
 
@@ -118,10 +203,19 @@ const submit = async () => {
     json_data: JSON.stringify(form.provider === 'dify' ? {
       base_url: form.base_url,
       api_key: form.api_key,
-      score_threshold: form.score_threshold
+      score_threshold: form.score_threshold,
+      dataset_permission: form.dataset_permission,
+      dataset_provider: form.dataset_provider,
+      dataset_indexing_technique: form.dataset_indexing_technique
     } : {
-      endpoint: form.endpoint,
-      api_key: form.api_key
+      base_url: form.base_url,
+      api_key: form.api_key,
+      similarity_threshold: form.similarity_threshold,
+      vector_similarity_weight: form.vector_similarity_weight,
+      keyword: form.keyword,
+      highlight: form.highlight,
+      dataset_permission: form.dataset_permission,
+      dataset_chunk_method: form.dataset_chunk_method
     })
   }
   try {
@@ -155,9 +249,12 @@ const remove = async (id) => {
 const getConfigSummary = (row) => {
   const data = row?.json_data ? JSON.parse(row.json_data || '{}') : {}
   if (row.provider === 'dify') {
-    return `base_url: ${data.base_url || '-'}; score_threshold: ${data.score_threshold ?? 0}`
+    return `base_url: ${data.base_url || DEFAULT_DIFY_BASE_URL}; score_threshold: ${data.score_threshold ?? DEFAULT_DIFY_SCORE_THRESHOLD}`
   }
-  return `endpoint: ${data.endpoint || '-'}`
+  if (row.provider === 'ragflow') {
+    return `base_url: ${data.base_url || DEFAULT_RAGFLOW_BASE_URL}; similarity_threshold: ${data.similarity_threshold ?? DEFAULT_RAGFLOW_SIMILARITY_THRESHOLD}`
+  }
+  return '-'
 }
 
 onMounted(loadData)

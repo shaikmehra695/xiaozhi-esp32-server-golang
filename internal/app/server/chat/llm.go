@@ -14,7 +14,7 @@ import (
 	"time"
 
 	. "xiaozhi-esp32-server-golang/internal/data/client"
-	user_config "xiaozhi-esp32-server-golang/internal/domain/config"
+	config_types "xiaozhi-esp32-server-golang/internal/domain/config/types"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
 	"xiaozhi-esp32-server-golang/internal/domain/llm"
 	llm_common "xiaozhi-esp32-server-golang/internal/domain/llm/common"
@@ -28,7 +28,6 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	mcp_go "github.com/mark3labs/mcp-go/mcp"
-	"github.com/spf13/viper"
 )
 
 const (
@@ -1132,35 +1131,7 @@ func (l *LLMManager) GetMessages(ctx context.Context, userMessage *schema.Messag
 		}
 	}
 
-	// search knowledge（由配置中心统一转发provider API）
-	if userMessage != nil {
-		providerType := viper.GetString("config_provider.type")
-		configProvider, err := user_config.GetProvider(providerType)
-		if err != nil {
-			log.Warnf("获取配置Provider失败，跳过知识库检索: %v", err)
-		} else {
-			knowledgeHits, err := configProvider.SearchKnowledge(ctx, l.clientState.DeviceID, l.clientState.AgentID, userMessage.Content, 5)
-			if err != nil {
-				log.Warnf("知识库检索失败，降级继续LLM: %v", err)
-			} else if len(knowledgeHits) > 0 {
-				var kbBuilder strings.Builder
-				kbBuilder.WriteString("\n知识库检索结果（仅在相关时参考）：\n")
-				for i, hit := range knowledgeHits {
-					content := strings.TrimSpace(hit.Content)
-					if content == "" {
-						continue
-					}
-					if len(content) > 500 {
-						content = content[:500] + "..."
-					}
-					kbBuilder.WriteString(fmt.Sprintf("%d. %s\n", i+1, content))
-				}
-				if kbBuilder.Len() > len("\n知识库检索结果（仅在相关时参考）：\n") {
-					systemPrompt += kbBuilder.String()
-				}
-			}
-		}
-	}
+	systemPrompt += buildKnowledgeSearchRoutingPolicy(l.clientState.DeviceConfig.KnowledgeBases)
 
 	retMessage := make([]*schema.Message, 0)
 	retMessage = append(retMessage, &schema.Message{
@@ -1196,6 +1167,54 @@ func (l *LLMManager) GetMessages(ctx context.Context, userMessage *schema.Messag
 		}
 	}
 	return retMessage
+}
+
+func buildKnowledgeSearchRoutingPolicy(knowledgeBases []config_types.KnowledgeBaseRef) string {
+	if len(knowledgeBases) == 0 {
+		return ""
+	}
+
+	availableKBs := make([]string, 0, len(knowledgeBases))
+	for _, kb := range knowledgeBases {
+		if strings.EqualFold(strings.TrimSpace(kb.Status), "inactive") {
+			continue
+		}
+		if strings.TrimSpace(kb.ExternalKBID) == "" {
+			continue
+		}
+		name := strings.TrimSpace(kb.Name)
+		if name == "" {
+			name = strings.TrimSpace(kb.ExternalKBID)
+		}
+		if name == "" {
+			continue
+		}
+		if kb.ID == 0 {
+			continue
+		}
+		desc := strings.TrimSpace(kb.Description)
+		if desc == "" {
+			desc = "无描述"
+		}
+		availableKBs = append(availableKBs, fmt.Sprintf("%d: 名称=%s; 描述=%s", kb.ID, name, desc))
+		if len(availableKBs) >= 8 {
+			break
+		}
+	}
+	if len(availableKBs) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(
+		"\n知识库检索规则（工具: search_knowledge）:\n可用知识库(id:名称+描述): %s\n"+
+			"1. 触发条件: 用户询问事实、流程、参数、规则、定义、条款、对比等需要文档依据的问题，或用户明确要求“按知识库/文档回答”。\n"+
+			"2. 不触发条件: 闲聊问候、情绪陪伴、纯创作、纯主观建议。\n"+
+			"3. 调用方式: 每轮最多调用1次，query提炼用户问题核心关键词，top_k默认5；如可判断具体知识库，请传 knowledge_base_ids（可多个）。\n"+
+			"4. 选择规则: 只传与当前问题语义最相关的知识库ID；若无法判断可不传 knowledge_base_ids。\n"+
+			"5. 信息不足处理: 若证据不足，不得编造，直接请用户补充更具体关键词。\n"+
+			"6. 输出要求: 回答时禁止提及“知识库”“检索”“MCP”“工具调用”“命中结果”等来源或过程信息。",
+		strings.Join(availableKBs, "、"),
+	)
 }
 
 func trimTrailingUserMessages(messages []*schema.Message) []*schema.Message {
