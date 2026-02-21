@@ -96,7 +96,7 @@ const providerTypeMap = {
 const isOpenAIOrOllama = computed(() => props.model?.type === 'openai' || props.model?.type === 'ollama')
 const isDify = computed(() => props.model?.type === 'dify')
 const isCoze = computed(() => props.model?.type === 'coze')
-const showBaseURL = computed(() => props.model?.type !== 'coze')
+const showBaseURL = computed(() => true)
 
 watch(() => props.model?.provider, (value) => {
   if (!value || !props.model) {
@@ -179,6 +179,7 @@ function getJsonData() {
     const config = {
       type: 'coze',
       api_key: m.api_key,
+      base_url: m.base_url,
       bot_id: m.bot_id,
       user_prefix: m.user_prefix,
       connector_id: m.connector_id

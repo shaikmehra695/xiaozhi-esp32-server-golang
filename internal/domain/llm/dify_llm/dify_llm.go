@@ -42,13 +42,17 @@ type DifyLLMProvider struct {
 	baseURL    string
 	userPrefix string
 	httpClient *http.Client
+
+	conversationMu  sync.RWMutex
+	conversationIDs map[string]string
 }
 
 type difyChatRequest struct {
-	Inputs       map[string]interface{} `json:"inputs"`
-	Query        string                 `json:"query"`
-	ResponseMode string                 `json:"response_mode"`
-	User         string                 `json:"user"`
+	Inputs         map[string]interface{} `json:"inputs"`
+	Query          string                 `json:"query"`
+	ResponseMode   string                 `json:"response_mode"`
+	User           string                 `json:"user"`
+	ConversationID string                 `json:"conversation_id,omitempty"`
 }
 
 type difyStopRequest struct {
@@ -110,10 +114,11 @@ func NewDifyLLMProvider(config map[string]interface{}) (*DifyLLMProvider, error)
 	}
 
 	return &DifyLLMProvider{
-		apiKey:     apiKey,
-		baseURL:    baseURL,
-		userPrefix: userPrefix,
-		httpClient: getHTTPClient(),
+		apiKey:          apiKey,
+		baseURL:         baseURL,
+		userPrefix:      userPrefix,
+		httpClient:      getHTTPClient(),
+		conversationIDs: make(map[string]string),
 	}, nil
 }
 
@@ -123,18 +128,22 @@ func (p *DifyLLMProvider) ResponseWithContext(ctx context.Context, sessionID str
 	go func() {
 		defer close(out)
 
-		query := llm_common.BuildPromptFromDialogue(dialogue)
+		query := buildDifyQuery(dialogue)
 		if strings.TrimSpace(query) == "" {
 			sendLLMError(out, fmt.Errorf("dify query不能为空"))
 			return
 		}
 
 		userID := llm_common.BuildStableUserID(p.userPrefix, sessionID)
+		conversationID := p.getConversationID(sessionID)
 		reqBody := difyChatRequest{
 			Inputs:       map[string]interface{}{},
 			Query:        query,
 			ResponseMode: "streaming",
 			User:         userID,
+		}
+		if conversationID != "" {
+			reqBody.ConversationID = conversationID
 		}
 		bodyBytes, err := json.Marshal(reqBody)
 		if err != nil {
@@ -191,6 +200,9 @@ func (p *DifyLLMProvider) ResponseWithContext(ctx context.Context, sessionID str
 
 			if streamEvent.TaskID != "" {
 				taskID = streamEvent.TaskID
+			}
+			if streamEvent.ConversationID != "" {
+				p.setConversationID(sessionID, streamEvent.ConversationID)
 			}
 
 			switch streamEvent.Event {
@@ -254,8 +266,75 @@ func (p *DifyLLMProvider) stopTask(taskID, userID string) {
 	defer resp.Body.Close()
 }
 
+func (p *DifyLLMProvider) getConversationID(sessionID string) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	p.conversationMu.RLock()
+	defer p.conversationMu.RUnlock()
+	return p.conversationIDs[sessionID]
+}
+
+func (p *DifyLLMProvider) setConversationID(sessionID, conversationID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	conversationID = strings.TrimSpace(conversationID)
+	if sessionID == "" || conversationID == "" {
+		return
+	}
+	p.conversationMu.Lock()
+	defer p.conversationMu.Unlock()
+	p.conversationIDs[sessionID] = conversationID
+}
+
 func (p *DifyLLMProvider) ResponseWithVllm(_ context.Context, _ []byte, _ string, _ string) (string, error) {
 	return "", fmt.Errorf("dify provider不支持vllm能力")
+}
+
+func buildDifyQuery(dialogue []*schema.Message) string {
+	if len(dialogue) == 0 {
+		return ""
+	}
+
+	// Dify会话模式下仅发送当前轮输入，不在query中拼接历史。
+	for i := len(dialogue) - 1; i >= 0; i-- {
+		msg := dialogue[i]
+		if msg == nil || msg.Role != schema.User {
+			continue
+		}
+		if text := extractDifyMessageText(msg); text != "" {
+			return text
+		}
+	}
+
+	// 兜底：若不存在user消息，使用最后一条可提取文本的消息。
+	for i := len(dialogue) - 1; i >= 0; i-- {
+		if text := extractDifyMessageText(dialogue[i]); text != "" {
+			return text
+		}
+	}
+
+	return ""
+}
+
+func extractDifyMessageText(msg *schema.Message) string {
+	if msg == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(msg.Content); text != "" {
+		return text
+	}
+	if len(msg.MultiContent) > 0 {
+		parts := make([]string, 0, len(msg.MultiContent))
+		for _, part := range msg.MultiContent {
+			if text := strings.TrimSpace(part.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+	}
+	return ""
 }
 
 func (p *DifyLLMProvider) GetModelInfo() map[string]interface{} {

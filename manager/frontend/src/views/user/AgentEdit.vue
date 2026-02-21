@@ -157,27 +157,6 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">关联知识库</label>
-            <el-select
-              v-model="form.knowledge_base_ids"
-              multiple
-              collapse-tags
-              collapse-tags-tooltip
-              placeholder="请选择要关联的知识库（可多选）"
-              size="large"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="kb in knowledgeBases"
-                :key="kb.id"
-                :label="kb.name"
-                :value="kb.id"
-              />
-            </el-select>
-            <div class="form-help">支持多库关联。知识库检索失败时会自动降级为普通LLM对话。</div>
-          </div>
-
           <div class="form-group" v-if="form.tts_config_id">
             <label class="form-label">音色</label>
             <el-select 
@@ -206,6 +185,27 @@
             <div class="form-help">
               当前TTS配置: {{ getCurrentTtsConfigName() }}，可以搜索音色名称或值，也可以手动输入自定义音色值。
             </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">关联知识库</label>
+            <el-select
+              v-model="form.knowledge_base_ids"
+              multiple
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="请选择要关联的知识库（可多选）"
+              size="large"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="kb in knowledgeBases"
+                :key="kb.id"
+                :label="kb.name"
+                :value="kb.id"
+              />
+            </el-select>
+            <div class="form-help">支持多库关联。知识库检索失败时会自动降级为普通LLM对话。</div>
           </div>
 
           <div class="form-group">

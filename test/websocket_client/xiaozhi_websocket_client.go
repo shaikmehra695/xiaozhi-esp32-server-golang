@@ -98,6 +98,7 @@ var (
 var speectText = "你好测试"
 var clientId = "e4b0c442-98fc-4e1b-8c3d-6a5b6a5b6a6d"
 var token = "test-token"
+var ttsProviderName = "edge_offline"
 
 // serverVisionURL 从服务器 MCP initialize 消息中解析得到的 vision 接口地址
 var (
@@ -142,6 +143,7 @@ func main() {
 	audioFile := flag.String("audio", "", "音频文件路径")
 	text := flag.String("text", "你好测试", "文本")
 	modeFlag := flag.String("mode", "auto", "模式")
+	ttsProviderFlag := flag.String("tts_provider", "edge_offline", "TTS provider (edge_offline|edge|cosyvoice)")
 	sampleRate := flag.Int("sample_rate", 16000, "sampleRate")
 	frameDurationsMs := flag.Int("frame_ms", 20, "frame duration ms")
 	addMcpFlag := flag.Bool("mcp", false, "是否启用mcp")
@@ -155,6 +157,7 @@ func main() {
 	SampleRate = *sampleRate
 	FrameDurationMs = *frameDurationsMs
 	mode = *modeFlag
+	ttsProviderName = strings.TrimSpace(*ttsProviderFlag)
 	addMcp = *addMcpFlag
 
 	// 运行客户端
@@ -567,7 +570,6 @@ func sendTextToSpeech(conn *websocket.Conn, deviceID string) error {
 		"audio_format":   "mp3",
 		"instruct_text":  "你好",
 	}
-	_ = cosyVoiceConfig
 	edgeConfig := map[string]interface{}{
 		"voice":           "zh-CN-XiaoxiaoNeural",
 		"rate":            "+0%",
@@ -581,17 +583,23 @@ func sendTextToSpeech(conn *websocket.Conn, deviceID string) error {
 		"timeout":           30.0,
 		"handshake_timeout": 10.0,
 	}
-	_ = edgeConfig
-	_ = edgeOfflineConfig
-	//调用tts服务生成语音（可改为 "edge_offline", edgeOfflineConfig 使用本地 TTS 服务）
-	ttsProvider, err := tts.GetTTSProvider("edge_offline", edgeOfflineConfig)
-	if err != nil {
-		return fmt.Errorf("获取tts服务失败: %v", err)
+	providerName := strings.TrimSpace(ttsProviderName)
+	var providerConfig map[string]interface{}
+	switch providerName {
+	case "edge_offline":
+		providerConfig = edgeOfflineConfig
+	case "edge":
+		providerConfig = edgeConfig
+	case "cosyvoice":
+		providerConfig = cosyVoiceConfig
+	default:
+		return fmt.Errorf("不支持的tts provider: %s, 可选: edge_offline|edge|cosyvoice", providerName)
 	}
-	/*ttsProvider, err := tts.GetTTSProvider("cosyvoice", cosyVoiceConfig)
+	fmt.Printf("使用 TTS provider: %s\n", providerName)
+	ttsProvider, err := tts.GetTTSProvider(providerName, providerConfig)
 	if err != nil {
-		return fmt.Errorf("获取tts服务失败: %v", err)
-	}*/
+		return fmt.Errorf("获取tts服务失败(provider=%s): %v", providerName, err)
+	}
 
 	/*
 		audioData, err := ttsProvider.TextToSpeech(context.Background(), "你叫什么名字?")

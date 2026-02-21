@@ -26,7 +26,6 @@ const (
 	defaultUserPrefix   = "xiaozhi"
 	llmExtraErrorKey    = "error"
 	streamCreatePath    = "/v3/chat"
-	streamCreatePathV2  = "/v3/chats"
 	maxIdleConns        = 200
 	maxIdleConnsPerHost = 50
 	idleConnTimeout     = 90 * time.Second
@@ -46,6 +45,9 @@ type CozeLLMProvider struct {
 	userPrefix  string
 	connectorID string
 	httpClient  *http.Client
+
+	conversationMu  sync.RWMutex
+	conversationIDs map[string]string
 }
 
 type cozeMessage struct {
@@ -59,16 +61,18 @@ type cozeCreateChatRequest struct {
 	BotID              string         `json:"bot_id"`
 	UserID             string         `json:"user_id"`
 	Stream             bool           `json:"stream"`
+	ConversationID     string         `json:"conversation_id,omitempty"`
 	ConnectorID        string         `json:"connector_id,omitempty"`
 	AdditionalMessages []*cozeMessage `json:"additional_messages,omitempty"`
 }
 
 type cozeStreamEvent struct {
-	Event   string            `json:"event"`
-	Message *cozeEventMessage `json:"message,omitempty"`
-	Chat    *cozeEventChat    `json:"chat,omitempty"`
-	Code    int               `json:"code,omitempty"`
-	Msg     string            `json:"msg,omitempty"`
+	Event          string            `json:"event"`
+	Message        *cozeEventMessage `json:"message,omitempty"`
+	Chat           *cozeEventChat    `json:"chat,omitempty"`
+	Code           int               `json:"code,omitempty"`
+	Msg            string            `json:"msg,omitempty"`
+	ConversationID string            `json:"conversation_id,omitempty"`
 }
 
 type cozeEventMessage struct {
@@ -76,7 +80,8 @@ type cozeEventMessage struct {
 }
 
 type cozeEventChat struct {
-	LastError *cozeLastError `json:"last_error,omitempty"`
+	LastError      *cozeLastError `json:"last_error,omitempty"`
+	ConversationID string         `json:"conversation_id,omitempty"`
 }
 
 type cozeLastError struct {
@@ -107,7 +112,7 @@ func getHTTPClient() *http.Client {
 
 func NewCozeLLMProvider(config map[string]interface{}) (*CozeLLMProvider, error) {
 	apiKey, _ := config["api_key"].(string)
-	apiKey = strings.TrimSpace(apiKey)
+	apiKey = normalizeAPIToken(apiKey)
 	if apiKey == "" {
 		return nil, fmt.Errorf("coze api_key不能为空")
 	}
@@ -138,12 +143,13 @@ func NewCozeLLMProvider(config map[string]interface{}) (*CozeLLMProvider, error)
 	}
 
 	return &CozeLLMProvider{
-		apiKey:      apiKey,
-		baseURL:     baseURL,
-		botID:       botID,
-		userPrefix:  userPrefix,
-		connectorID: connectorID,
-		httpClient:  getHTTPClient(),
+		apiKey:          apiKey,
+		baseURL:         baseURL,
+		botID:           botID,
+		userPrefix:      userPrefix,
+		connectorID:     connectorID,
+		httpClient:      getHTTPClient(),
+		conversationIDs: make(map[string]string),
 	}, nil
 }
 
@@ -153,17 +159,19 @@ func (p *CozeLLMProvider) ResponseWithContext(ctx context.Context, sessionID str
 	go func() {
 		defer close(out)
 
-		query := llm_common.BuildPromptFromDialogue(dialogue)
+		query := buildCozeQuery(dialogue)
 		if strings.TrimSpace(query) == "" {
 			sendLLMError(out, fmt.Errorf("coze query不能为空"))
 			return
 		}
 
+		conversationID := p.getConversationID(sessionID)
 		reqBody := cozeCreateChatRequest{
-			BotID:       p.botID,
-			UserID:      llm_common.BuildStableUserID(p.userPrefix, sessionID),
-			Stream:      true,
-			ConnectorID: p.connectorID,
+			BotID:          p.botID,
+			UserID:         llm_common.BuildStableUserID(p.userPrefix, sessionID),
+			Stream:         true,
+			ConversationID: conversationID,
+			ConnectorID:    p.connectorID,
 			AdditionalMessages: []*cozeMessage{
 				{
 					Role:        "user",
@@ -173,16 +181,27 @@ func (p *CozeLLMProvider) ResponseWithContext(ctx context.Context, sessionID str
 				},
 			},
 		}
+		reqBody.Stream = true
 
-		bodyBytes, err := json.Marshal(reqBody)
+		requestBodies, err := buildCozeRequestBodies(reqBody)
 		if err != nil {
 			sendLLMError(out, err)
 			return
 		}
 
-		resp, err := p.openStreamRequest(ctx, bodyBytes)
-		if err != nil {
-			sendLLMError(out, err)
+		var resp *http.Response
+		var openErr error
+		for i, currentBody := range requestBodies {
+			resp, openErr = p.openStreamRequest(ctx, currentBody)
+			if openErr == nil {
+				break
+			}
+			if i == 0 && len(requestBodies) > 1 {
+				log.Warnf("coze首个请求失败，尝试回退重试: %v", openErr)
+			}
+		}
+		if openErr != nil {
+			sendLLMError(out, openErr)
 			return
 		}
 		defer resp.Body.Close()
@@ -193,46 +212,70 @@ func (p *CozeLLMProvider) ResponseWithContext(ctx context.Context, sessionID str
 				if ctx.Err() != nil {
 					return
 				}
+				if seenDelta && strings.Contains(strings.ToLower(eventErr.Error()), "unexpected end of input") {
+					// 部分 Coze 实例在最后一个事件后会直接断开连接，容忍该场景。
+					return
+				}
 				sendLLMError(out, fmt.Errorf("coze流读取失败: %w", eventErr))
 				return
 			}
 
-			data := strings.TrimSpace(event.Data)
+			eventType := strings.TrimSpace(event.Type)
+			if strings.EqualFold(eventType, "done") {
+				return
+			}
+
+			data := normalizeCozeStreamData(event.Data)
 			if data == "" {
 				continue
 			}
-			if data == "[DONE]" {
+			if isCozeDoneMarker(data) {
 				return
 			}
 
 			var streamEvent cozeStreamEvent
-			if err := json.Unmarshal([]byte(data), &streamEvent); err != nil {
-				log.Warnf("解析coze流事件失败: %v, data=%s", err, previewString(data, 256))
-				continue
+			_ = json.Unmarshal([]byte(data), &streamEvent)
+			if cid := extractCozeConversationID(streamEvent, data); cid != "" {
+				p.setConversationID(sessionID, cid)
+			}
+			if eventType == "" {
+				eventType = strings.TrimSpace(streamEvent.Event)
 			}
 
-			switch streamEvent.Event {
+			switch eventType {
 			case "conversation.message.delta":
-				if streamEvent.Message != nil && streamEvent.Message.Content != "" {
+				content := extractCozeMessageContent(data, streamEvent)
+				if content != "" {
 					seenDelta = true
 					out <- &schema.Message{
 						Role:    schema.Assistant,
-						Content: streamEvent.Message.Content,
+						Content: content,
 					}
 				}
 			case "conversation.message.completed":
-				// Some models may only emit completed messages without deltas.
-				if !seenDelta && streamEvent.Message != nil && streamEvent.Message.Content != "" {
+				content := extractCozeMessageContent(data, streamEvent)
+				if content != "" && !seenDelta {
 					out <- &schema.Message{
 						Role:    schema.Assistant,
-						Content: streamEvent.Message.Content,
+						Content: content,
 					}
 				}
+				seenDelta = seenDelta || content != ""
 			case "conversation.chat.completed", "done":
 				return
 			case "conversation.chat.failed", "error":
-				sendLLMError(out, errors.New(extractCozeError(streamEvent)))
+				sendLLMError(out, errors.New(extractCozeError(streamEvent, data)))
 				return
+			default:
+				// Fallback for payloads where event name is not stable but content exists.
+				content := extractCozeMessageContent(data, streamEvent)
+				if content != "" {
+					seenDelta = true
+					out <- &schema.Message{
+						Role:    schema.Assistant,
+						Content: content,
+					}
+				}
 			}
 		}
 	}()
@@ -241,52 +284,334 @@ func (p *CozeLLMProvider) ResponseWithContext(ctx context.Context, sessionID str
 }
 
 func (p *CozeLLMProvider) openStreamRequest(ctx context.Context, bodyBytes []byte) (*http.Response, error) {
-	paths := []string{streamCreatePath, streamCreatePathV2}
-	var lastErr error
+	url := p.baseURL + streamCreatePath
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 
-	for i, path := range paths {
-		url := p.baseURL + path
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("coze请求失败: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		return nil, fmt.Errorf("coze请求失败 status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(errBody)))
+	}
+
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if !strings.Contains(contentType, "text/event-stream") {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		return nil, fmt.Errorf(
+			"coze响应不是SSE流 path=%s content_type=%s body=%s",
+			streamCreatePath,
+			contentType,
+			strings.TrimSpace(string(errBody)),
+		)
+	}
+
+	return resp, nil
+}
+
+func buildCozeRequestBodies(req cozeCreateChatRequest) ([][]byte, error) {
+	candidates := make([]cozeCreateChatRequest, 0, 4)
+	candidates = append(candidates, req)
+
+	if strings.TrimSpace(req.ConnectorID) != "" {
+		reqNoConnector := req
+		reqNoConnector.ConnectorID = ""
+		candidates = append(candidates, reqNoConnector)
+	}
+
+	if strings.TrimSpace(req.ConversationID) != "" {
+		reqNoConversation := req
+		reqNoConversation.ConversationID = ""
+		candidates = append(candidates, reqNoConversation)
+
+		if strings.TrimSpace(reqNoConversation.ConnectorID) != "" {
+			reqNoConversationNoConnector := reqNoConversation
+			reqNoConversationNoConnector.ConnectorID = ""
+			candidates = append(candidates, reqNoConversationNoConnector)
+		}
+	}
+
+	uniqueBodies := make([][]byte, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate.Stream = true
+		bodyBytes, err := json.Marshal(candidate)
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+p.apiKey)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "text/event-stream")
-
-		resp, err := p.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("coze请求失败: %w", err)
-		}
-
-		if resp.StatusCode == http.StatusNotFound && i < len(paths)-1 {
-			resp.Body.Close()
+		key := string(bodyBytes)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-			resp.Body.Close()
-			lastErr = fmt.Errorf("coze请求失败 status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(errBody)))
-			continue
-		}
-
-		return resp, nil
+		seen[key] = struct{}{}
+		uniqueBodies = append(uniqueBodies, bodyBytes)
 	}
-
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, fmt.Errorf("coze请求失败")
+	return uniqueBodies, nil
 }
 
-func extractCozeError(event cozeStreamEvent) string {
+func (p *CozeLLMProvider) getConversationID(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	p.conversationMu.RLock()
+	defer p.conversationMu.RUnlock()
+	return p.conversationIDs[sessionID]
+}
+
+func (p *CozeLLMProvider) setConversationID(sessionID, conversationID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	conversationID = strings.TrimSpace(conversationID)
+	if sessionID == "" || conversationID == "" {
+		return
+	}
+	p.conversationMu.Lock()
+	defer p.conversationMu.Unlock()
+	p.conversationIDs[sessionID] = conversationID
+}
+
+func buildCozeQuery(dialogue []*schema.Message) string {
+	if len(dialogue) == 0 {
+		return ""
+	}
+
+	// Coze会话模式仅发送当前轮用户输入，不拼接本地历史。
+	for i := len(dialogue) - 1; i >= 0; i-- {
+		msg := dialogue[i]
+		if msg == nil || msg.Role != schema.User {
+			continue
+		}
+		if text := extractCozeQueryText(msg); text != "" {
+			return text
+		}
+	}
+
+	// 兜底：若没有 user 消息，回退到最后一条可提取文本的消息。
+	for i := len(dialogue) - 1; i >= 0; i-- {
+		if text := extractCozeQueryText(dialogue[i]); text != "" {
+			return text
+		}
+	}
+
+	return ""
+}
+
+func extractCozeQueryText(msg *schema.Message) string {
+	if msg == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(msg.Content); text != "" {
+		return text
+	}
+	if len(msg.MultiContent) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(msg.MultiContent))
+	for _, part := range msg.MultiContent {
+		if text := strings.TrimSpace(part.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n")
+}
+
+func extractCozeConversationID(event cozeStreamEvent, data string) string {
+	if cid := strings.TrimSpace(event.ConversationID); cid != "" {
+		return cid
+	}
+	if event.Chat != nil {
+		if cid := strings.TrimSpace(event.Chat.ConversationID); cid != "" {
+			return cid
+		}
+	}
+	payload, ok := parseJSONMap(data)
+	if !ok {
+		return ""
+	}
+	if cid := extractString(payload["conversation_id"]); cid != "" {
+		return cid
+	}
+	if chat, ok := payload["chat"].(map[string]any); ok {
+		if cid := extractString(chat["conversation_id"]); cid != "" {
+			return cid
+		}
+	}
+	if nestedData, ok := payload["data"]; ok {
+		switch v := nestedData.(type) {
+		case string:
+			normalized := normalizeCozeStreamData(v)
+			if normalized != "" && normalized != data {
+				if cid := extractCozeConversationID(cozeStreamEvent{}, normalized); cid != "" {
+					return cid
+				}
+			}
+		case map[string]any:
+			if cid := extractString(v["conversation_id"]); cid != "" {
+				return cid
+			}
+			if chat, ok := v["chat"].(map[string]any); ok {
+				if cid := extractString(chat["conversation_id"]); cid != "" {
+					return cid
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func extractCozeError(event cozeStreamEvent, data string) string {
 	if event.Chat != nil && event.Chat.LastError != nil && event.Chat.LastError.Msg != "" {
 		return event.Chat.LastError.Msg
 	}
 	if event.Msg != "" {
 		return event.Msg
 	}
+	if payload, ok := parseJSONMap(data); ok {
+		if msg := extractString(payload["msg"]); msg != "" {
+			return msg
+		}
+		if msg := extractString(payload["message"]); msg != "" {
+			return msg
+		}
+		if chat, ok := payload["chat"].(map[string]any); ok {
+			if lastError, ok := chat["last_error"].(map[string]any); ok {
+				if msg := extractString(lastError["msg"]); msg != "" {
+					return msg
+				}
+			}
+		}
+		if lastError, ok := payload["last_error"].(map[string]any); ok {
+			if msg := extractString(lastError["msg"]); msg != "" {
+				return msg
+			}
+		}
+		if nestedData, ok := payload["data"]; ok {
+			switch v := nestedData.(type) {
+			case string:
+				normalized := normalizeCozeStreamData(v)
+				if normalized != "" && normalized != data {
+					if nestedMsg := extractCozeError(cozeStreamEvent{}, normalized); nestedMsg != "coze返回错误" {
+						return nestedMsg
+					}
+				}
+			case map[string]any:
+				if msg := extractString(v["msg"]); msg != "" {
+					return msg
+				}
+				if msg := extractString(v["message"]); msg != "" {
+					return msg
+				}
+			}
+		}
+	}
 	return "coze返回错误"
+}
+
+func extractCozeMessageContent(data string, event cozeStreamEvent) string {
+	if event.Message != nil && strings.TrimSpace(event.Message.Content) != "" {
+		return strings.TrimSpace(event.Message.Content)
+	}
+
+	payload, ok := parseJSONMap(data)
+	if !ok {
+		return ""
+	}
+
+	if content := extractString(payload["content"]); content != "" {
+		return content
+	}
+	if msg, ok := payload["message"].(map[string]any); ok {
+		if content := extractString(msg["content"]); content != "" {
+			return content
+		}
+	}
+	if delta, ok := payload["delta"].(map[string]any); ok {
+		if content := extractString(delta["content"]); content != "" {
+			return content
+		}
+	}
+	if nestedData, ok := payload["data"]; ok {
+		switch v := nestedData.(type) {
+		case string:
+			normalized := normalizeCozeStreamData(v)
+			if normalized != "" && normalized != data {
+				if content := extractCozeMessageContent(normalized, cozeStreamEvent{}); content != "" {
+					return content
+				}
+			}
+		case map[string]any:
+			if content := extractString(v["content"]); content != "" {
+				return content
+			}
+			if msg, ok := v["message"].(map[string]any); ok {
+				if content := extractString(msg["content"]); content != "" {
+					return content
+				}
+			}
+			if delta, ok := v["delta"].(map[string]any); ok {
+				if content := extractString(delta["content"]); content != "" {
+					return content
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+func normalizeCozeStreamData(data string) string {
+	data = strings.TrimSpace(data)
+	if data == "" {
+		return ""
+	}
+
+	for i := 0; i < 2; i++ {
+		var decoded string
+		if err := json.Unmarshal([]byte(data), &decoded); err != nil {
+			break
+		}
+		data = strings.TrimSpace(decoded)
+	}
+	return data
+}
+
+func isCozeDoneMarker(data string) bool {
+	d := strings.TrimSpace(data)
+	return strings.EqualFold(d, "[DONE]") || strings.EqualFold(d, "done")
+}
+
+func parseJSONMap(data string) (map[string]any, bool) {
+	data = strings.TrimSpace(data)
+	if data == "" {
+		return nil, false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		return nil, false
+	}
+	return payload, true
+}
+
+func extractString(v any) string {
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(s)
 }
 
 func (p *CozeLLMProvider) ResponseWithVllm(_ context.Context, _ []byte, _ string, _ string) (string, error) {
@@ -324,4 +649,15 @@ func previewString(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func normalizeAPIToken(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	if len(token) >= 7 && strings.EqualFold(token[:7], "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+	return token
 }
