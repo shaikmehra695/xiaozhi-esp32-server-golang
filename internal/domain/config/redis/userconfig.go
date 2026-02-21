@@ -55,6 +55,7 @@ func (u *UserConfig) GetUserConfig(ctx context.Context, userID string) (types.UC
 
 	ret := types.UConfig{
 		SystemPrompt: u.getSystemPrompt(ctx, userID),
+		MemoryMode:   "short",
 	}
 	//将UserConfig转换成UConfig结构
 	kv := map[string]string{

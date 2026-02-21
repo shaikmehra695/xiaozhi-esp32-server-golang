@@ -36,17 +36,19 @@ type Device struct {
 
 // 智能体模型
 type Agent struct {
-	ID           uint      `json:"id" gorm:"primarykey"`
-	UserID       uint      `json:"user_id" gorm:"not null"`
-	Name         string    `json:"name" gorm:"type:varchar(100);not null"`             // 昵称
-	CustomPrompt string    `json:"custom_prompt" gorm:"type:text"`                     // 角色介绍(prompt)
-	LLMConfigID  *string   `json:"llm_config_id" gorm:"type:varchar(100)"`             // 语言模型配置ID
-	TTSConfigID  *string   `json:"tts_config_id" gorm:"type:varchar(100)"`             // 音色配置ID
-	Voice        *string   `json:"voice" gorm:"type:varchar(200)"`                     // 音色值
-	ASRSpeed     string    `json:"asr_speed" gorm:"type:varchar(20);default:'normal'"` // 语音识别速度: normal/patient/fast
-	Status       string    `json:"status" gorm:"type:varchar(20);default:'active'"`    // active, inactive
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID              uint      `json:"id" gorm:"primarykey"`
+	UserID          uint      `json:"user_id" gorm:"not null"`
+	Name            string    `json:"name" gorm:"type:varchar(100);not null"`              // 昵称
+	CustomPrompt    string    `json:"custom_prompt" gorm:"type:text"`                      // 角色介绍(prompt)
+	LLMConfigID     *string   `json:"llm_config_id" gorm:"type:varchar(100)"`              // 语言模型配置ID
+	TTSConfigID     *string   `json:"tts_config_id" gorm:"type:varchar(100)"`              // 音色配置ID
+	Voice           *string   `json:"voice" gorm:"type:varchar(200)"`                      // 音色值
+	ASRSpeed        string    `json:"asr_speed" gorm:"type:varchar(20);default:'normal'"`  // 语音识别速度: normal/patient/fast
+	MemoryMode      string    `json:"memory_mode" gorm:"type:varchar(20);default:'short'"` // 记忆模式: none/short/long
+	MCPServiceNames string    `json:"mcp_service_names" gorm:"type:text"`                  // 逗号分隔的MCP服务名，空=使用全部已启用全局MCP服务
+	Status          string    `json:"status" gorm:"type:varchar(20);default:'active'"`     // active, inactive
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // KnowledgeBase 用户知识库（每用户独立）
@@ -101,6 +103,26 @@ type Config struct {
 	JsonData  string    `json:"json_data" gorm:"type:text"`                                                        // JSON配置数据
 	Enabled   bool      `json:"enabled" gorm:"default:true"`
 	IsDefault bool      `json:"is_default" gorm:"default:false"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// MCPMarketService 市场导入的MCP服务配置
+// 人工配置仍存放在 Config(type=mcp).json_data 中，市场配置拆分到独立表。
+type MCPMarketService struct {
+	ID          uint   `json:"id" gorm:"primarykey"`
+	Name        string `json:"name" gorm:"type:varchar(150);not null"`
+	Enabled     bool   `json:"enabled" gorm:"default:true;index"`
+	Transport   string `json:"transport" gorm:"type:varchar(32);not null"` // sse / streamablehttp
+	URL         string `json:"url" gorm:"type:text;not null"`
+	URLHash     string `json:"url_hash" gorm:"type:varchar(512);not null;uniqueIndex:idx_mcp_market_services_url_hash"`
+	HeadersJSON string `json:"headers_json" gorm:"type:text"`
+
+	MarketID    *uint  `json:"market_id" gorm:"index"` // 关联 configs(type=mcp_market).id
+	ProviderID  string `json:"provider_id" gorm:"type:varchar(50);index"`
+	ServiceID   string `json:"service_id" gorm:"type:varchar(255);index"`
+	ServiceName string `json:"service_name" gorm:"type:varchar(255)"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -176,6 +198,65 @@ type SpeakerSample struct {
 	Status         string    `json:"status" gorm:"type:varchar(20);default:'active'"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// VoiceClone 复刻音色模型
+type VoiceClone struct {
+	ID                 uint      `json:"id" gorm:"primarykey"`
+	UserID             uint      `json:"user_id" gorm:"not null;index"`
+	Name               string    `json:"name" gorm:"type:varchar(100);not null"`
+	Provider           string    `json:"provider" gorm:"type:varchar(50);not null;index"`
+	ProviderVoiceID    string    `json:"provider_voice_id" gorm:"type:varchar(200);not null;index"`
+	TTSConfigID        string    `json:"tts_config_id" gorm:"type:varchar(100);not null;index"`
+	Status             string    `json:"status" gorm:"type:varchar(20);default:'active';index"`
+	TranscriptRequired bool      `json:"transcript_required" gorm:"default:false"`
+	MetaJSON           string    `json:"meta_json" gorm:"type:json"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// VoiceCloneAudio 复刻原始音频资产模型（保留上传/录音数据）
+type VoiceCloneAudio struct {
+	ID             uint      `json:"id" gorm:"primarykey"`
+	VoiceCloneID   *uint     `json:"voice_clone_id" gorm:"index"`
+	UserID         uint      `json:"user_id" gorm:"not null;index"`
+	SourceType     string    `json:"source_type" gorm:"type:varchar(20);not null"` // upload/record
+	FilePath       string    `json:"file_path" gorm:"type:varchar(500);not null"`
+	FileName       string    `json:"file_name" gorm:"type:varchar(255)"`
+	FileSize       int64     `json:"file_size"`
+	ContentType    string    `json:"content_type" gorm:"type:varchar(100)"`
+	Transcript     string    `json:"transcript" gorm:"type:text"`
+	TranscriptLang string    `json:"transcript_lang" gorm:"type:varchar(20)"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// VoiceCloneTask 声音复刻异步任务模型
+type VoiceCloneTask struct {
+	ID           uint       `json:"id" gorm:"primarykey"`
+	TaskID       string     `json:"task_id" gorm:"type:varchar(64);not null;uniqueIndex;index"`
+	UserID       uint       `json:"user_id" gorm:"not null;index"`
+	VoiceCloneID uint       `json:"voice_clone_id" gorm:"not null;index"`
+	Provider     string     `json:"provider" gorm:"type:varchar(50);not null;index"`
+	Status       string     `json:"status" gorm:"type:varchar(20);not null;default:'queued';index"` // queued/processing/succeeded/failed
+	Attempts     int        `json:"attempts" gorm:"not null;default:0"`
+	LastError    string     `json:"last_error" gorm:"type:text"`
+	StartedAt    *time.Time `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+	MetaJSON     string     `json:"meta_json" gorm:"type:json"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// UserVoiceCloneQuota 用户声音复刻额度（按 tts_config_id 维度）
+type UserVoiceCloneQuota struct {
+	ID          uint      `json:"id" gorm:"primarykey"`
+	UserID      uint      `json:"user_id" gorm:"not null;index;uniqueIndex:idx_user_tts_quota,priority:1"`
+	TTSConfigID string    `json:"tts_config_id" gorm:"type:varchar(100);not null;index;uniqueIndex:idx_user_tts_quota,priority:2"`
+	MaxCount    int       `json:"max_count" gorm:"not null;default:-1"` // -1 表示不限制，0 表示禁止创建
+	UsedCount   int       `json:"used_count" gorm:"not null;default:0"` // 每次提交复刻任务即计数
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // ChatMessage 聊天消息模型

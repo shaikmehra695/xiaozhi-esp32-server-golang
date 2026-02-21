@@ -218,6 +218,11 @@ func (s *ChatSession) initHistoryMessages() error {
 	var historyMessages []*schema.Message
 	var err error
 
+	if s.clientState.GetMemoryMode() == MemoryModeNone {
+		log.Debugf("设备 %s 记忆模式=none，跳过历史消息加载", s.clientState.DeviceID)
+		return nil
+	}
+
 	// 根据配置选择数据源（无优先级关系，直接选择）
 	useRedis := s.shouldUseRedis()
 	useManager := s.shouldUseManager()
@@ -340,18 +345,30 @@ func (c *ChatSession) InitAsrLlmTts() error {
 	c.clientState.InitAsr()
 
 	// 初始化memory（memory不在资源池中）
+	memoryMode := c.clientState.GetMemoryMode()
 	memoryConfig := c.clientState.DeviceConfig.Memory
-	memoryProvider, err := memory.GetProvider(memory.MemoryType(memoryConfig.Provider), memoryConfig.Config)
+	memoryType := memory.MemoryType(memoryConfig.Provider)
+	if memoryMode != MemoryModeLong {
+		memoryType = memory.MemoryTypeNone
+	}
+
+	memoryProvider, err := memory.GetProvider(memoryType, memoryConfig.Config)
 	if err != nil {
 		return fmt.Errorf("创建 Memory 提供者失败: %v", err)
 	}
 	c.clientState.MemoryProvider = memoryProvider
-	//初始化memory context
-	context, err := memoryProvider.GetContext(c.ctx, c.clientState.GetDeviceIDOrAgentID(), 500)
-	if err != nil {
-		log.Warnf("初始化memory context失败: %v", err)
+
+	if memoryMode == MemoryModeLong {
+		// 初始化memory context（仅长记忆模式）
+		context, err := memoryProvider.GetContext(c.ctx, c.clientState.GetDeviceIDOrAgentID(), 500)
+		if err != nil {
+			log.Warnf("初始化memory context失败: %v", err)
+		}
+		c.clientState.MemoryContext = context
+	} else {
+		c.clientState.MemoryContext = ""
 	}
-	c.clientState.MemoryContext = context
+
 	return nil
 }
 
@@ -997,7 +1014,7 @@ func (s *ChatSession) actionDoChat(ctx context.Context, text string, speakerResu
 	}
 
 	// 获取全局MCP工具列表
-	mcpTools, err := mcp.GetToolsByDeviceId(clientState.DeviceID, clientState.AgentID)
+	mcpTools, err := mcp.GetToolsByDeviceId(clientState.DeviceID, clientState.AgentID, clientState.DeviceConfig.MCPServiceNames)
 	if err != nil {
 		log.Errorf("获取设备 %s 的工具失败: %v", clientState.DeviceID, err)
 		mcpTools = make(map[string]tool.InvokableTool)
@@ -1132,6 +1149,13 @@ func (s *ChatSession) switchTTSForSpeaker(speakerResult *speaker.IdentifyResult)
 			ttsConfig["voice"] = *speakerGroupInfo.Voice
 		}
 		log.Debugf("为说话人 %s 设置音色: %s", speakerResult.SpeakerName, *speakerGroupInfo.Voice)
+	}
+	if targetTTSConfig.Provider == "aliyun_qwen" &&
+		speakerGroupInfo.VoiceModelOverride != nil &&
+		strings.TrimSpace(*speakerGroupInfo.VoiceModelOverride) != "" {
+		overrideModel := strings.TrimSpace(*speakerGroupInfo.VoiceModelOverride)
+		ttsConfig["model"] = overrideModel
+		log.Debugf("为说话人 %s 覆盖千问模型: %s", speakerResult.SpeakerName, overrideModel)
 	}
 
 	// 7. 保存完整的 TTS 配置（深拷贝）

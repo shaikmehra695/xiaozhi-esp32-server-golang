@@ -31,6 +31,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	deviceActivationController := &controllers.DeviceActivationController{DB: db}
 	setupController := &controllers.SetupController{DB: db}
 	speakerGroupController := controllers.NewSpeakerGroupController(db, cfg)
+	voiceCloneController := controllers.NewVoiceCloneController(db, cfg)
 	poolStatsController := controllers.NewPoolStatsController()
 
 	// 初始化聊天历史控制器（使用传入的 cfg，不重新 Load 避免内嵌时读错路径）
@@ -137,6 +138,14 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				// 角色模板和音色选项
 				user.GET("/role-templates", userController.GetRoleTemplates)
 				user.GET("/voice-options", userController.GetVoiceOptions)
+				user.GET("/voice-clone/capabilities", voiceCloneController.GetCloneProviderCapabilities)
+				user.POST("/voice-clones", voiceCloneController.CreateVoiceClone)
+				user.GET("/voice-clones", voiceCloneController.GetVoiceClones)
+				user.PUT("/voice-clones/:id", voiceCloneController.UpdateVoiceClone)
+				user.POST("/voice-clones/:id/retry", voiceCloneController.RetryVoiceClone)
+				user.GET("/voice-clones/:id/preview", voiceCloneController.PreviewClonedVoice)
+				user.GET("/voice-clones/:id/audios", voiceCloneController.GetVoiceCloneAudios)
+				user.GET("/voice-clones/audios/:audio_id/file", voiceCloneController.GetVoiceCloneAudioFile)
 
 				// 角色管理（暂时注释，待实现）
 				// user.GET("/roles", adminController.GetRoles)
@@ -150,8 +159,12 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				user.GET("/tts-configs", userController.GetTTSConfigs)
 
 				// MCP接入点
+				user.GET("/agents/:id/mcp-services/options", userController.GetAgentMCPServiceOptions)
 				user.GET("/agents/:id/mcp-endpoint", userController.GetAgentMCPEndpoint)
 				user.GET("/agents/:id/mcp-tools", userController.GetAgentMcpTools)
+				user.POST("/agents/:id/mcp-call", userController.CallAgentMcpTool)
+				user.GET("/devices/:id/mcp-tools", userController.GetDeviceMcpTools)
+				user.POST("/devices/:id/mcp-call", userController.CallDeviceMcpTool)
 
 				// 消息注入
 				user.POST("/devices/inject-message", userController.InjectMessage)
@@ -225,6 +238,10 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				admin.GET("/vision-base-config", adminController.GetVisionBaseConfig)
 				admin.PUT("/vision-base-config", adminController.UpdateVisionBaseConfig)
 
+				// 聊天设置（auth/chat）
+				admin.GET("/chat-settings", adminController.GetChatSettings)
+				admin.PUT("/chat-settings", adminController.UpdateChatSettings)
+
 				admin.GET("/ota-configs", adminController.GetOTAConfigs)
 				admin.POST("/ota-configs", adminController.CreateOTAConfig)
 				admin.PUT("/ota-configs/:id", adminController.UpdateOTAConfig)
@@ -249,6 +266,19 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				admin.POST("/mcp-configs", adminController.CreateMCPConfig)
 				admin.PUT("/mcp-configs/:id", adminController.UpdateMCPConfig)
 				admin.DELETE("/mcp-configs/:id", adminController.DeleteMCPConfig)
+				admin.GET("/mcp-markets", adminController.GetMCPMarkets)
+				admin.POST("/mcp-markets", adminController.CreateMCPMarket)
+				admin.PUT("/mcp-markets/:id", adminController.UpdateMCPMarket)
+				admin.DELETE("/mcp-markets/:id", adminController.DeleteMCPMarket)
+				admin.POST("/mcp-markets/:id/test", adminController.TestMCPMarket)
+				admin.GET("/mcp-market/providers", adminController.GetMCPMarketProviders)
+				admin.GET("/mcp-market/services", adminController.GetMCPMarketServices)
+				admin.GET("/mcp-market/services/:market_id/*service_id", adminController.GetMCPMarketServiceDetail)
+				admin.POST("/mcp-market/import", adminController.ImportMCPMarketService)
+				admin.GET("/mcp-market/imported-services", adminController.GetMCPMarketImportedServices)
+				admin.POST("/mcp-market/imported-services", adminController.CreateMCPMarketImportedService)
+				admin.PUT("/mcp-market/imported-services/:id", adminController.UpdateMCPMarketImportedService)
+				admin.DELETE("/mcp-market/imported-services/:id", adminController.DeleteMCPMarketImportedService)
 
 				// Memory配置管理
 				admin.GET("/memory-configs", adminController.GetMemoryConfigs)
@@ -293,6 +323,9 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				admin.DELETE("/agents/:id", adminController.DeleteAgent)
 				admin.GET("/agents/:id/mcp-endpoint", adminController.GetAgentMCPEndpoint)
 				admin.GET("/agents/:id/mcp-tools", adminController.GetAgentMcpTools)
+				admin.POST("/agents/:id/mcp-call", adminController.CallAgentMcpTool)
+				admin.GET("/devices/:id/mcp-tools", adminController.GetDeviceMcpTools)
+				admin.POST("/devices/:id/mcp-call", adminController.CallDeviceMcpTool)
 
 				// 用户管理
 				admin.GET("/users", adminController.GetUsers)
@@ -300,10 +333,14 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				admin.PUT("/users/:id", adminController.UpdateUser)
 				admin.DELETE("/users/:id", adminController.DeleteUser)
 				admin.POST("/users/:id/reset-password", adminController.ResetUserPassword)
+
 				admin.GET("/users/:id/knowledge-bases", adminController.GetUserKnowledgeBasesAdmin)
 				admin.POST("/users/:id/knowledge-bases", adminController.CreateUserKnowledgeBaseAdmin)
 				admin.PUT("/users/:id/knowledge-bases/:kb_id", adminController.UpdateUserKnowledgeBaseAdmin)
 				admin.DELETE("/users/:id/knowledge-bases/:kb_id", adminController.DeleteUserKnowledgeBaseAdmin)
+
+				admin.GET("/users/:id/voice-clone-quotas", adminController.GetUserVoiceCloneQuotas)
+				admin.PUT("/users/:id/voice-clone-quotas", adminController.UpdateUserVoiceCloneQuotas)
 
 				// 配置导入导出
 				admin.GET("/configs/export", adminController.ExportConfigs)
