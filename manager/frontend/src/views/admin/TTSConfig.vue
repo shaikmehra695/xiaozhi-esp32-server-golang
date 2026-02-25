@@ -722,8 +722,19 @@ const loadVoiceOptions = async (provider, options = {}) => {
   
   voiceLoading.value = true
   try {
+    const params = { provider, config_id: form.config_id || undefined }
+    if (provider === 'indextts_vllm') {
+      const apiURL = String(form.indextts_vllm?.api_url || '').trim()
+      const apiKey = String(form.indextts_vllm?.api_key || '').trim()
+      if (apiURL) {
+        params.api_url = apiURL
+      }
+      if (apiKey) {
+        params.api_key = apiKey
+      }
+    }
     const response = await api.get(`/user/voice-options`, {
-      params: { provider, config_id: form.config_id || undefined }
+      params
     })
     voiceOptions.value = response.data.data || []
   } catch (error) {

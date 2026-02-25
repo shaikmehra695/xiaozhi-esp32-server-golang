@@ -588,7 +588,25 @@ func (uc *UserController) GetRoleTemplates(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": roles})
 }
 
-func (uc *UserController) fetchIndexTTSVoices(c *gin.Context, configID string) ([]VoiceOption, error) {
+func trimSuffixFoldForURL(s string, suffix string) string {
+	if len(s) < len(suffix) {
+		return s
+	}
+	start := len(s) - len(suffix)
+	if strings.EqualFold(s[start:], suffix) {
+		return s[:start]
+	}
+	return s
+}
+
+func normalizeIndexTTSVoiceOptionsBaseURL(raw string) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(raw), "/")
+	baseURL = trimSuffixFoldForURL(baseURL, "/audio/speech")
+	baseURL = trimSuffixFoldForURL(baseURL, "/audio/voices")
+	return strings.TrimRight(baseURL, "/")
+}
+
+func (uc *UserController) fetchIndexTTSVoices(c *gin.Context, configID, overrideURL, overrideAPIKey string) ([]VoiceOption, error) {
 	baseURL := "http://127.0.0.1:7860"
 	apiKey := ""
 	if strings.TrimSpace(configID) != "" {
@@ -605,7 +623,16 @@ func (uc *UserController) fetchIndexTTSVoices(c *gin.Context, configID string) (
 			}
 		}
 	}
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.TrimSpace(overrideURL) != "" {
+		baseURL = strings.TrimSpace(overrideURL)
+	}
+	if strings.TrimSpace(overrideAPIKey) != "" {
+		apiKey = strings.TrimSpace(overrideAPIKey)
+	}
+	baseURL = normalizeIndexTTSVoiceOptionsBaseURL(baseURL)
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:7860"
+	}
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, baseURL+indexTTSVoicesEndpoint, nil)
 	if err != nil {
 		return nil, err
@@ -657,7 +684,12 @@ func (uc *UserController) GetVoiceOptions(c *gin.Context) {
 	var systemVoices []VoiceOption
 	// 特殊处理：IndexTTS 从远端服务读取可用音色
 	if provider == "indextts_vllm" {
-		voices, err := uc.fetchIndexTTSVoices(c, configID)
+		voices, err := uc.fetchIndexTTSVoices(
+			c,
+			configID,
+			c.Query("api_url"),
+			c.Query("api_key"),
+		)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "获取IndexTTS音色失败: " + err.Error()})
 			return
