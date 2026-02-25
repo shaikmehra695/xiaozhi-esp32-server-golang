@@ -112,86 +112,19 @@ func NewOpenAITTSProvider(config map[string]interface{}) *OpenAITTSProvider {
 
 // TextToSpeech 将文本转换为语音，返回音频帧数据和错误
 func (p *OpenAITTSProvider) TextToSpeech(ctx context.Context, text string, sampleRate int, channels int, frameDuration int) ([][]byte, error) {
-	startTs := time.Now().UnixMilli()
-
-	// 创建请求体
-	reqBody := openAIRequest{
-		Model:          p.Model,
-		Input:          text,
-		Voice:          p.Voice,
-		ResponseFormat: p.ResponseFormat,
-		Speed:          p.Speed,
-		Stream:         p.Stream,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
+	streamChan, err := p.TextToSpeechStream(ctx, text, sampleRate, channels, frameDuration)
 	if err != nil {
-		return nil, fmt.Errorf("序列化请求失败: %v", err)
+		return nil, err
 	}
 
-	// 创建HTTP请求
-	req, err := http.NewRequestWithContext(ctx, "POST", p.APIURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %v", err)
+	audioFrames := make([][]byte, 0, 32)
+	for frame := range streamChan {
+		audioFrames = append(audioFrames, frame)
 	}
-
-	// 设置请求头
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.APIKey))
-
-	// 使用连接池发送请求
-	client := getHTTPClient()
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("发送请求失败: %v", err)
+	if len(audioFrames) == 0 {
+		return nil, fmt.Errorf("OpenAI TTS 返回音频为空")
 	}
-	defer resp.Body.Close()
-
-	// 检查响应状态码
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API请求失败，状态码: %d, 响应: %s", resp.StatusCode, string(body))
-	}
-
-	// 检查响应内容长度
-	contentLength := resp.ContentLength
-	log.Debugf("收到OpenAI TTS响应，Content-Length: %d", contentLength)
-
-	// 判断Content-Length是否合理
-	if contentLength == 0 {
-		log.Errorf("API返回空响应，Content-Length为0")
-		return nil, fmt.Errorf("API返回空响应，Content-Length为0")
-	}
-
-	// 根据音频格式处理响应
-	if p.ResponseFormat == "mp3" || p.ResponseFormat == "opus" {
-		// 创建一个通道来收集音频帧
-		outputChan := make(chan []byte, 1000)
-
-		// 创建音频解码器
-		decoder, err := util.CreateAudioDecoder(ctx, resp.Body, outputChan, frameDuration, p.ResponseFormat)
-		if err != nil {
-			return nil, fmt.Errorf("创建音频解码器失败: %v", err)
-		}
-
-		// 启动解码过程
-		go func() {
-			if err := decoder.Run(startTs); err != nil {
-				log.Errorf("音频解码失败: %v", err)
-			}
-		}()
-
-		// 收集所有的音频帧
-		var audioFrames [][]byte
-		for frame := range outputChan {
-			audioFrames = append(audioFrames, frame)
-		}
-
-		log.Infof("OpenAI TTS完成，从输入到获取音频数据结束耗时: %d ms", time.Now().UnixMilli()-startTs)
-		return audioFrames, nil
-	}
-
-	return nil, fmt.Errorf("不支持的音频格式: %s", p.ResponseFormat)
+	return audioFrames, nil
 }
 
 // TextToSpeechStream 流式语音合成实现
@@ -213,6 +146,8 @@ func (p *OpenAITTSProvider) TextToSpeechStream(ctx context.Context, text string,
 		return nil, fmt.Errorf("序列化请求失败: %v", err)
 	}
 
+	//log.Debugf("OpenAI TTS请求: %s", string(jsonData))
+
 	// 创建HTTP请求
 	req, err := http.NewRequestWithContext(ctx, "POST", p.APIURL, bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -221,7 +156,9 @@ func (p *OpenAITTSProvider) TextToSpeechStream(ctx context.Context, text string,
 
 	// 设置请求头
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.APIKey))
+	if p.APIKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.APIKey))
+	}
 
 	// 使用连接池创建客户端
 	client := getHTTPClient()
@@ -283,7 +220,7 @@ func (p *OpenAITTSProvider) TextToSpeechStream(ctx context.Context, text string,
 				log.Infof("OpenAI TTS耗时: 从输入至获取音频数据结束耗时: %d ms", time.Now().UnixMilli()-startTs)
 			}
 		} else {
-			log.Errorf("当前仅支持MP3和Opus格式的流式合成")
+			log.Errorf("当前仅支持 mp3/wav/pcm 格式的流式合成")
 			close(outputChan)
 		}
 	}()

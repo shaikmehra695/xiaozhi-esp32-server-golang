@@ -59,6 +59,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	deviceActivationController := &controllers.DeviceActivationController{DB: db}
 	setupController := &controllers.SetupController{DB: db}
 	speakerGroupController := controllers.NewSpeakerGroupController(db, cfg)
+	voiceCloneController := controllers.NewVoiceCloneController(db, cfg)
 	poolStatsController := controllers.NewPoolStatsController()
 
 	// 初始化聊天历史控制器（使用传入的 cfg，不重新 Load 避免内嵌时读错路径）
@@ -144,10 +145,36 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				user.GET("/agents/:id/devices", userController.GetAgentDevices)
 				user.POST("/agents/:id/devices", userController.AddDeviceToAgent)
 				user.DELETE("/agents/:id/devices/:device_id", userController.RemoveDeviceFromAgent)
+				user.GET("/agents/:id/knowledge-bases", userController.GetAgentKnowledgeBases)
+				user.PUT("/agents/:id/knowledge-bases", userController.UpdateAgentKnowledgeBases)
+
+				// 用户知识库管理（纯文本）
+				user.GET("/knowledge-bases", userController.GetKnowledgeBases)
+				user.POST("/knowledge-bases", userController.CreateKnowledgeBase)
+				user.GET("/knowledge-bases/:id", userController.GetKnowledgeBase)
+				user.PUT("/knowledge-bases/:id", userController.UpdateKnowledgeBase)
+				user.DELETE("/knowledge-bases/:id", userController.DeleteKnowledgeBase)
+				user.POST("/knowledge-bases/:id/sync", userController.SyncKnowledgeBase)
+				user.POST("/knowledge-bases/:id/test-search", userController.TestKnowledgeBaseSearch)
+				user.GET("/knowledge-bases/:id/documents", userController.GetKnowledgeBaseDocuments)
+				user.POST("/knowledge-bases/:id/documents", userController.CreateKnowledgeBaseDocument)
+				user.POST("/knowledge-bases/:id/documents/upload", userController.CreateKnowledgeBaseDocumentByUpload)
+				user.PUT("/knowledge-bases/:id/documents/:doc_id", userController.UpdateKnowledgeBaseDocument)
+				user.DELETE("/knowledge-bases/:id/documents/:doc_id", userController.DeleteKnowledgeBaseDocument)
+				user.POST("/knowledge-bases/:id/documents/:doc_id/sync", userController.SyncKnowledgeBaseDocument)
 
 				// 角色模板和音色选项
 				user.GET("/role-templates", userController.GetRoleTemplates)
 				user.GET("/voice-options", userController.GetVoiceOptions)
+				user.GET("/voice-clone/capabilities", voiceCloneController.GetCloneProviderCapabilities)
+				user.POST("/voice-clones", voiceCloneController.CreateVoiceClone)
+				user.GET("/voice-clones", voiceCloneController.GetVoiceClones)
+				user.PUT("/voice-clones/:id", voiceCloneController.UpdateVoiceClone)
+				user.POST("/voice-clones/:id/retry", voiceCloneController.RetryVoiceClone)
+				user.POST("/voice-clones/:id/append-audio", voiceCloneController.AppendVoiceCloneAudio)
+				user.GET("/voice-clones/:id/preview", voiceCloneController.PreviewClonedVoice)
+				user.GET("/voice-clones/:id/audios", voiceCloneController.GetVoiceCloneAudios)
+				user.GET("/voice-clones/audios/:audio_id/file", voiceCloneController.GetVoiceCloneAudioFile)
 
 				// 角色管理（暂时注释，待实现）
 				// user.GET("/roles", adminController.GetRoles)
@@ -161,6 +188,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				user.GET("/tts-configs", userController.GetTTSConfigs)
 
 				// MCP接入点
+				user.GET("/agents/:id/mcp-services/options", userController.GetAgentMCPServiceOptions)
 				user.GET("/agents/:id/mcp-endpoint", userController.GetAgentMCPEndpoint)
 				user.GET("/agents/:id/mcp-tools", userController.GetAgentMcpTools)
 				user.POST("/agents/:id/mcp-call", userController.CallAgentMcpTool)
@@ -267,6 +295,19 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				admin.POST("/mcp-configs", adminController.CreateMCPConfig)
 				admin.PUT("/mcp-configs/:id", adminController.UpdateMCPConfig)
 				admin.DELETE("/mcp-configs/:id", adminController.DeleteMCPConfig)
+				admin.GET("/mcp-markets", adminController.GetMCPMarkets)
+				admin.POST("/mcp-markets", adminController.CreateMCPMarket)
+				admin.PUT("/mcp-markets/:id", adminController.UpdateMCPMarket)
+				admin.DELETE("/mcp-markets/:id", adminController.DeleteMCPMarket)
+				admin.POST("/mcp-markets/:id/test", adminController.TestMCPMarket)
+				admin.GET("/mcp-market/providers", adminController.GetMCPMarketProviders)
+				admin.GET("/mcp-market/services", adminController.GetMCPMarketServices)
+				admin.GET("/mcp-market/services/:market_id/*service_id", adminController.GetMCPMarketServiceDetail)
+				admin.POST("/mcp-market/import", adminController.ImportMCPMarketService)
+				admin.GET("/mcp-market/imported-services", adminController.GetMCPMarketImportedServices)
+				admin.POST("/mcp-market/imported-services", adminController.CreateMCPMarketImportedService)
+				admin.PUT("/mcp-market/imported-services/:id", adminController.UpdateMCPMarketImportedService)
+				admin.DELETE("/mcp-market/imported-services/:id", adminController.DeleteMCPMarketImportedService)
 
 				// Memory配置管理
 				admin.GET("/memory-configs", adminController.GetMemoryConfigs)
@@ -274,6 +315,13 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				admin.PUT("/memory-configs/:id", adminController.UpdateMemoryConfig)
 				admin.DELETE("/memory-configs/:id", adminController.DeleteMemoryConfig)
 				admin.POST("/memory-configs/:id/set-default", adminController.SetDefaultMemoryConfig)
+
+				// 知识库检索配置管理（provider API 调用）
+				admin.GET("/knowledge-search-configs", adminController.GetKnowledgeSearchConfigs)
+				admin.POST("/knowledge-search-configs", adminController.CreateKnowledgeSearchConfig)
+				admin.PUT("/knowledge-search-configs/:id", adminController.UpdateKnowledgeSearchConfig)
+				admin.DELETE("/knowledge-search-configs/:id", adminController.DeleteKnowledgeSearchConfig)
+				admin.POST("/knowledge-search-configs/weknora/models", adminController.ListWeknoraModels)
 
 				// 全局角色管理（保留兼容旧API）
 				admin.GET("/global-roles", adminController.GetGlobalRoles)
@@ -314,6 +362,14 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				admin.PUT("/users/:id", adminController.UpdateUser)
 				admin.DELETE("/users/:id", adminController.DeleteUser)
 				admin.POST("/users/:id/reset-password", adminController.ResetUserPassword)
+
+				admin.GET("/users/:id/knowledge-bases", adminController.GetUserKnowledgeBasesAdmin)
+				admin.POST("/users/:id/knowledge-bases", adminController.CreateUserKnowledgeBaseAdmin)
+				admin.PUT("/users/:id/knowledge-bases/:kb_id", adminController.UpdateUserKnowledgeBaseAdmin)
+				admin.DELETE("/users/:id/knowledge-bases/:kb_id", adminController.DeleteUserKnowledgeBaseAdmin)
+
+				admin.GET("/users/:id/voice-clone-quotas", adminController.GetUserVoiceCloneQuotas)
+				admin.PUT("/users/:id/voice-clone-quotas", adminController.UpdateUserVoiceCloneQuotas)
 
 				// 配置导入导出
 				admin.GET("/configs/export", adminController.ExportConfigs)

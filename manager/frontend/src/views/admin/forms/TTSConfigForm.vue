@@ -2,13 +2,17 @@
   <el-form ref="formRef" :model="model" :rules="rules" label-width="120px">
     <el-form-item label="提供商" prop="provider">
       <el-select v-model="model.provider" placeholder="请选择提供商" style="width: 100%">
-        <el-option label="豆包 WebSocket" value="doubao_ws" />
-        <el-option label="Edge TTS" value="edge" />
-        <el-option label="Edge 离线" value="edge_offline" />
-        <el-option label="OpenAI" value="openai" />
-        <el-option label="千问" value="aliyun_qwen" />
-        <el-option label="智谱" value="zhipu" />
-        <el-option label="Minimax" value="minimax" />
+        <el-option
+          v-for="provider in TTS_PROVIDER_OPTIONS"
+          :key="provider.value"
+          :label="provider.label"
+          :value="provider.value"
+        >
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <span>{{ provider.label }}</span>
+            <el-tag v-if="provider.supports_voice_clone" size="small" type="success" effect="plain">支持复刻</el-tag>
+          </div>
+        </el-option>
       </el-select>
     </el-form-item>
     <el-form-item label="配置名称" prop="name">
@@ -269,11 +273,87 @@
         <el-input-number v-model="model.openai.frame_duration" :min="1" :max="1000" style="width: 100%" placeholder="毫秒" />
       </el-form-item>
     </template>
+
+
+
+    <template v-if="model.provider === 'indextts_vllm'">
+      <el-form-item label-width="0" class="indextts-help-item">
+        <div class="indextts-help">
+          <div class="indextts-help-head">
+            <div class="indextts-help-title">IndexTTS vLLM 接口指南</div>
+            <div class="indextts-help-subtitle">确保服务端支持 /audio/speech、/audio/voices，复刻需 /audio/clone</div>
+          </div>
+          <div class="indextts-help-links">
+            <el-link :href="indexTTSDocURL" target="_blank" type="primary" :underline="false">项目接入文档（GitHub）</el-link>
+            <span class="indextts-help-divider">|</span>
+            <el-link :href="indexTTSReferenceURL" target="_blank" type="info" :underline="false">参考 api_server.py</el-link>
+          </div>
+          <div class="indextts-help-tags">
+            <el-tag size="small" effect="plain" type="success">/audio/speech</el-tag>
+            <el-tag size="small" effect="plain" type="warning">/audio/voices</el-tag>
+            <el-tag size="small" effect="plain" type="info">/audio/clone</el-tag>
+          </div>
+        </div>
+      </el-form-item>
+      <el-form-item label="API URL" prop="indextts_vllm.api_url">
+        <el-input v-model="model.indextts_vllm.api_url" placeholder="请输入IndexTTS服务地址（例如：http://127.0.0.1:7860）" />
+      </el-form-item>
+      <el-form-item label="API Key" prop="indextts_vllm.api_key">
+        <el-input v-model="model.indextts_vllm.api_key" placeholder="可选，按需填写" type="password" show-password />
+      </el-form-item>
+      <el-form-item label="模型" prop="indextts_vllm.model">
+        <el-input v-model="model.indextts_vllm.model" placeholder="indextts-vllm" />
+      </el-form-item>
+      <el-form-item label="音色" prop="indextts_vllm.voice">
+        <el-select
+          v-model="model.indextts_vllm.voice"
+          placeholder="请选择音色"
+          style="width: 100%"
+          filterable
+          :loading="voiceLoading"
+          :disabled="voiceLoading"
+          allow-create
+          default-first-option
+          @visible-change="handleIndexTTSVoiceVisibleChange"
+        >
+          <el-option v-for="option in voiceOptionsList" :key="option.value" :label="option.label" :value="option.value" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="帧时长" prop="indextts_vllm.frame_duration">
+        <el-input-number v-model="model.indextts_vllm.frame_duration" :min="1" :max="1000" style="width: 100%" />
+      </el-form-item>
+    </template>
+
+    <template v-if="model.provider === 'cosyvoice'">
+      <el-form-item label="API URL" prop="cosyvoice.api_url">
+        <el-input v-model="model.cosyvoice.api_url" placeholder="请输入API URL" />
+      </el-form-item>
+      <el-form-item label="说话人ID" prop="cosyvoice.spk_id">
+        <el-input v-model="model.cosyvoice.spk_id" placeholder="请输入说话人ID" />
+      </el-form-item>
+      <el-form-item label="帧时长" prop="cosyvoice.frame_duration">
+        <el-input-number v-model="model.cosyvoice.frame_duration" :min="1" :max="1000" style="width: 100%" />
+      </el-form-item>
+      <el-form-item label="目标采样率" prop="cosyvoice.target_sr">
+        <el-input-number v-model="model.cosyvoice.target_sr" :min="8000" :max="48000" style="width: 100%" />
+      </el-form-item>
+      <el-form-item label="音频格式" prop="cosyvoice.audio_format">
+        <el-select v-model="model.cosyvoice.audio_format" placeholder="请选择音频格式" style="width: 100%">
+          <el-option label="MP3" value="mp3" />
+          <el-option label="WAV" value="wav" />
+          <el-option label="PCM" value="pcm" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="指示文本" prop="cosyvoice.instruct_text">
+        <el-input v-model="model.cosyvoice.instruct_text" placeholder="请输入指示文本（可选）" />
+      </el-form-item>
+    </template>
   </el-form>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
+import { TTS_PROVIDER_OPTIONS } from './ttsProviderOptions'
 
 const props = defineProps({
   model: { type: Object, required: true },
@@ -281,15 +361,32 @@ const props = defineProps({
   voiceOptions: { type: Array, default: () => [] },
   voiceLoading: { type: Boolean, default: false }
 })
+const emit = defineEmits(['request-voice-options'])
 
 const formRef = ref()
 // 保证音色选项始终为数组且响应式，供下拉使用
 const voiceOptionsList = computed(() => Array.isArray(props.voiceOptions) ? props.voiceOptions : [])
+const indexTTSDocURL = 'https://github.com/hackers365/xiaozhi-esp32-server-golang/blob/main/doc/indextts_vllm_api.md'
+const indexTTSReferenceURL = 'https://github.com/hackers365/index-tts-vllm/blob/master/api_server.py'
+
+function handleIndexTTSVoiceVisibleChange(visible) {
+  if (visible) {
+    emit('request-voice-options', 'indextts_vllm')
+  }
+}
 
 function getJsonData() {
   const form = props.model
   const config = {}
   switch (form.provider) {
+    case 'cosyvoice':
+      config.api_url = form.cosyvoice?.api_url
+      config.spk_id = form.cosyvoice?.spk_id
+      config.frame_duration = form.cosyvoice?.frame_duration
+      config.target_sr = form.cosyvoice?.target_sr
+      config.audio_format = form.cosyvoice?.audio_format
+      config.instruct_text = form.cosyvoice?.instruct_text
+      break
     case 'doubao_ws':
       config.appid = form.doubao_ws?.appid
       config.access_token = form.doubao_ws?.access_token
@@ -334,6 +431,16 @@ function getJsonData() {
       config.stream = form.openai?.stream
       config.frame_duration = form.openai?.frame_duration
       break
+    case 'indextts_vllm':
+      config.provider = 'indextts_vllm'
+      config.api_url = form.indextts_vllm?.api_url
+      config.api_key = form.indextts_vllm?.api_key
+      config.model = form.indextts_vllm?.model || 'indextts-vllm'
+      config.voice = form.indextts_vllm?.voice
+      config.response_format = 'wav'
+      config.stream = false
+      config.frame_duration = form.indextts_vllm?.frame_duration || 60
+      break
     case 'zhipu':
       config.provider = 'zhipu'
       config.api_key = form.zhipu?.api_key
@@ -374,3 +481,52 @@ function resetFields() {
 
 defineExpose({ validate, getJsonData, resetFields })
 </script>
+
+<style scoped>
+.indextts-help-item :deep(.el-form-item__content) {
+  margin-left: 0 !important;
+}
+
+.indextts-help {
+  width: 100%;
+  border: 1px solid #d9e7ff;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(120deg, #f7fbff 0%, #f2f9ff 45%, #f8f8ff 100%);
+}
+
+.indextts-help-head {
+  margin-bottom: 8px;
+}
+
+.indextts-help-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f3d5b;
+}
+
+.indextts-help-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #4f6b8a;
+}
+
+.indextts-help-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.indextts-help-divider {
+  color: #a9b9cc;
+  font-size: 12px;
+}
+
+.indextts-help-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+</style>

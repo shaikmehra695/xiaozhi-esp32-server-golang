@@ -57,12 +57,20 @@ func Init(cfg config.DatabaseConfig) *gorm.DB {
 		&models.User{},
 		&models.Device{},
 		&models.Agent{},
+		&models.KnowledgeBase{},
+		&models.KnowledgeBaseDocument{},
+		&models.AgentKnowledgeBase{},
 		&models.Config{},
+		&models.MCPMarketService{},
 		&models.GlobalRole{},
 		&models.Role{}, // 新增：统一角色表
 		&models.ChatMessage{},
 		&models.SpeakerGroup{},
 		&models.SpeakerSample{},
+		&models.VoiceClone{},
+		&models.VoiceCloneAudio{},
+		&models.VoiceCloneTask{},
+		&models.UserVoiceCloneQuota{},
 	)
 	if err != nil {
 		log.Printf("数据库表结构迁移失败: %v", err)

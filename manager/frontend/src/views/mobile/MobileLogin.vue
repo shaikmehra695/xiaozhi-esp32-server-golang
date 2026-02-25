@@ -106,10 +106,12 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { showToast, showSuccessToast, showFailToast } from 'vant'
+import { showSuccessToast, showFailToast } from 'vant'
 import { useAuthStore } from '../../stores/auth'
+import { getPostLoginRedirectPath } from '../../utils/authRedirect'
+import { checkNeedsSetup } from '../../utils/setupStatus'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -144,12 +146,7 @@ const handleLogin = async () => {
   
   if (result.success) {
     showSuccessToast('登录成功')
-    // 根据用户角色跳转到不同页面
-    if (authStore.user?.role === 'admin') {
-      router.push('/dashboard')
-    } else {
-      router.push('/console')
-    }
+    router.push(getPostLoginRedirectPath(authStore.user))
   } else {
     showFailToast(result.message || '登录失败')
   }
@@ -174,6 +171,21 @@ const handleRegister = async () => {
     showFailToast(result.message || '注册失败')
   }
 }
+
+// 检查系统状态，如果未初始化则跳转到引导页面
+const checkSystemStatus = async () => {
+  try {
+    if (await checkNeedsSetup()) {
+      router.push('/setup')
+    }
+  } catch (error) {
+    console.error('检查系统状态失败:', error)
+  }
+}
+
+onMounted(() => {
+  checkSystemStatus()
+})
 </script>
 
 <style scoped>

@@ -89,7 +89,8 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
-import api from '@/utils/api'
+import { getPostLoginRedirectPath } from '../utils/authRedirect'
+import { checkNeedsSetup } from '../utils/setupStatus'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -152,17 +153,7 @@ const handleLogin = async () => {
       
       if (result.success) {
         ElMessage.success('登录成功')
-        // 根据用户角色跳转到不同页面；管理员首次登录跳转到配置向导
-        if (authStore.user?.role === 'admin') {
-          const firstLoginDone = localStorage.getItem('admin_first_login_done')
-          if (!firstLoginDone) {
-            router.push('/admin/config-wizard')
-          } else {
-            router.push('/dashboard')
-          }
-        } else {
-          router.push('/console')
-        }
+        router.push(getPostLoginRedirectPath(authStore.user))
       } else {
         ElMessage.error(result.message)
       }
@@ -198,8 +189,7 @@ const handleRegister = async () => {
 // 检查系统状态，如果未初始化则跳转到引导页面
 const checkSystemStatus = async () => {
   try {
-    const response = await api.get('/setup/status')
-    if (response.data.needs_setup) {
+    if (await checkNeedsSetup()) {
       router.push('/setup')
     }
   } catch (error) {

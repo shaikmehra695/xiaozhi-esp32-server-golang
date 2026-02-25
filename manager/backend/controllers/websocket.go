@@ -657,6 +657,9 @@ func (ctrl *WebSocketController) requestMcpToolsByBody(ctx context.Context, body
 			parsed := MCPTool{Name: name, Description: description, Schema: true}
 			if inputSchema, ok := toolMap["input_schema"].(map[string]interface{}); ok {
 				parsed.InputSchema = inputSchema
+			} else if inputSchema, ok := toolMap["inputSchema"].(map[string]interface{}); ok {
+				// 兼容部分客户端返回 camelCase 字段名
+				parsed.InputSchema = inputSchema
 			}
 			tools = append(tools, parsed)
 		}
@@ -724,7 +727,6 @@ func (ctrl *WebSocketController) broadcastRequestAndWaitFirstSuccess(ctx context
 			delete(client.callbacks, requestID)
 			client.mu.Unlock()
 		}
-		close(responseChan)
 	}()
 
 	responsesReceived := 0

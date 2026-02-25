@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -68,26 +69,40 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 
 	// 构建配置响应
 	type SpeakerGroupInfo struct {
-		ID          uint     `json:"id"`
-		Name        string   `json:"name"`
-		Prompt      string   `json:"prompt"`
-		Description string   `json:"description"`
-		Uuids       []string `json:"uuids"`
-		TTSConfigID *string  `json:"tts_config_id"`
-		Voice       *string  `json:"voice"`
+		ID                 uint     `json:"id"`
+		Name               string   `json:"name"`
+		Prompt             string   `json:"prompt"`
+		Description        string   `json:"description"`
+		Uuids              []string `json:"uuids"`
+		TTSConfigID        *string  `json:"tts_config_id"`
+		Voice              *string  `json:"voice"`
+		VoiceModelOverride *string  `json:"voice_model_override,omitempty"`
+	}
+
+	type KnowledgeBaseInfo struct {
+		ID                 uint     `json:"id"`
+		Name               string   `json:"name"`
+		Description        string   `json:"description"`
+		Provider           string   `json:"provider"`
+		ExternalKBID       string   `json:"external_kb_id"`
+		ExternalDocID      string   `json:"external_doc_id"`
+		RetrievalThreshold *float64 `json:"retrieval_threshold"`
+		Status             string   `json:"status"`
 	}
 
 	type ConfigResponse struct {
-		VAD           models.Config               `json:"vad"`
-		ASR           models.Config               `json:"asr"`
-		LLM           models.Config               `json:"llm"`
-		TTS           models.Config               `json:"tts"`
-		Memory        models.Config               `json:"memory"`
-		VoiceIdentify map[string]SpeakerGroupInfo `json:"voice_identify"`
-		Prompt        string                      `json:"prompt"`
-		AgentID       string                      `json:"agent_id"`
-		MemoryMode    string                      `json:"memory_mode"`
-		ConfigSource  string                      `json:"config_source"` // 新增：配置来源
+		VAD             models.Config               `json:"vad"`
+		ASR             models.Config               `json:"asr"`
+		LLM             models.Config               `json:"llm"`
+		TTS             models.Config               `json:"tts"`
+		Memory          models.Config               `json:"memory"`
+		VoiceIdentify   map[string]SpeakerGroupInfo `json:"voice_identify"`
+		KnowledgeBases  []KnowledgeBaseInfo         `json:"knowledge_bases"`
+		Prompt          string                      `json:"prompt"`
+		AgentID         string                      `json:"agent_id"`
+		MemoryMode      string                      `json:"memory_mode"`
+		MCPServiceNames string                      `json:"mcp_service_names"`
+		ConfigSource    string                      `json:"config_source"` // 新增：配置来源
 	}
 
 	var response ConfigResponse
@@ -130,6 +145,56 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 
 	if deviceFound && agent.ID != 0 {
 		response.MemoryMode = normalizeAgentMemoryMode(agent.MemoryMode)
+		response.MCPServiceNames = normalizeMCPServiceNamesCSV(agent.MCPServiceNames)
+	}
+
+	cloneVoiceCache := make(map[string]bool)
+	hasAliyunQwenCloneVoice := func(ttsConfigID string, voice *string) bool {
+		if device.ID == 0 || device.UserID == 0 {
+			return false
+		}
+		if strings.TrimSpace(ttsConfigID) == "" || voice == nil || strings.TrimSpace(*voice) == "" {
+			return false
+		}
+		voiceID := strings.TrimSpace(*voice)
+		cacheKey := ttsConfigID + "||" + voiceID
+		if cached, exists := cloneVoiceCache[cacheKey]; exists {
+			return cached
+		}
+
+		var count int64
+		err := ac.DB.Model(&models.VoiceClone{}).
+			Where("user_id = ? AND provider = ? AND tts_config_id = ? AND provider_voice_id = ? AND status = ?",
+				device.UserID, "aliyun_qwen", ttsConfigID, voiceID, voiceCloneStatusActive).
+			Count(&count).Error
+		if err != nil {
+			log.Printf("检测千问复刻音色失败: user_id=%d tts_config_id=%s voice_id=%s err=%v", device.UserID, ttsConfigID, voiceID, err)
+			cloneVoiceCache[cacheKey] = false
+			return false
+		}
+		cloneVoiceCache[cacheKey] = count > 0
+		return cloneVoiceCache[cacheKey]
+	}
+	applyAliyunQwenCloneModel := func(provider, ttsConfigID string, voice *string, ttsConfigData map[string]interface{}) {
+		if ttsConfigData == nil {
+			return
+		}
+		if normalizeCloneProvider(provider) != "aliyun_qwen" {
+			return
+		}
+		if hasAliyunQwenCloneVoice(ttsConfigID, voice) {
+			ttsConfigData["model"] = defaultAliyunQwenCloneTargetModel
+		}
+	}
+	buildAliyunQwenVoiceModelOverride := func(ttsConfigID *string, voice *string) *string {
+		if ttsConfigID == nil {
+			return nil
+		}
+		if hasAliyunQwenCloneVoice(strings.TrimSpace(*ttsConfigID), voice) {
+			model := defaultAliyunQwenCloneTargetModel
+			return &model
+		}
+		return nil
 	}
 
 	// ==================== 配置获取逻辑（带优先级） ====================
@@ -178,6 +243,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 					} else {
 						ttsConfigData["voice"] = *role.Voice
 					}
+					applyAliyunQwenCloneModel(response.TTS.Provider, response.TTS.ConfigID, role.Voice, ttsConfigData)
 					if updatedJsonData, err := json.Marshal(ttsConfigData); err == nil {
 						response.TTS.JsonData = string(updatedJsonData)
 					}
@@ -225,6 +291,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 				} else {
 					ttsConfigData["voice"] = *agent.Voice
 				}
+				applyAliyunQwenCloneModel(response.TTS.Provider, response.TTS.ConfigID, agent.Voice, ttsConfigData)
 				if updatedJsonData, err := json.Marshal(ttsConfigData); err == nil {
 					response.TTS.JsonData = string(updatedJsonData)
 				}
@@ -271,6 +338,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 					} else {
 						ttsConfigData["voice"] = *defaultRole.Voice
 					}
+					applyAliyunQwenCloneModel(response.TTS.Provider, response.TTS.ConfigID, defaultRole.Voice, ttsConfigData)
 					if updatedJsonData, err := json.Marshal(ttsConfigData); err == nil {
 						response.TTS.JsonData = string(updatedJsonData)
 					}
@@ -337,8 +405,18 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 
 	// 获取Memory默认配置
 	if err := ac.DB.Where("type = ? AND is_default = ? AND enabled = ?", "memory", true, true).First(&response.Memory).Error; err != nil {
-		//c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get default Memory config"})
-		//return
+		// 允许没有默认 Memory 配置：显式回退为 nomemo（不启用长记忆）。
+		response.Memory = models.Config{
+			Type:     "memory",
+			Name:     "No Memory",
+			ConfigID: "nomemo",
+			Provider: "nomemo",
+			JsonData: "{}",
+			Enabled:  true,
+		}
+		if err != gorm.ErrRecordNotFound {
+			log.Printf("加载默认Memory配置失败，已回退nomemo: %v", err)
+		}
 	}
 
 	// 获取VoiceIdentify配置：检查智能体是否关联了声纹组
@@ -362,13 +440,63 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 
 				// 以声纹组名称为 key，构建配置数据
 				response.VoiceIdentify[speakerGroup.Name] = SpeakerGroupInfo{
-					ID:          speakerGroup.ID,
-					Name:        speakerGroup.Name,
-					Prompt:      speakerGroup.Prompt,
-					Description: speakerGroup.Description,
-					Uuids:       uuids,
-					TTSConfigID: speakerGroup.TTSConfigID,
-					Voice:       speakerGroup.Voice,
+					ID:                 speakerGroup.ID,
+					Name:               speakerGroup.Name,
+					Prompt:             speakerGroup.Prompt,
+					Description:        speakerGroup.Description,
+					Uuids:              uuids,
+					TTSConfigID:        speakerGroup.TTSConfigID,
+					Voice:              speakerGroup.Voice,
+					VoiceModelOverride: buildAliyunQwenVoiceModelOverride(speakerGroup.TTSConfigID, speakerGroup.Voice),
+				}
+			}
+		}
+	}
+
+	// 下发智能体关联知识库（含 provider），供主程序本地RAG使用
+	response.KnowledgeBases = make([]KnowledgeBaseInfo, 0)
+	if deviceFound && agent.ID != 0 {
+		var links []models.AgentKnowledgeBase
+		if err := ac.DB.Where("agent_id = ?", agent.ID).Order("id ASC").Find(&links).Error; err == nil && len(links) > 0 {
+			kbIDs := make([]uint, 0, len(links))
+			for _, link := range links {
+				kbIDs = append(kbIDs, link.KnowledgeBaseID)
+			}
+			var kbs []models.KnowledgeBase
+			if err := ac.DB.Where("id IN ? AND status = ?", kbIDs, "active").Find(&kbs).Error; err == nil {
+				kbMap := make(map[uint]models.KnowledgeBase, len(kbs))
+				for _, kb := range kbs {
+					kbMap[kb.ID] = kb
+				}
+				for _, link := range links {
+					kb, ok := kbMap[link.KnowledgeBaseID]
+					if !ok {
+						continue
+					}
+					provider := strings.TrimSpace(kb.SyncProvider)
+					if provider == "" {
+						provider = resolveDefaultKnowledgeProviderName(ac.DB)
+					}
+					externalDocID := strings.TrimSpace(kb.ExternalDocID)
+					if externalDocID == "" {
+						var doc models.KnowledgeBaseDocument
+						if err := ac.DB.
+							Where("knowledge_base_id = ? AND sync_status = ? AND external_doc_id <> ''", kb.ID, knowledgeSyncStatusSynced).
+							Order("id DESC").
+							First(&doc).Error; err == nil {
+							externalDocID = strings.TrimSpace(doc.ExternalDocID)
+						}
+					}
+					response.KnowledgeBases = append(response.KnowledgeBases, KnowledgeBaseInfo{
+						ID:                 kb.ID,
+						Name:               kb.Name,
+						Description:        kb.Description,
+						Provider:           provider,
+						ExternalKBID:       strings.TrimSpace(kb.ExternalKBID),
+						ExternalDocID:      externalDocID,
+						RetrievalThreshold: kb.RetrievalThreshold,
+						Status:             kb.Status,
+					})
 				}
 			}
 		}
@@ -380,7 +508,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 // getSystemConfigsData 获取系统配置数据（与 GetSystemConfigs 返回的 data 一致），供接口与 WebSocket 推送复用
 func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 	var allConfigs []models.Config
-	if err := ac.DB.Where("type IN (?)", []string{"mqtt", "mqtt_server", "udp", "ota", "mcp", "local_mcp", "voice_identify", "tts", "vad", "asr", "llm", "vision", "auth", "chat"}).Find(&allConfigs).Error; err != nil {
+	if err := ac.DB.Where("type IN (?)", []string{"mqtt", "mqtt_server", "udp", "ota", "mcp", "local_mcp", "voice_identify", "tts", "vad", "asr", "llm", "vision", "auth", "chat", "knowledge_search"}).Find(&allConfigs).Error; err != nil {
 		return nil, err
 	}
 
@@ -564,7 +692,20 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 	if configs, exists := configsByType["mcp"]; exists && len(configs) > 0 {
 		mcpData, localMcpData := selectAndParseMCPConfig(configs)
 		if mcpData != nil {
-			response["mcp"] = mcpData
+			if mcpMap := asMap(mcpData); mcpMap != nil {
+				mergedMCP, mergeWarnings, err := ac.mergeMCPWithEnabledMarketServices(mcpMap)
+				if err != nil {
+					log.Printf("聚合市场MCP服务失败，回退为人工配置: %v", err)
+					response["mcp"] = mcpMap
+				} else {
+					response["mcp"] = mergedMCP
+					if len(mergeWarnings) > 0 {
+						log.Printf("聚合市场MCP服务告警: %s", strings.Join(mergeWarnings, " | "))
+					}
+				}
+			} else {
+				response["mcp"] = mcpData
+			}
 		}
 		if localMcpData != nil {
 			response["local_mcp"] = localMcpData
@@ -574,6 +715,72 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 	// 处理独立的local_mcp配置（如果存在）
 	if configs, exists := configsByType["local_mcp"]; exists && len(configs) > 0 {
 		response["local_mcp"] = selectAndParseConfig(configs)
+	}
+
+	// 处理知识库全局配置：knowledge.default_provider + knowledge.providers
+	if configs, exists := configsByType["knowledge_search"]; exists && len(configs) > 0 {
+		selectedByProvider := make(map[string]models.Config)
+		for _, cfg := range configs {
+			if !cfg.Enabled {
+				continue
+			}
+			provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+			if provider == "" {
+				continue
+			}
+			prev, exists := selectedByProvider[provider]
+			if !exists || (!prev.IsDefault && cfg.IsDefault) {
+				selectedByProvider[provider] = cfg
+			}
+		}
+
+		if len(selectedByProvider) > 0 {
+			providerNames := make([]string, 0, len(selectedByProvider))
+			for provider := range selectedByProvider {
+				providerNames = append(providerNames, provider)
+			}
+			sort.Strings(providerNames)
+
+			providers := make(gin.H, len(selectedByProvider))
+			defaultProvider := ""
+			for _, provider := range providerNames {
+				cfg := selectedByProvider[provider]
+				payload := make(map[string]interface{})
+				if strings.TrimSpace(cfg.JsonData) != "" {
+					_ = json.Unmarshal([]byte(cfg.JsonData), &payload)
+				}
+				providers[provider] = payload
+				if cfg.IsDefault {
+					defaultProvider = provider
+				}
+			}
+			if defaultProvider == "" {
+				defaultProvider = providerNames[0]
+			}
+
+			response["knowledge"] = gin.H{
+				"default_provider": defaultProvider,
+				"providers":        providers,
+			}
+		}
+	}
+
+	// 当未配置人工 mcp(type=mcp) 但已存在市场导入服务时，补齐默认 mcp/local_mcp，确保可下发聚合结果
+	if _, exists := response["mcp"]; !exists {
+		mergedMCP, mergeWarnings, err := ac.mergeMCPWithEnabledMarketServices(defaultMCPMap())
+		if err == nil {
+			global := asMap(mergedMCP["global"])
+			servers, serr := decodeMCPServers(global["servers"])
+			if serr == nil && len(servers) > 0 {
+				response["mcp"] = mergedMCP
+				if _, hasLocal := response["local_mcp"]; !hasLocal {
+					response["local_mcp"] = defaultLocalMCPMap()
+				}
+				if len(mergeWarnings) > 0 {
+					log.Printf("聚合市场MCP服务告警: %s", strings.Join(mergeWarnings, " | "))
+				}
+			}
+		}
 	}
 
 	// 处理 voice_identify 配置（与控制台配置结构一致，包含 base_url、threshold、enable）
@@ -2122,6 +2329,274 @@ func (ac *AdminController) ResetUserPassword(c *gin.Context) {
 	})
 }
 
+// GetUserVoiceCloneQuotas 获取用户声音复刻额度（按 tts_config_id 维度）
+func (ac *AdminController) GetUserVoiceCloneQuotas(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		return
+	}
+
+	var user models.User
+	if err = ac.DB.First(&user, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询用户失败"})
+		return
+	}
+	if strings.TrimSpace(user.Role) != "user" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅支持为普通用户分配复刻额度"})
+		return
+	}
+
+	var ttsConfigs []models.Config
+	if err = ac.DB.Where("type = ?", "tts").Order("enabled DESC, name ASC").Find(&ttsConfigs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询TTS配置失败"})
+		return
+	}
+
+	var quotas []models.UserVoiceCloneQuota
+	if err = ac.DB.Where("user_id = ?", user.ID).Find(&quotas).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询用户额度失败"})
+		return
+	}
+	quotaByConfigID := make(map[string]models.UserVoiceCloneQuota, len(quotas))
+	for _, quota := range quotas {
+		quotaByConfigID[quota.TTSConfigID] = quota
+	}
+
+	type usageRow struct {
+		TTSConfigID string `json:"tts_config_id"`
+		UsedCount   int64  `json:"used_count"`
+	}
+	var usageRows []usageRow
+	if err = ac.DB.Model(&models.VoiceClone{}).
+		Select("tts_config_id, COUNT(1) AS used_count").
+		Where("user_id = ? AND status != ?", user.ID, "deleted").
+		Group("tts_config_id").
+		Scan(&usageRows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "统计用户复刻次数失败"})
+		return
+	}
+	usageByConfigID := make(map[string]int, len(usageRows))
+	for _, row := range usageRows {
+		usageByConfigID[row.TTSConfigID] = int(row.UsedCount)
+	}
+
+	result := make([]gin.H, 0, len(ttsConfigs))
+	configIDSet := make(map[string]bool, len(ttsConfigs))
+	for _, ttsConfig := range ttsConfigs {
+		configIDSet[ttsConfig.ConfigID] = true
+		quota, hasQuota := quotaByConfigID[ttsConfig.ConfigID]
+		maxCount := -1
+		usedCount := usageByConfigID[ttsConfig.ConfigID]
+		if hasQuota {
+			maxCount = quota.MaxCount
+			if quota.UsedCount > usedCount {
+				usedCount = quota.UsedCount
+			}
+		}
+		remainingCount := -1
+		if maxCount >= 0 {
+			remainingCount = maxCount - usedCount
+			if remainingCount < 0 {
+				remainingCount = 0
+			}
+		}
+
+		result = append(result, gin.H{
+			"tts_config_id":   ttsConfig.ConfigID,
+			"tts_config_name": ttsConfig.Name,
+			"provider":        ttsConfig.Provider,
+			"enabled":         ttsConfig.Enabled,
+			"max_count":       maxCount,
+			"used_count":      usedCount,
+			"remaining_count": remainingCount,
+		})
+	}
+
+	// 保留已删除的历史配置额度，避免“额度配置丢失不可见”
+	for _, quota := range quotas {
+		if configIDSet[quota.TTSConfigID] {
+			continue
+		}
+		maxCount := quota.MaxCount
+		usedCount := quota.UsedCount
+		if usageByConfigID[quota.TTSConfigID] > usedCount {
+			usedCount = usageByConfigID[quota.TTSConfigID]
+		}
+		remainingCount := -1
+		if maxCount >= 0 {
+			remainingCount = maxCount - usedCount
+			if remainingCount < 0 {
+				remainingCount = 0
+			}
+		}
+		result = append(result, gin.H{
+			"tts_config_id":   quota.TTSConfigID,
+			"tts_config_name": "(已删除配置)",
+			"provider":        "",
+			"enabled":         false,
+			"max_count":       maxCount,
+			"used_count":      usedCount,
+			"remaining_count": remainingCount,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"user_id":    user.ID,
+		"username":   user.Username,
+		"quotas":     result,
+		"updated_at": time.Now(),
+	}})
+}
+
+// UpdateUserVoiceCloneQuotas 批量更新用户声音复刻额度
+func (ac *AdminController) UpdateUserVoiceCloneQuotas(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "用户ID格式错误"})
+		return
+	}
+
+	var user models.User
+	if err = ac.DB.First(&user, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询用户失败"})
+		return
+	}
+	if strings.TrimSpace(user.Role) != "user" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅支持为普通用户分配复刻额度"})
+		return
+	}
+
+	var req struct {
+		Items []struct {
+			TTSConfigID string `json:"tts_config_id"`
+			MaxCount    int    `json:"max_count"`
+		} `json:"items"`
+	}
+	if err = c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数格式错误"})
+		return
+	}
+	if len(req.Items) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "items不能为空"})
+		return
+	}
+
+	itemByConfigID := make(map[string]int, len(req.Items))
+	configIDs := make([]string, 0, len(req.Items))
+	for _, item := range req.Items {
+		configID := strings.TrimSpace(item.TTSConfigID)
+		if configID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "tts_config_id不能为空"})
+			return
+		}
+		if item.MaxCount < -1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "max_count 不能小于 -1"})
+			return
+		}
+		if _, exists := itemByConfigID[configID]; !exists {
+			configIDs = append(configIDs, configID)
+		}
+		itemByConfigID[configID] = item.MaxCount
+	}
+
+	var ttsConfigs []models.Config
+	if err = ac.DB.Where("type = ? AND config_id IN ?", "tts", configIDs).Find(&ttsConfigs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询TTS配置失败"})
+		return
+	}
+	validConfigIDSet := make(map[string]bool, len(ttsConfigs))
+	for _, cfg := range ttsConfigs {
+		validConfigIDSet[cfg.ConfigID] = true
+	}
+	for _, configID := range configIDs {
+		if validConfigIDSet[configID] {
+			continue
+		}
+		// 历史已删除配置仅允许设置为 -1（删除额度记录）
+		if itemByConfigID[configID] == -1 {
+			continue
+		}
+		if !validConfigIDSet[configID] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("TTS配置不存在: %s", configID)})
+			return
+		}
+	}
+
+	type usageRow struct {
+		TTSConfigID string `json:"tts_config_id"`
+		UsedCount   int64  `json:"used_count"`
+	}
+	var usageRows []usageRow
+	if err = ac.DB.Model(&models.VoiceClone{}).
+		Select("tts_config_id, COUNT(1) AS used_count").
+		Where("user_id = ? AND status != ? AND tts_config_id IN ?", user.ID, "deleted", configIDs).
+		Group("tts_config_id").
+		Scan(&usageRows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "统计用户已使用次数失败"})
+		return
+	}
+	usageByConfigID := make(map[string]int, len(usageRows))
+	for _, row := range usageRows {
+		usageByConfigID[row.TTSConfigID] = int(row.UsedCount)
+	}
+
+	if err = ac.DB.Transaction(func(tx *gorm.DB) error {
+		for _, configID := range configIDs {
+			maxCount := itemByConfigID[configID]
+			if maxCount == -1 {
+				if err := tx.Where("user_id = ? AND tts_config_id = ?", user.ID, configID).Delete(&models.UserVoiceCloneQuota{}).Error; err != nil {
+					return err
+				}
+				continue
+			}
+
+			usedCount := usageByConfigID[configID]
+			var quota models.UserVoiceCloneQuota
+			if err := tx.Where("user_id = ? AND tts_config_id = ?", user.ID, configID).First(&quota).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					newQuota := models.UserVoiceCloneQuota{
+						UserID:      user.ID,
+						TTSConfigID: configID,
+						MaxCount:    maxCount,
+						UsedCount:   usedCount,
+					}
+					if err := tx.Create(&newQuota).Error; err != nil {
+						return err
+					}
+					continue
+				}
+				return err
+			}
+
+			nextUsedCount := quota.UsedCount
+			if usedCount > nextUsedCount {
+				nextUsedCount = usedCount
+			}
+			if err := tx.Model(&models.UserVoiceCloneQuota{}).Where("id = ?", quota.ID).Updates(map[string]any{
+				"max_count":  maxCount,
+				"used_count": nextUsedCount,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新用户复刻额度失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "额度更新成功"})
+}
+
 // 设备管理
 func (ac *AdminController) GetDevices(c *gin.Context) {
 	var devices []models.Device
@@ -2457,6 +2932,12 @@ func (ac *AdminController) CreateAgent(c *gin.Context) {
 		return
 	}
 	agent.MemoryMode = normalizeAgentMemoryMode(agent.MemoryMode)
+	normalizedMCPServiceNames, err := ac.normalizeAndValidateAgentMCPServices(agent.MCPServiceNames)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	agent.MCPServiceNames = normalizedMCPServiceNames
 
 	if err := ac.DB.Create(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建智能体失败"})
@@ -2480,6 +2961,12 @@ func (ac *AdminController) UpdateAgent(c *gin.Context) {
 		return
 	}
 	agent.MemoryMode = normalizeAgentMemoryMode(agent.MemoryMode)
+	normalizedMCPServiceNames, err := ac.normalizeAndValidateAgentMCPServices(agent.MCPServiceNames)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	agent.MCPServiceNames = normalizedMCPServiceNames
 
 	if err := ac.DB.Save(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新智能体失败"})
@@ -4078,21 +4565,9 @@ func (ac *AdminController) CreateMemoryConfig(c *gin.Context) {
 	config.Type = "memory"
 
 	// 验证provider字段
-	if config.Provider != "memobase" && config.Provider != "mem0" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Provider必须是memobase或mem0"})
+	if config.Provider != "memobase" && config.Provider != "mem0" && config.Provider != "memos" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Provider必须是memobase、mem0或memos"})
 		return
-	}
-
-	// 检查是否已存在Memory配置，如果不存在则自动设置为默认配置
-	var existingCount int64
-	if err := ac.DB.Model(&models.Config{}).Where("type = ?", "memory").Count(&existingCount).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "检查Memory配置失败"})
-		return
-	}
-
-	// 如果这是第一个Memory配置，自动设置为默认配置
-	if existingCount == 0 {
-		config.IsDefault = true
 	}
 
 	// 如果设置为默认配置，先取消其他同类型的默认配置
@@ -4124,8 +4599,8 @@ func (ac *AdminController) UpdateMemoryConfig(c *gin.Context) {
 	}
 
 	// 验证provider字段
-	if updateData.Provider != "memobase" && updateData.Provider != "mem0" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Provider必须是memobase或mem0"})
+	if updateData.Provider != "memobase" && updateData.Provider != "mem0" && updateData.Provider != "memos" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Provider必须是memobase、mem0或memos"})
 		return
 	}
 

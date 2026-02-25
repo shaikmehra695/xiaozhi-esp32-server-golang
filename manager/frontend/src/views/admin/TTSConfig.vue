@@ -96,6 +96,7 @@
         :rules="rules"
         :voice-options="voiceOptions"
         :voice-loading="voiceLoading"
+        @request-voice-options="handleVoiceOptionsRequest"
       />
       
       <template #footer>
@@ -118,6 +119,7 @@ import { Plus } from '@element-plus/icons-vue'
 import api from '../../utils/api'
 import { testSingleConfig, testWithData, parseJsonData } from '../../utils/configTest'
 import TTSConfigForm from './forms/TTSConfigForm.vue'
+import { TTS_PROVIDERS_WITH_VOICES } from './forms/ttsProviderOptions'
 
 const configs = ref([])
 const testingId = ref(null)
@@ -199,6 +201,13 @@ const form = reactive({
     stream: true,
     frame_duration: 60
   },
+  indextts_vllm: {
+    api_url: 'http://127.0.0.1:7860',
+    api_key: '',
+    model: 'indextts-vllm',
+    voice: '',
+    frame_duration: 60
+  },
   zhipu: {
     api_key: '',
     api_url: 'https://open.bigmodel.cn/api/paas/v4/audio/speech',
@@ -257,7 +266,8 @@ const rules = {
   // Minimax TTS 验证规则
   'minimax.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }],
   // 千问 TTS 验证规则
-  'qwen_tts.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }]
+  'qwen_tts.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }],
+  'indextts_vllm.api_url': [{ required: true, message: '请输入API URL', trigger: 'blur' }]
 }
 
 const loadConfigs = async () => {
@@ -280,7 +290,7 @@ const editConfig = (config) => {
   form.is_default = config.is_default
   form.enabled = config.enabled
   
-  // 加载对应 provider 的音色列表
+  // IndexTTS 改为点击音色下拉时再请求
   loadVoiceOptions(config.provider)
   
   // 解析配置JSON并填充到对应的表单字段
@@ -346,6 +356,13 @@ const editConfig = (config) => {
         form.openai.speed = configData.speed || 1.0
         form.openai.stream = configData.stream !== undefined ? configData.stream : true
         form.openai.frame_duration = configData.frame_duration || 60
+        break
+      case 'indextts_vllm':
+        form.indextts_vllm.api_url = configData.api_url || 'http://127.0.0.1:7860'
+        form.indextts_vllm.api_key = configData.api_key || ''
+        form.indextts_vllm.model = configData.model || 'indextts-vllm'
+        form.indextts_vllm.voice = configData.voice || ''
+        form.indextts_vllm.frame_duration = configData.frame_duration || 60
         break
       case 'zhipu':
         // 智谱配置从 json_data 中读取
@@ -638,6 +655,13 @@ const resetForm = () => {
       stream: true,
       frame_duration: 60
     },
+    indextts_vllm: {
+      api_url: 'http://127.0.0.1:7860',
+      api_key: '',
+      model: 'indextts-vllm',
+      voice: '',
+      frame_duration: 60
+    },
     zhipu: {
       api_key: '',
       api_url: 'https://open.bigmodel.cn/api/paas/v4/audio/speech',
@@ -677,23 +701,40 @@ const formatDate = (dateString) => {
 }
 
 // 加载音色列表
-const loadVoiceOptions = async (provider) => {
+const loadVoiceOptions = async (provider, options = {}) => {
+  const trigger = options?.trigger || 'auto'
   if (!provider) {
+    voiceOptions.value = []
+    return
+  }
+
+  // IndexTTS 仅在下拉展开时请求
+  if (provider === 'indextts_vllm' && trigger !== 'dropdown') {
     voiceOptions.value = []
     return
   }
   
   // 只有这些 provider 需要从后端获取音色列表
-  const providersWithVoices = ['minimax', 'edge', 'doubao', 'doubao_ws', 'zhipu', 'openai']
-  if (!providersWithVoices.includes(provider)) {
+  if (!TTS_PROVIDERS_WITH_VOICES.includes(provider)) {
     voiceOptions.value = []
     return
   }
   
   voiceLoading.value = true
   try {
+    const params = { provider, config_id: form.config_id || undefined }
+    if (provider === 'indextts_vllm') {
+      const apiURL = String(form.indextts_vllm?.api_url || '').trim()
+      const apiKey = String(form.indextts_vllm?.api_key || '').trim()
+      if (apiURL) {
+        params.api_url = apiURL
+      }
+      if (apiKey) {
+        params.api_key = apiKey
+      }
+    }
     const response = await api.get(`/user/voice-options`, {
-      params: { provider }
+      params
     })
     voiceOptions.value = response.data.data || []
   } catch (error) {
@@ -702,6 +743,11 @@ const loadVoiceOptions = async (provider) => {
   } finally {
     voiceLoading.value = false
   }
+}
+
+const handleVoiceOptionsRequest = (provider) => {
+  if (!showDialog.value) return
+  loadVoiceOptions(provider || form.provider, { trigger: 'dropdown' })
 }
 
 // 监听 provider 变化，自动加载对应的音色列表

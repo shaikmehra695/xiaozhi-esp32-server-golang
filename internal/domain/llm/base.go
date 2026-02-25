@@ -7,6 +7,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"xiaozhi-esp32-server-golang/constants"
+	"xiaozhi-esp32-server-golang/internal/domain/llm/coze_llm"
+	"xiaozhi-esp32-server-golang/internal/domain/llm/dify_llm"
 	"xiaozhi-esp32-server-golang/internal/domain/llm/eino_llm"
 )
 
@@ -68,13 +70,29 @@ type LLMFactory interface {
 // GetLLMProvider 创建LLM提供者
 // 统一使用EinoLLMProvider处理所有类型
 func GetLLMProvider(providerName string, config map[string]interface{}) (LLMProvider, error) {
-	llmType := config["type"].(string)
+	llmType, _ := config["type"].(string)
+	if llmType == "" {
+		llmType = providerName
+	}
+
 	switch llmType {
 	case constants.LlmTypeOpenai, constants.LlmTypeOllama, constants.LlmTypeEinoLLM, constants.LlmTypeEino:
 		// 统一使用 EinoLLMProvider 处理所有类型
 		provider, err := eino_llm.NewEinoLLMProvider(config)
 		if err != nil {
 			return nil, fmt.Errorf("创建Eino LLM提供者失败: %v", err)
+		}
+		return provider, nil
+	case constants.LlmTypeDify:
+		provider, err := dify_llm.NewDifyLLMProvider(config)
+		if err != nil {
+			return nil, fmt.Errorf("创建Dify LLM提供者失败: %v", err)
+		}
+		return provider, nil
+	case constants.LlmTypeCoze:
+		provider, err := coze_llm.NewCozeLLMProvider(config)
+		if err != nil {
+			return nil, fmt.Errorf("创建Coze LLM提供者失败: %v", err)
 		}
 		return provider, nil
 	}

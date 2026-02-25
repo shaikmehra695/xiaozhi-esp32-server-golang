@@ -71,17 +71,20 @@ func (c *ConfigManager) GetUserConfig(ctx context.Context, deviceID string) (typ
 				JsonData string `json:"json_data"`
 			} `json:"memory"`
 			VoiceIdentify map[string]struct {
-				ID          uint     `json:"id"`
-				Name        string   `json:"name"`
-				Prompt      string   `json:"prompt"`
-				Description string   `json:"description"`
-				Uuids       []string `json:"uuids"`
-				TTSConfigID *string  `json:"tts_config_id"`
-				Voice       *string  `json:"voice"`
+				ID                 uint     `json:"id"`
+				Name               string   `json:"name"`
+				Prompt             string   `json:"prompt"`
+				Description        string   `json:"description"`
+				Uuids              []string `json:"uuids"`
+				TTSConfigID        *string  `json:"tts_config_id"`
+				Voice              *string  `json:"voice"`
+				VoiceModelOverride *string  `json:"voice_model_override"`
 			} `json:"voice_identify"`
-			Prompt     string `json:"prompt"`
-			AgentId    string `json:"agent_id"`
-			MemoryMode string `json:"memory_mode"`
+			KnowledgeBases  []types.KnowledgeBaseRef `json:"knowledge_bases"`
+			Prompt          string                   `json:"prompt"`
+			AgentId         string                   `json:"agent_id"`
+			MemoryMode      string                   `json:"memory_mode"`
+			MCPServiceNames string                   `json:"mcp_service_names"`
 		} `json:"data"`
 	}
 
@@ -118,13 +121,14 @@ func (c *ConfigManager) GetUserConfig(ctx context.Context, deviceID string) (typ
 		// 将 map 格式的声纹组信息转换为配置格式
 		for groupName, groupInfo := range response.Data.VoiceIdentify {
 			groupData := types.SpeakerGroupInfo{
-				ID:          groupInfo.ID,
-				Name:        groupInfo.Name,
-				Prompt:      groupInfo.Prompt,
-				Description: groupInfo.Description,
-				Uuids:       groupInfo.Uuids,
-				TTSConfigID: groupInfo.TTSConfigID,
-				Voice:       groupInfo.Voice,
+				ID:                 groupInfo.ID,
+				Name:               groupInfo.Name,
+				Prompt:             groupInfo.Prompt,
+				Description:        groupInfo.Description,
+				Uuids:              groupInfo.Uuids,
+				TTSConfigID:        groupInfo.TTSConfigID,
+				Voice:              groupInfo.Voice,
+				VoiceModelOverride: groupInfo.VoiceModelOverride,
 			}
 			voiceIdentifyData[groupName] = groupData
 		}
@@ -153,9 +157,11 @@ func (c *ConfigManager) GetUserConfig(ctx context.Context, deviceID string) (typ
 			Provider: response.Data.Memory.Provider,
 			Config:   parseJsonData(response.Data.Memory.JsonData),
 		},
-		VoiceIdentify: voiceIdentifyData,
-		MemoryMode:    response.Data.MemoryMode,
-		AgentId:       response.Data.AgentId,
+		KnowledgeBases:  response.Data.KnowledgeBases,
+		VoiceIdentify:   voiceIdentifyData,
+		MemoryMode:      response.Data.MemoryMode,
+		AgentId:         response.Data.AgentId,
+		MCPServiceNames: strings.TrimSpace(response.Data.MCPServiceNames),
 	}
 	if strings.TrimSpace(config.MemoryMode) == "" {
 		config.MemoryMode = "short"
@@ -187,14 +193,14 @@ func (c *ConfigManager) GetSystemConfig(ctx context.Context) (string, error) {
 		if voiceIdentifyMap, ok := voiceIdentifyData.(map[string]interface{}); ok {
 			// 如果 voice_identify 配置存在但没有 threshold 字段，添加默认值
 			if _, hasThreshold := voiceIdentifyMap["threshold"]; !hasThreshold {
-				voiceIdentifyMap["threshold"] = 0.6
-				log.Log().Info("voice_identify 配置缺少 threshold 字段，已添加默认值 0.6")
+				voiceIdentifyMap["threshold"] = 0.4
+				log.Log().Info("voice_identify 配置缺少 threshold 字段，已添加默认值 0.4")
 			} else {
 				// 验证阈值范围
 				if thresholdVal, ok := voiceIdentifyMap["threshold"].(float64); ok {
 					if thresholdVal < 0 || thresholdVal > 1 {
-						log.Log().Warnf("voice_identify.threshold 值 %.4f 超出有效范围 [0.0, 1.0]，使用默认值 0.6", thresholdVal)
-						voiceIdentifyMap["threshold"] = 0.6
+						log.Log().Warnf("voice_identify.threshold 值 %.4f 超出有效范围 [0.0, 1.0]，使用默认值 0.4", thresholdVal)
+						voiceIdentifyMap["threshold"] = 0.4
 					}
 				}
 			}
@@ -300,6 +306,7 @@ func (c *ConfigManager) RestoreDeviceDefaultRole(ctx context.Context, deviceID s
 	return nil
 }
 
+// SearchKnowledge 通过管理后台统一检索知识库（控制台按provider转发）
 func (c *ConfigManager) NotifyDeviceEvent(ctx context.Context, eventType string, eventData map[string]interface{}) {
 	_, err := SendDeviceRequest(ctx, eventType, eventData)
 	if err != nil {

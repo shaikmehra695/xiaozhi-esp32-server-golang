@@ -265,9 +265,59 @@ func (d *AudioDecoder) RunWavDecoder(startTs int64, isRaw bool) error {
 	log.Debugf("WAV/PCM解码器开始，原始采样率: %d, 目标采样率: %d, 帧大小: %d, 目标格式: %s", sampleRate, opusSampleRate, frameSize, d.TargetAudioFormat)
 
 	// 用于读取原始PCM数据的缓冲区
-	rawBuffer := make([]byte, frameSize*channels*2) // 16位采样=2字节
+	bytesPerPoint := 2 * channels // 16位采样=2字节，多声道按一个采样点聚合
+	rawBuffer := make([]byte, frameSize*bytesPerPoint)
+	remainderBytes := make([]byte, 0, bytesPerPoint*4) // 保存未对齐的残留字节，避免打乱后续采样边界
 	currentFramePos := 0
 	var firstFrame bool
+
+	flushLastFrame := func() error {
+		if currentFramePos <= 0 {
+			return nil
+		}
+
+		// 创建一个完整的帧缓冲区，用0填充剩余部分
+		paddedFrame := make([]int16, len(pcmBuffer))
+		copy(paddedFrame, pcmBuffer[:currentFramePos]) // 将有效数据复制到开头，剩余部分默认为0
+
+		var opusPcmBuffer []int16 = paddedFrame
+		if d.targetSampleRate > 0 && d.targetSampleRate != sampleRate {
+			pcmBytes := Int16SliceToBytes(opusPcmBuffer)
+			pcmFloat32 := PCM16BytesToFloat32(pcmBytes)
+			pcmFloat32 = ResampleLinearFloat32(pcmFloat32, sampleRate, d.targetSampleRate)
+			opusPcmBuffer = Float32SliceToInt16Slice(pcmFloat32)
+		}
+
+		// 根据目标格式输出数据
+		if d.TargetAudioFormat == "opus" {
+			// 编码最后一帧
+			n, encodeErr := enc.Encode(opusPcmBuffer, opusBuffer)
+			if encodeErr != nil {
+				log.Errorf("编码剩余数据失败: %v", encodeErr)
+				return fmt.Errorf("编码剩余数据失败: %v", encodeErr)
+			}
+			frameData := make([]byte, n)
+			copy(frameData, opusBuffer[:n])
+			select {
+			case <-d.ctx.Done():
+				log.Debugf("wavDecoder context done, exit")
+				return nil
+			case d.outputOpusChan <- frameData:
+			}
+			return nil
+		}
+		if d.TargetAudioFormat == "pcm" {
+			// 直接输出PCM数据
+			pcmData := Int16SliceToBytes(opusPcmBuffer)
+			select {
+			case <-d.ctx.Done():
+				log.Debugf("wavDecoder context done, exit")
+				return nil
+			case d.outputOpusChan <- pcmData:
+			}
+		}
+		return nil
+	}
 
 	for {
 		select {
@@ -276,65 +326,37 @@ func (d *AudioDecoder) RunWavDecoder(startTs int64, isRaw bool) error {
 			return nil
 		default:
 			// 读取PCM数据
-			n, err := d.pipeReader.Read(rawBuffer)
-			if err == io.EOF {
-				log.Debugf("WAV/PCM流读取结束，处理剩余数据")
-				// 处理剩余不足一帧的数据
-				if currentFramePos > 0 {
-					// 创建一个完整的帧缓冲区，用0填充剩余部分
-					paddedFrame := make([]int16, len(pcmBuffer))
-					copy(paddedFrame, pcmBuffer[:currentFramePos]) // 将有效数据复制到开头，剩余部分默认为0
+			n, readErr := d.pipeReader.Read(rawBuffer)
+			if n <= 0 && readErr == nil {
+				continue
+			}
 
-					var opusPcmBuffer []int16 = paddedFrame
-					if d.targetSampleRate > 0 && d.targetSampleRate != sampleRate {
-						pcmBytes := Int16SliceToBytes(opusPcmBuffer)
-						pcmFloat32 := PCM16BytesToFloat32(pcmBytes)
-						pcmFloat32 = ResampleLinearFloat32(pcmFloat32, sampleRate, d.targetSampleRate)
-						opusPcmBuffer = Float32SliceToInt16Slice(pcmFloat32)
-					}
-
-					// 根据目标格式输出数据
-					if d.TargetAudioFormat == "opus" {
-						// 编码最后一帧
-						n, err := enc.Encode(opusPcmBuffer, opusBuffer)
-						if err != nil {
-							log.Errorf("编码剩余数据失败: %v", err)
-							return fmt.Errorf("编码剩余数据失败: %v", err)
-						} else {
-							frameData := make([]byte, n)
-							copy(frameData, opusBuffer[:n])
-							select {
-							case <-d.ctx.Done():
-								log.Debugf("wavDecoder context done, exit")
-								return nil
-							case d.outputOpusChan <- frameData:
-							}
-						}
-					} else if d.TargetAudioFormat == "pcm" {
-						// 直接输出PCM数据
-						pcmData := Int16SliceToBytes(opusPcmBuffer)
-						select {
-						case <-d.ctx.Done():
-							log.Debugf("wavDecoder context done, exit")
-							return nil
-						case d.outputOpusChan <- pcmData:
-						}
-					}
+			var chunk []byte
+			if n > 0 {
+				chunk = rawBuffer[:n]
+				if len(remainderBytes) > 0 {
+					combined := make([]byte, 0, len(remainderBytes)+len(chunk))
+					combined = append(combined, remainderBytes...)
+					combined = append(combined, chunk...)
+					chunk = combined
+					remainderBytes = remainderBytes[:0]
 				}
-				return nil
-			}
-			if err != nil {
-				return fmt.Errorf("读取PCM数据失败: %v", err)
+
+				alignedBytes := (len(chunk) / bytesPerPoint) * bytesPerPoint
+				if alignedBytes < len(chunk) {
+					remainderBytes = append(remainderBytes[:0], chunk[alignedBytes:]...)
+					chunk = chunk[:alignedBytes]
+				}
 			}
 
-			// 将字节数据转换为int16采样点
-			samplesRead := n / (2 * channels) // 每个采样2字节,考虑通道数
+			// 将字节数据转换为int16采样点（保证按采样点边界对齐）
+			samplesRead := len(chunk) / bytesPerPoint
 			for i := 0; i < samplesRead; i++ {
 				// 对于多通道,取平均值
 				var sampleSum int32
 				for ch := 0; ch < channels; ch++ {
-					pos := i*channels*2 + ch*2
-					sample := int16(uint16(rawBuffer[pos]) | uint16(rawBuffer[pos+1])<<8)
+					pos := i*bytesPerPoint + ch*2
+					sample := int16(uint16(chunk[pos]) | uint16(chunk[pos+1])<<8)
 					sampleSum += int32(sample)
 				}
 
@@ -389,6 +411,17 @@ func (d *AudioDecoder) RunWavDecoder(startTs int64, isRaw bool) error {
 					}
 					currentFramePos = 0
 				}
+			}
+
+			if readErr == io.EOF {
+				log.Debugf("WAV/PCM流读取结束，处理剩余数据")
+				if len(remainderBytes) > 0 {
+					log.Warnf("WAV/PCM存在未对齐残留字节，已丢弃: %d", len(remainderBytes))
+				}
+				return flushLastFrame()
+			}
+			if readErr != nil {
+				return fmt.Errorf("读取PCM数据失败: %v", readErr)
 			}
 		}
 	}
