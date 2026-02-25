@@ -146,6 +146,8 @@ func (p *OpenAITTSProvider) TextToSpeechStream(ctx context.Context, text string,
 		return nil, fmt.Errorf("序列化请求失败: %v", err)
 	}
 
+	//log.Debugf("OpenAI TTS请求: %s", string(jsonData))
+
 	// 创建HTTP请求
 	req, err := http.NewRequestWithContext(ctx, "POST", p.APIURL, bytes.NewBuffer(jsonData))
 	if err != nil {
