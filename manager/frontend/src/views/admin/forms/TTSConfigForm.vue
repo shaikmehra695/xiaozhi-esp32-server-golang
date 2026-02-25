@@ -296,6 +296,7 @@
           :disabled="voiceLoading"
           allow-create
           default-first-option
+          @visible-change="handleIndexTTSVoiceVisibleChange"
         >
           <el-option v-for="option in voiceOptionsList" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
@@ -342,10 +343,17 @@ const props = defineProps({
   voiceOptions: { type: Array, default: () => [] },
   voiceLoading: { type: Boolean, default: false }
 })
+const emit = defineEmits(['request-voice-options'])
 
 const formRef = ref()
 // 保证音色选项始终为数组且响应式，供下拉使用
 const voiceOptionsList = computed(() => Array.isArray(props.voiceOptions) ? props.voiceOptions : [])
+
+function handleIndexTTSVoiceVisibleChange(visible) {
+  if (visible) {
+    emit('request-voice-options', 'indextts_vllm')
+  }
+}
 
 function getJsonData() {
   const form = props.model

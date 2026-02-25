@@ -3,6 +3,7 @@ package tts
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"xiaozhi-esp32-server-golang/constants"
@@ -10,7 +11,6 @@ import (
 	"xiaozhi-esp32-server-golang/internal/domain/tts/doubao"
 	"xiaozhi-esp32-server-golang/internal/domain/tts/edge"
 	"xiaozhi-esp32-server-golang/internal/domain/tts/edge_offline"
-	"xiaozhi-esp32-server-golang/internal/domain/tts/indextts_vllm"
 	"xiaozhi-esp32-server-golang/internal/domain/tts/minimax"
 	"xiaozhi-esp32-server-golang/internal/domain/tts/openai"
 	"xiaozhi-esp32-server-golang/internal/domain/tts/qwen"
@@ -73,7 +73,7 @@ func GetTTSProvider(providerName string, config map[string]interface{}) (TTSProv
 	case constants.TtsTypeAliyunQwen:
 		baseProvider = qwen.NewQwenTTSProvider(config)
 	case constants.TtsTypeIndexTTSVLLM:
-		baseProvider = indextts_vllm.NewIndexTTSVLLMProvider(config)
+		baseProvider = openai.NewOpenAITTSProvider(buildIndexTTSOpenAIConfig(config))
 	default:
 		return nil, fmt.Errorf("不支持的TTS提供者: %s", effectiveName)
 	}
@@ -86,6 +86,55 @@ func GetTTSProvider(providerName string, config map[string]interface{}) (TTSProv
 	provider := &ContextTTSAdapter{baseProvider}
 
 	return provider, nil
+}
+
+func buildIndexTTSOpenAIConfig(config map[string]interface{}) map[string]interface{} {
+	const (
+		defaultIndexTTSURL   = "http://127.0.0.1:7860/audio/speech"
+		defaultIndexTTSModel = "indextts-vllm"
+	)
+
+	normalized := make(map[string]interface{}, len(config)+4)
+	for k, v := range config {
+		normalized[k] = v
+	}
+
+	apiURL, _ := normalized["api_url"].(string)
+	apiURL = strings.TrimSpace(apiURL)
+	if apiURL == "" {
+		apiURL = defaultIndexTTSURL
+	} else {
+		parsed, err := url.Parse(apiURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			trimmed := strings.TrimRight(apiURL, "/")
+			if !strings.HasSuffix(strings.ToLower(trimmed), "/audio/speech") {
+				trimmed += "/audio/speech"
+			}
+			apiURL = trimmed
+		} else {
+			if strings.TrimSpace(parsed.Path) == "" || parsed.Path == "/" {
+				parsed.Path = "/audio/speech"
+				parsed.RawPath = ""
+				apiURL = parsed.String()
+			}
+		}
+	}
+	normalized["api_url"] = strings.TrimRight(apiURL, "/")
+
+	if model, _ := normalized["model"].(string); strings.TrimSpace(model) == "" {
+		normalized["model"] = defaultIndexTTSModel
+	}
+	if responseFormat, _ := normalized["response_format"].(string); strings.TrimSpace(responseFormat) == "" {
+		normalized["response_format"] = "wav"
+	}
+	if _, exists := normalized["stream"]; !exists {
+		normalized["stream"] = false
+	}
+	if _, exists := normalized["speed"]; !exists {
+		normalized["speed"] = float64(1.0)
+	}
+
+	return normalized
 }
 
 // ContextTTSAdapter 是一个适配器，为基础TTS提供者添加Context支持

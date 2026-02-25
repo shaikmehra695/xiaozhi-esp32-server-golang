@@ -269,6 +269,7 @@ func (vcc *VoiceCloneController) CreateVoiceClone(c *gin.Context) {
 		Status:    voiceCloneTaskStatusQueued,
 		Attempts:  0,
 		LastError: "",
+		MetaJSON:  string(pendingMetaJSON),
 	}
 
 	err = vcc.DB.Transaction(func(tx *gorm.DB) error {

@@ -96,6 +96,7 @@
         :rules="rules"
         :voice-options="voiceOptions"
         :voice-loading="voiceLoading"
+        @request-voice-options="handleVoiceOptionsRequest"
       />
       
       <template #footer>
@@ -289,7 +290,7 @@ const editConfig = (config) => {
   form.is_default = config.is_default
   form.enabled = config.enabled
   
-  // 加载对应 provider 的音色列表
+  // IndexTTS 改为点击音色下拉时再请求
   loadVoiceOptions(config.provider)
   
   // 解析配置JSON并填充到对应的表单字段
@@ -700,8 +701,15 @@ const formatDate = (dateString) => {
 }
 
 // 加载音色列表
-const loadVoiceOptions = async (provider) => {
+const loadVoiceOptions = async (provider, options = {}) => {
+  const trigger = options?.trigger || 'auto'
   if (!provider) {
+    voiceOptions.value = []
+    return
+  }
+
+  // IndexTTS 仅在下拉展开时请求
+  if (provider === 'indextts_vllm' && trigger !== 'dropdown') {
     voiceOptions.value = []
     return
   }
@@ -724,6 +732,11 @@ const loadVoiceOptions = async (provider) => {
   } finally {
     voiceLoading.value = false
   }
+}
+
+const handleVoiceOptionsRequest = (provider) => {
+  if (!showDialog.value) return
+  loadVoiceOptions(provider || form.provider, { trigger: 'dropdown' })
 }
 
 // 监听 provider 变化，自动加载对应的音色列表

@@ -636,6 +636,10 @@ func (uc *UserController) fetchIndexTTSVoices(c *gin.Context, configID string) (
 		if v == "" {
 			continue
 		}
+		// 过滤掉 IndexTTS 服务端内部默认前缀音色，优先展示可用系统音色与用户复刻音色
+		if strings.HasPrefix(strings.ToLower(v), "indextts_vllm") {
+			continue
+		}
 		result = append(result, VoiceOption{Value: v, Label: v})
 	}
 	return result, nil
@@ -691,24 +695,40 @@ func (uc *UserController) GetVoiceOptions(c *gin.Context) {
 	}
 
 	result := make([]VoiceOption, 0, len(systemVoices)+8)
+	seen := make(map[string]bool, len(systemVoices)+8)
+
+	// 先放系统音色
+	for _, v := range systemVoices {
+		key := strings.TrimSpace(v.Value)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, v)
+	}
+
+	// 再追加用户复刻音色（若与系统音色重复，优先保留复刻标签并置于后方）
 	if userID, ok := c.Get("user_id"); ok && configID != "" {
 		var clones []models.VoiceClone
 		if err := uc.DB.Where("user_id = ? AND provider = ? AND tts_config_id = ? AND status = ?", userID, provider, configID, "active").Order("created_at DESC").Find(&clones).Error; err == nil {
 			for _, clone := range clones {
-				result = append(result, BuildVoiceOptionForClone(clone))
+				opt := BuildVoiceOptionForClone(clone)
+				key := strings.TrimSpace(opt.Value)
+				if key == "" {
+					continue
+				}
+				if seen[key] {
+					for i := range result {
+						if strings.TrimSpace(result[i].Value) == key {
+							result = append(result[:i], result[i+1:]...)
+							break
+						}
+					}
+				}
+				seen[key] = true
+				result = append(result, opt)
 			}
 		}
-	}
-
-	seen := make(map[string]bool)
-	for _, v := range result {
-		seen[v.Value] = true
-	}
-	for _, v := range systemVoices {
-		if seen[v.Value] {
-			continue
-		}
-		result = append(result, v)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": result})
