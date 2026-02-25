@@ -36,14 +36,16 @@ const tabs = computed(() => {
     return [
       { name: 'dashboard', label: '首页', icon: 'home-o', path: '/dashboard' },
       { name: 'config', label: '配置', icon: 'setting-o', path: '/admin/vad-config' },
-      { name: 'manage', label: '管理', icon: 'apps-o', path: '/admin/users' }
+      { name: 'manage', label: '管理', icon: 'apps-o', path: '/admin/users' },
+      { name: 'more', label: '更多', icon: 'ellipsis', path: '/more' }
     ]
   } else {
     // 普通用户标签栏
     return [
       { name: 'console', label: '首页', icon: 'home-o', path: '/console' },
       { name: 'agents', label: '智能体', icon: 'apps-o', path: '/agents' },
-      { name: 'speakers', label: '声纹', icon: 'user-o', path: '/user/speakers' }
+      { name: 'speakers', label: '声纹', icon: 'user-o', path: '/user/speakers' },
+      { name: 'more', label: '更多', icon: 'ellipsis', path: '/more' }
     ]
   }
 })

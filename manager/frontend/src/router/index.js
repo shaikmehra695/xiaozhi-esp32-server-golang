@@ -238,6 +238,12 @@ const routes = [
         meta: { title: '声音复刻' }
       },
       {
+        path: '/more',
+        name: 'MobileMore',
+        component: () => import('../views/mobile/MobileMore.vue'),
+        meta: { title: '更多功能' }
+      },
+      {
         path: '/user/agents/:id/history',
         name: 'AgentHistory',
         component: () => import('../views/user/AgentHistory.vue'),

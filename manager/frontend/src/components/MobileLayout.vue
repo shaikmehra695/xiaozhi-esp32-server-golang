@@ -35,6 +35,8 @@
           </div>
         </div>
         <van-cell-group inset>
+          <van-cell title="更多功能" is-link @click="handleGoMore" />
+          <van-cell v-if="authStore.isAdmin" title="配置向导" is-link @click="handleGoConfigWizard" />
           <van-cell title="退出登录" is-link @click="handleLogout" />
         </van-cell-group>
       </div>
@@ -64,7 +66,7 @@ const pageTitle = computed(() => {
 
 // 是否显示返回按钮（非首页且不在标签栏页面时显示）
 const showBack = computed(() => {
-  const hideBackPages = ['/dashboard', '/console', '/agents', '/user/speakers', '/login']
+  const hideBackPages = ['/dashboard', '/console', '/agents', '/user/speakers', '/more', '/login']
   const currentPath = route.path
   return !hideBackPages.some(path => currentPath === path || currentPath.startsWith(path + '/'))
 })
@@ -95,6 +97,17 @@ const roleText = computed(() => {
 // 用户图标点击
 const handleUserClick = () => {
   showUserMenu.value = true
+}
+
+
+const handleGoMore = () => {
+  router.push('/more')
+  showUserMenu.value = false
+}
+
+const handleGoConfigWizard = () => {
+  router.push('/admin/config-wizard')
+  showUserMenu.value = false
 }
 
 // 退出登录
