@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -40,6 +39,7 @@ type GatewayResponse struct {
 type sessionState struct {
 	mu          sync.RWMutex
 	cfg         RuntimeConfig
+	gwClient    GatewayClient
 	failCount   int
 	lastActive  time.Time
 	initialized bool
@@ -64,6 +64,7 @@ func (s *sessionState) getConfig(ctx context.Context, fetcher func(context.Conte
 		return RuntimeConfig{}, err
 	}
 	s.cfg = cfg
+	s.gwClient = newGatewayClient(cfg)
 	s.initialized = true
 	s.lastActive = time.Now()
 	return cfg, nil
@@ -83,6 +84,12 @@ func (s *sessionState) incFail() int {
 	s.lastActive = time.Now()
 	s.mu.Unlock()
 	return count
+}
+
+func (s *sessionState) gatewayClient() GatewayClient {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.gwClient
 }
 
 type fallbackTask struct {
@@ -122,7 +129,7 @@ func (r *Runtime) startFallbackWorkers() {
 func (r *Runtime) fallbackWorker() {
 	for task := range r.fallbackQueue {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		resp, err := r.sendGatewayRequest(ctx, task.cfg, task.text, task.deviceID)
+		resp, err := newGatewayClient(task.cfg).SendMessage(ctx, task.text, task.deviceID)
 		if err == nil {
 			payload := strings.TrimSpace(resp.Reply)
 			if payload == "" {
@@ -158,7 +165,7 @@ func (r *Runtime) HandleRequest(ctx context.Context, deviceID, agentID string, u
 		return "", err
 	}
 
-	reply, err := r.sendGatewayRequest(ctx, cfg, text, deviceID)
+	reply, err := st.gatewayClient().SendMessage(ctx, text, deviceID)
 	if err == nil {
 		st.resetFail()
 		if strings.TrimSpace(reply.Reply) != "" {
@@ -188,31 +195,6 @@ func (r *Runtime) HandleRequest(ctx context.Context, deviceID, agentID string, u
 		return "OpenClaw 暂不可用，已自动切回默认助手。", ErrFallbackToLLM
 	}
 	return "OpenClaw 处理中，请稍后。", nil
-}
-
-func (r *Runtime) sendGatewayRequest(ctx context.Context, cfg RuntimeConfig, text, deviceID string) (GatewayResponse, error) {
-	var out GatewayResponse
-	body := map[string]interface{}{"message": text, "device_id": deviceID}
-	raw, _ := json.Marshal(body)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL, bytes.NewReader(raw))
-	req.Header.Set("Content-Type", "application/json")
-	if strings.EqualFold(strings.TrimSpace(cfg.AuthType), "bearer") && strings.TrimSpace(cfg.Token) != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.Token)
-	}
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return out, err
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return out, fmt.Errorf("gateway http %d", resp.StatusCode)
-	}
-	_ = json.Unmarshal(b, &out)
-	if out.Reply == "" && !out.Pending {
-		out.Reply = strings.TrimSpace(string(b))
-	}
-	return out, nil
 }
 
 func (r *Runtime) fetchRuntimeConfig(ctx context.Context, deviceID, configID string) (RuntimeConfig, error) {
