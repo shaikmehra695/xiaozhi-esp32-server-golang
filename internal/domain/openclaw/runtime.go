@@ -36,63 +36,82 @@ type GatewayResponse struct {
 }
 
 type sessionState struct {
+	mu          sync.RWMutex
 	cfg         RuntimeConfig
 	failCount   int
 	lastActive  time.Time
 	initialized bool
 }
 
-type sessionManager struct {
-	mu       sync.Mutex
-	sessions map[string]*sessionState
+func (s *sessionState) getConfig(ctx context.Context, deviceID, configID string) (RuntimeConfig, error) {
+	s.mu.RLock()
+	if s.initialized {
+		cfg := s.cfg
+		s.mu.RUnlock()
+		return cfg, nil
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.initialized {
+		return s.cfg, nil
+	}
+	cfg, err := fetchRuntimeConfig(ctx, deviceID, configID)
+	if err != nil {
+		return RuntimeConfig{}, err
+	}
+	s.cfg = cfg
+	s.initialized = true
+	s.lastActive = time.Now()
+	return s.cfg, nil
 }
 
-var mgr = &sessionManager{sessions: map[string]*sessionState{}}
+func (s *sessionState) recordSuccess() {
+	s.mu.Lock()
+	s.failCount = 0
+	s.lastActive = time.Now()
+	s.mu.Unlock()
+}
+
+func (s *sessionState) incrementFail() int {
+	s.mu.Lock()
+	s.failCount++
+	fc := s.failCount
+	s.mu.Unlock()
+	return fc
+}
+
+type sessionManager struct {
+	sessions sync.Map // map[sessionKey]*sessionState
+}
+
+var mgr = &sessionManager{}
 
 func sessionKey(deviceID, cfgID string) string {
 	return strings.TrimSpace(deviceID) + "||" + strings.TrimSpace(cfgID)
 }
 
-func (m *sessionManager) getOrInitConfig(ctx context.Context, deviceID, configID string) (*sessionState, error) {
+func (m *sessionManager) getOrCreateSession(deviceID, configID string) *sessionState {
 	key := sessionKey(deviceID, configID)
-	m.mu.Lock()
-	st, ok := m.sessions[key]
-	if !ok {
-		st = &sessionState{}
-		m.sessions[key] = st
+	if v, ok := m.sessions.Load(key); ok {
+		return v.(*sessionState)
 	}
-	if st.initialized {
-		m.mu.Unlock()
-		return st, nil
-	}
-	m.mu.Unlock()
-
-	cfg, err := fetchRuntimeConfig(ctx, deviceID, configID)
-	if err != nil {
-		return nil, err
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !st.initialized {
-		st.cfg = cfg
-		st.initialized = true
-	}
-	st.lastActive = time.Now()
-	return st, nil
+	st := &sessionState{}
+	actual, _ := m.sessions.LoadOrStore(key, st)
+	return actual.(*sessionState)
 }
 
 func HandleRequest(ctx context.Context, deviceID, agentID string, userID uint, configID string, text string) (string, error) {
-	st, err := mgr.getOrInitConfig(ctx, deviceID, configID)
+	st := mgr.getOrCreateSession(deviceID, configID)
+	cfg, err := st.getConfig(ctx, deviceID, configID)
 	if err != nil {
 		return "", err
 	}
-	reply, err := sendGatewayRequest(ctx, st.cfg, text, deviceID)
+
+	reply, err := sendGatewayRequest(ctx, cfg, text, deviceID)
 	if err == nil {
-		mgr.mu.Lock()
-		st.failCount = 0
-		st.lastActive = time.Now()
-		mgr.mu.Unlock()
+		st.recordSuccess()
 		if strings.TrimSpace(reply.Reply) != "" {
 			return reply.Reply, nil
 		}
@@ -102,16 +121,13 @@ func HandleRequest(ctx context.Context, deviceID, agentID string, userID uint, c
 		return "OpenClaw 已接收请求。", nil
 	}
 
-	mgr.mu.Lock()
-	st.failCount++
-	fc := st.failCount
-	mgr.mu.Unlock()
+	fc := st.incrementFail()
 
-	go func() {
+	go func(cfg RuntimeConfig) {
 		// 异步兜底：长超时再请求一次，成功则落离线池
 		bg, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		resp, e := sendGatewayRequest(bg, st.cfg, text, deviceID)
+		resp, e := sendGatewayRequest(bg, cfg, text, deviceID)
 		if e != nil {
 			return
 		}
@@ -120,7 +136,7 @@ func HandleRequest(ctx context.Context, deviceID, agentID string, userID uint, c
 			payload = "OpenClaw 任务完成。"
 		}
 		_ = createOfflineMessage(bg, deviceID, userID, agentID, configID, resp.TaskID, payload)
-	}()
+	}(cfg)
 
 	if fc >= 3 {
 		return "OpenClaw 暂不可用，已自动切回默认助手。", ErrFallbackToLLM
