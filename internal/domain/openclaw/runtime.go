@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	cmap "github.com/orcaman/concurrent-map/v2"
+
 	"xiaozhi-esp32-server-golang/internal/util"
 )
 
@@ -43,7 +45,7 @@ type sessionState struct {
 	initialized bool
 }
 
-func (s *sessionState) getConfig(ctx context.Context, deviceID, configID string) (RuntimeConfig, error) {
+func (s *sessionState) getConfig(ctx context.Context, fetcher func(context.Context) (RuntimeConfig, error)) (RuntimeConfig, error) {
 	s.mu.RLock()
 	if s.initialized {
 		cfg := s.cfg
@@ -57,61 +59,108 @@ func (s *sessionState) getConfig(ctx context.Context, deviceID, configID string)
 	if s.initialized {
 		return s.cfg, nil
 	}
-	cfg, err := fetchRuntimeConfig(ctx, deviceID, configID)
+	cfg, err := fetcher(ctx)
 	if err != nil {
 		return RuntimeConfig{}, err
 	}
 	s.cfg = cfg
 	s.initialized = true
 	s.lastActive = time.Now()
-	return s.cfg, nil
+	return cfg, nil
 }
 
-func (s *sessionState) recordSuccess() {
+func (s *sessionState) resetFail() {
 	s.mu.Lock()
 	s.failCount = 0
 	s.lastActive = time.Now()
 	s.mu.Unlock()
 }
 
-func (s *sessionState) incrementFail() int {
+func (s *sessionState) incFail() int {
 	s.mu.Lock()
 	s.failCount++
-	fc := s.failCount
+	count := s.failCount
+	s.lastActive = time.Now()
 	s.mu.Unlock()
-	return fc
+	return count
 }
 
-type sessionManager struct {
-	sessions sync.Map // map[sessionKey]*sessionState
+type fallbackTask struct {
+	deviceID string
+	userID   uint
+	agentID  string
+	configID string
+	text     string
+	cfg      RuntimeConfig
 }
 
-var mgr = &sessionManager{}
-
-func sessionKey(deviceID, cfgID string) string {
-	return strings.TrimSpace(deviceID) + "||" + strings.TrimSpace(cfgID)
+type Runtime struct {
+	sessions      cmap.ConcurrentMap[string, *sessionState]
+	fallbackQueue chan fallbackTask
+	client        *http.Client
+	initWorkers   sync.Once
 }
 
-func (m *sessionManager) getOrCreateSession(deviceID, configID string) *sessionState {
-	key := sessionKey(deviceID, configID)
-	if v, ok := m.sessions.Load(key); ok {
-		return v.(*sessionState)
+func NewRuntime() *Runtime {
+	r := &Runtime{
+		sessions:      cmap.New[*sessionState](),
+		fallbackQueue: make(chan fallbackTask, 512),
+		client:        &http.Client{Timeout: 10 * time.Second},
+	}
+	r.startFallbackWorkers()
+	return r
+}
+
+func (r *Runtime) startFallbackWorkers() {
+	r.initWorkers.Do(func() {
+		for i := 0; i < 4; i++ {
+			go r.fallbackWorker()
+		}
+	})
+}
+
+func (r *Runtime) fallbackWorker() {
+	for task := range r.fallbackQueue {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		resp, err := r.sendGatewayRequest(ctx, task.cfg, task.text, task.deviceID)
+		if err == nil {
+			payload := strings.TrimSpace(resp.Reply)
+			if payload == "" {
+				payload = "OpenClaw 任务完成。"
+			}
+			_ = r.createOfflineMessage(ctx, task.deviceID, task.userID, task.agentID, task.configID, resp.TaskID, payload)
+		}
+		cancel()
+	}
+}
+
+func (r *Runtime) sessionKey(deviceID, configID string) string {
+	return strings.TrimSpace(deviceID) + "||" + strings.TrimSpace(configID)
+}
+
+func (r *Runtime) getOrCreateSession(deviceID, configID string) *sessionState {
+	key := r.sessionKey(deviceID, configID)
+	if v, ok := r.sessions.Get(key); ok {
+		return v
 	}
 	st := &sessionState{}
-	actual, _ := m.sessions.LoadOrStore(key, st)
-	return actual.(*sessionState)
+	_ = r.sessions.SetIfAbsent(key, st)
+	v, _ := r.sessions.Get(key)
+	return v
 }
 
-func HandleRequest(ctx context.Context, deviceID, agentID string, userID uint, configID string, text string) (string, error) {
-	st := mgr.getOrCreateSession(deviceID, configID)
-	cfg, err := st.getConfig(ctx, deviceID, configID)
+func (r *Runtime) HandleRequest(ctx context.Context, deviceID, agentID string, userID uint, configID string, text string) (string, error) {
+	st := r.getOrCreateSession(deviceID, configID)
+	cfg, err := st.getConfig(ctx, func(fetchCtx context.Context) (RuntimeConfig, error) {
+		return r.fetchRuntimeConfig(fetchCtx, deviceID, configID)
+	})
 	if err != nil {
 		return "", err
 	}
 
-	reply, err := sendGatewayRequest(ctx, cfg, text, deviceID)
+	reply, err := r.sendGatewayRequest(ctx, cfg, text, deviceID)
 	if err == nil {
-		st.recordSuccess()
+		st.resetFail()
 		if strings.TrimSpace(reply.Reply) != "" {
 			return reply.Reply, nil
 		}
@@ -121,42 +170,36 @@ func HandleRequest(ctx context.Context, deviceID, agentID string, userID uint, c
 		return "OpenClaw 已接收请求。", nil
 	}
 
-	fc := st.incrementFail()
+	failCount := st.incFail()
+	select {
+	case r.fallbackQueue <- fallbackTask{
+		deviceID: deviceID,
+		userID:   userID,
+		agentID:  agentID,
+		configID: configID,
+		text:     text,
+		cfg:      cfg,
+	}:
+	default:
+		// 队列满时直接丢弃兜底任务，避免阻塞主聊天链路
+	}
 
-	go func(cfg RuntimeConfig) {
-		// 异步兜底：长超时再请求一次，成功则落离线池
-		bg, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		resp, e := sendGatewayRequest(bg, cfg, text, deviceID)
-		if e != nil {
-			return
-		}
-		payload := strings.TrimSpace(resp.Reply)
-		if payload == "" {
-			payload = "OpenClaw 任务完成。"
-		}
-		_ = createOfflineMessage(bg, deviceID, userID, agentID, configID, resp.TaskID, payload)
-	}(cfg)
-
-	if fc >= 3 {
+	if failCount >= 3 {
 		return "OpenClaw 暂不可用，已自动切回默认助手。", ErrFallbackToLLM
 	}
 	return "OpenClaw 处理中，请稍后。", nil
 }
 
-var ErrFallbackToLLM = fmt.Errorf("openclaw fallback to llm")
-
-func sendGatewayRequest(ctx context.Context, cfg RuntimeConfig, text, deviceID string) (GatewayResponse, error) {
+func (r *Runtime) sendGatewayRequest(ctx context.Context, cfg RuntimeConfig, text, deviceID string) (GatewayResponse, error) {
 	var out GatewayResponse
 	body := map[string]interface{}{"message": text, "device_id": deviceID}
 	raw, _ := json.Marshal(body)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL, bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
-	if strings.ToLower(cfg.AuthType) == "bearer" && strings.TrimSpace(cfg.Token) != "" {
+	if strings.EqualFold(strings.TrimSpace(cfg.AuthType), "bearer") && strings.TrimSpace(cfg.Token) != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	}
-	cli := &http.Client{Timeout: 8 * time.Second}
-	resp, err := cli.Do(req)
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return out, err
 	}
@@ -172,13 +215,13 @@ func sendGatewayRequest(ctx context.Context, cfg RuntimeConfig, text, deviceID s
 	return out, nil
 }
 
-func fetchRuntimeConfig(ctx context.Context, deviceID, configID string) (RuntimeConfig, error) {
+func (r *Runtime) fetchRuntimeConfig(ctx context.Context, deviceID, configID string) (RuntimeConfig, error) {
 	q := url.Values{}
 	q.Set("device_id", strings.TrimSpace(deviceID))
 	q.Set("config_id", strings.TrimSpace(configID))
 	runtimeURL := strings.TrimSuffix(util.GetBackendURL(), "/") + "/api/internal/openclaw/runtime-config?" + q.Encode()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, runtimeURL, nil)
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return RuntimeConfig{}, err
 	}
@@ -195,8 +238,8 @@ func fetchRuntimeConfig(ctx context.Context, deviceID, configID string) (Runtime
 	return result.Data, nil
 }
 
-func createOfflineMessage(ctx context.Context, deviceID string, userID uint, agentID, configID, taskID, payload string) error {
-	url := strings.TrimSuffix(util.GetBackendURL(), "/") + "/api/internal/openclaw/offline-messages"
+func (r *Runtime) createOfflineMessage(ctx context.Context, deviceID string, userID uint, agentID, configID, taskID, payload string) error {
+	apiURL := strings.TrimSuffix(util.GetBackendURL(), "/") + "/api/internal/openclaw/offline-messages"
 	cfgUint, _ := strconv.Atoi(strings.TrimSpace(configID))
 	agentUint, _ := strconv.Atoi(strings.TrimSpace(agentID))
 	body := map[string]interface{}{
@@ -209,9 +252,9 @@ func createOfflineMessage(ctx context.Context, deviceID string, userID uint, age
 		"payload_json":       payload,
 	}
 	raw, _ := json.Marshal(body)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -222,13 +265,13 @@ func createOfflineMessage(ctx context.Context, deviceID string, userID uint, age
 	return nil
 }
 
-func ListPendingOfflineMessages(ctx context.Context, deviceID string) ([]OfflineMessage, error) {
+func (r *Runtime) ListPendingOfflineMessages(ctx context.Context, deviceID string) ([]OfflineMessage, error) {
 	q := url.Values{}
 	q.Set("device_id", strings.TrimSpace(deviceID))
 	q.Set("status", "pending")
 	listURL := strings.TrimSuffix(util.GetBackendURL(), "/") + "/api/internal/openclaw/offline-messages?" + q.Encode()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -245,10 +288,10 @@ func ListPendingOfflineMessages(ctx context.Context, deviceID string) ([]Offline
 	return result.Data, nil
 }
 
-func MarkOfflineMessageDelivered(ctx context.Context, id uint) error {
-	url := fmt.Sprintf("%s/api/internal/openclaw/offline-messages/%d/delivered", strings.TrimSuffix(util.GetBackendURL(), "/"), id)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+func (r *Runtime) MarkOfflineMessageDelivered(ctx context.Context, id uint) error {
+	apiURL := fmt.Sprintf("%s/api/internal/openclaw/offline-messages/%d/delivered", strings.TrimSuffix(util.GetBackendURL(), "/"), id)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, nil)
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -257,4 +300,21 @@ func MarkOfflineMessageDelivered(ctx context.Context, id uint) error {
 		return fmt.Errorf("offline mark delivered http %d", resp.StatusCode)
 	}
 	return nil
+}
+
+var (
+	ErrFallbackToLLM = fmt.Errorf("openclaw fallback to llm")
+	defaultRuntime   = NewRuntime()
+)
+
+func HandleRequest(ctx context.Context, deviceID, agentID string, userID uint, configID string, text string) (string, error) {
+	return defaultRuntime.HandleRequest(ctx, deviceID, agentID, userID, configID, text)
+}
+
+func ListPendingOfflineMessages(ctx context.Context, deviceID string) ([]OfflineMessage, error) {
+	return defaultRuntime.ListPendingOfflineMessages(ctx, deviceID)
+}
+
+func MarkOfflineMessageDelivered(ctx context.Context, id uint) error {
+	return defaultRuntime.MarkOfflineMessageDelivered(ctx, id)
 }

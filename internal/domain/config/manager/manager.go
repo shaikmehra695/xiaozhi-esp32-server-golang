@@ -80,16 +80,23 @@ func (c *ConfigManager) GetUserConfig(ctx context.Context, deviceID string) (typ
 				Voice              *string  `json:"voice"`
 				VoiceModelOverride *string  `json:"voice_model_override"`
 			} `json:"voice_identify"`
-			KnowledgeBases        []types.KnowledgeBaseRef `json:"knowledge_bases"`
-			Prompt                string                   `json:"prompt"`
-			AgentId               string                   `json:"agent_id"`
-			UserID                uint                     `json:"user_id"`
-			MemoryMode            string                   `json:"memory_mode"`
-			MCPServiceNames       string                   `json:"mcp_service_names"`
-			OpenClawEnabled       bool                     `json:"openclaw_enabled"`
-			OpenClawConfigID      string                   `json:"openclaw_config_id"`
-			OpenClawEnterKeywords []string                 `json:"openclaw_enter_keywords"`
-			OpenClawExitKeywords  []string                 `json:"openclaw_exit_keywords"`
+			KnowledgeBases  []types.KnowledgeBaseRef `json:"knowledge_bases"`
+			Prompt          string                   `json:"prompt"`
+			AgentId         string                   `json:"agent_id"`
+			UserID          uint                     `json:"user_id"`
+			MemoryMode      string                   `json:"memory_mode"`
+			MCPServiceNames string                   `json:"mcp_service_names"`
+			OpenClaw        struct {
+				Enabled       bool     `json:"enabled"`
+				ConfigID      string   `json:"config_id"`
+				EnterKeywords []string `json:"enter_keywords"`
+				ExitKeywords  []string `json:"exit_keywords"`
+			} `json:"openclaw"`
+			// 兼容旧版平铺结构
+			OpenClawEnabledLegacy       bool     `json:"openclaw_enabled"`
+			OpenClawConfigIDLegacy      string   `json:"openclaw_config_id"`
+			OpenClawEnterKeywordsLegacy []string `json:"openclaw_enter_keywords"`
+			OpenClawExitKeywordsLegacy  []string `json:"openclaw_exit_keywords"`
 		} `json:"data"`
 	}
 
@@ -169,12 +176,27 @@ func (c *ConfigManager) GetUserConfig(ctx context.Context, deviceID string) (typ
 		UserID:          response.Data.UserID,
 		MCPServiceNames: strings.TrimSpace(response.Data.MCPServiceNames),
 		OpenClaw: types.OpenClawConfig{
-			Enabled:       response.Data.OpenClawEnabled,
-			ConfigID:      strings.TrimSpace(response.Data.OpenClawConfigID),
-			EnterKeywords: response.Data.OpenClawEnterKeywords,
-			ExitKeywords:  response.Data.OpenClawExitKeywords,
+			Enabled:       response.Data.OpenClaw.Enabled,
+			ConfigID:      strings.TrimSpace(response.Data.OpenClaw.ConfigID),
+			EnterKeywords: response.Data.OpenClaw.EnterKeywords,
+			ExitKeywords:  response.Data.OpenClaw.ExitKeywords,
 		},
 	}
+
+	// 兼容旧版 /api/configs 平铺字段，优先使用新结构 openclaw
+	if strings.TrimSpace(config.OpenClaw.ConfigID) == "" && strings.TrimSpace(response.Data.OpenClawConfigIDLegacy) != "" {
+		config.OpenClaw.ConfigID = strings.TrimSpace(response.Data.OpenClawConfigIDLegacy)
+	}
+	if len(config.OpenClaw.EnterKeywords) == 0 && len(response.Data.OpenClawEnterKeywordsLegacy) > 0 {
+		config.OpenClaw.EnterKeywords = response.Data.OpenClawEnterKeywordsLegacy
+	}
+	if len(config.OpenClaw.ExitKeywords) == 0 && len(response.Data.OpenClawExitKeywordsLegacy) > 0 {
+		config.OpenClaw.ExitKeywords = response.Data.OpenClawExitKeywordsLegacy
+	}
+	if !config.OpenClaw.Enabled && response.Data.OpenClawEnabledLegacy {
+		config.OpenClaw.Enabled = true
+	}
+
 	if strings.TrimSpace(config.MemoryMode) == "" {
 		config.MemoryMode = "short"
 	}
