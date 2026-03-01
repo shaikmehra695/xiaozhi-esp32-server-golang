@@ -13,6 +13,22 @@ type OpenClawConfigResponse struct {
 	ExitKeywords  []string `json:"exit_keywords"`
 }
 
+func normalizeOpenClawConfig(cfg OpenClawConfigResponse) OpenClawConfigResponse {
+	return OpenClawConfigResponse{
+		Allowed:       cfg.Allowed,
+		EnterKeywords: normalizeOpenClawKeywords(cfg.EnterKeywords),
+		ExitKeywords:  normalizeOpenClawKeywords(cfg.ExitKeywords),
+	}
+}
+
+func defaultOpenClawConfig() OpenClawConfigResponse {
+	return OpenClawConfigResponse{
+		Allowed:       false,
+		EnterKeywords: []string{},
+		ExitKeywords:  []string{},
+	}
+}
+
 func normalizeOpenClawKeywords(keywords []string) []string {
 	normalized := make([]string, 0, len(keywords))
 	seen := make(map[string]struct{}, len(keywords))
@@ -30,39 +46,47 @@ func normalizeOpenClawKeywords(keywords []string) []string {
 	return normalized
 }
 
-func parseOpenClawKeywords(raw string) []string {
+func parseOpenClawConfig(raw string) OpenClawConfigResponse {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return []string{}
+		return defaultOpenClawConfig()
 	}
 
-	var parsed []string
-	if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
-		return normalizeOpenClawKeywords(parsed)
+	var parsed OpenClawConfigResponse
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return defaultOpenClawConfig()
 	}
-
-	// 兼容逗号分隔旧格式
-	parts := strings.Split(raw, ",")
-	return normalizeOpenClawKeywords(parts)
+	return normalizeOpenClawConfig(parsed)
 }
 
-func mustOpenClawKeywordsJSON(keywords []string) string {
-	normalized := normalizeOpenClawKeywords(keywords)
+func mustOpenClawConfigJSON(cfg OpenClawConfigResponse) string {
+	normalized := normalizeOpenClawConfig(cfg)
 	data, err := json.Marshal(normalized)
 	if err != nil {
-		return "[]"
+		return `{"allowed":false,"enter_keywords":[],"exit_keywords":[]}`
 	}
 	return string(data)
 }
 
-func normalizeOpenClawKeywordsRaw(raw string) string {
-	return mustOpenClawKeywordsJSON(parseOpenClawKeywords(raw))
+func applyOpenClawConfigToAgent(agent *models.Agent, cfg OpenClawConfigResponse) {
+	if agent == nil {
+		return
+	}
+	normalized := normalizeOpenClawConfig(cfg)
+	agent.OpenClawConfig = mustOpenClawConfigJSON(normalized)
+}
+
+func mergeOpenClawConfig(
+	base OpenClawConfigResponse,
+	direct *OpenClawConfigResponse,
+) OpenClawConfigResponse {
+	result := normalizeOpenClawConfig(base)
+	if direct != nil {
+		result = normalizeOpenClawConfig(*direct)
+	}
+	return normalizeOpenClawConfig(result)
 }
 
 func buildOpenClawConfigFromAgent(agent models.Agent) OpenClawConfigResponse {
-	return OpenClawConfigResponse{
-		Allowed:       agent.OpenClawEnabled,
-		EnterKeywords: parseOpenClawKeywords(agent.OpenClawEnterKeywords),
-		ExitKeywords:  parseOpenClawKeywords(agent.OpenClawExitKeywords),
-	}
+	return parseOpenClawConfig(agent.OpenClawConfig)
 }

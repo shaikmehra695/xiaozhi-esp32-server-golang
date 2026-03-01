@@ -43,11 +43,11 @@
 
 ### 2.3 Token Claims
 
-新增 OpenClaw claims（与 MCP 同风格）：
+新增 OpenClaw claims：
 
-- `userId`
-- `agentId`
-- `endpointId`（`agent_<agentID>`）
+- `user_id`
+- `agent_id`
+- `endpoint_id`（`agent_<agentID>`）
 - `purpose=openclaw-endpoint`
 
 ## 3. 设备配置下发与解析

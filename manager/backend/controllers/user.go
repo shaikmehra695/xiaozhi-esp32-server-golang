@@ -290,18 +290,16 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 
 	var req struct {
-		Name                  string   `json:"name" binding:"required,min=2,max=50"`
-		CustomPrompt          string   `json:"custom_prompt"`
-		LLMConfigID           *string  `json:"llm_config_id"`
-		TTSConfigID           *string  `json:"tts_config_id"`
-		Voice                 *string  `json:"voice"`
-		ASRSpeed              string   `json:"asr_speed"`
-		MemoryMode            string   `json:"memory_mode"`
-		MCPServiceNames       string   `json:"mcp_service_names"`
-		OpenClawEnabled       bool     `json:"openclaw_enabled"`
-		OpenClawEnterKeywords []string `json:"openclaw_enter_keywords"`
-		OpenClawExitKeywords  []string `json:"openclaw_exit_keywords"`
-		KnowledgeBaseIDs      []uint   `json:"knowledge_base_ids"`
+		Name             string                  `json:"name" binding:"required,min=2,max=50"`
+		CustomPrompt     string                  `json:"custom_prompt"`
+		LLMConfigID      *string                 `json:"llm_config_id"`
+		TTSConfigID      *string                 `json:"tts_config_id"`
+		Voice            *string                 `json:"voice"`
+		ASRSpeed         string                  `json:"asr_speed"`
+		MemoryMode       string                  `json:"memory_mode"`
+		MCPServiceNames  string                  `json:"mcp_service_names"`
+		OpenClaw         *OpenClawConfigResponse `json:"openclaw"`
+		KnowledgeBaseIDs []uint                  `json:"knowledge_base_ids"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -326,20 +324,22 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 	}
 
 	agent := models.Agent{
-		UserID:                userID.(uint),
-		Name:                  req.Name,
-		CustomPrompt:          req.CustomPrompt,
-		LLMConfigID:           req.LLMConfigID,
-		TTSConfigID:           req.TTSConfigID,
-		Voice:                 req.Voice,
-		ASRSpeed:              req.ASRSpeed,
-		MemoryMode:            req.MemoryMode,
-		MCPServiceNames:       normalizedMCPServiceNames,
-		OpenClawEnabled:       req.OpenClawEnabled,
-		OpenClawEnterKeywords: mustOpenClawKeywordsJSON(req.OpenClawEnterKeywords),
-		OpenClawExitKeywords:  mustOpenClawKeywordsJSON(req.OpenClawExitKeywords),
-		Status:                "active",
+		UserID:          userID.(uint),
+		Name:            req.Name,
+		CustomPrompt:    req.CustomPrompt,
+		LLMConfigID:     req.LLMConfigID,
+		TTSConfigID:     req.TTSConfigID,
+		Voice:           req.Voice,
+		ASRSpeed:        req.ASRSpeed,
+		MemoryMode:      req.MemoryMode,
+		MCPServiceNames: normalizedMCPServiceNames,
+		Status:          "active",
 	}
+	openClawCfg := mergeOpenClawConfig(
+		defaultOpenClawConfig(),
+		req.OpenClaw,
+	)
+	applyOpenClawConfigToAgent(&agent, openClawCfg)
 
 	if err := uc.DB.Create(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建智能体失败"})
@@ -406,18 +406,16 @@ func (uc *UserController) UpdateAgent(c *gin.Context) {
 	}
 
 	var req struct {
-		Name                  string   `json:"name" binding:"required,min=2,max=50"`
-		CustomPrompt          string   `json:"custom_prompt"`
-		LLMConfigID           *string  `json:"llm_config_id"`
-		TTSConfigID           *string  `json:"tts_config_id"`
-		Voice                 *string  `json:"voice"`
-		ASRSpeed              string   `json:"asr_speed"`
-		MemoryMode            *string  `json:"memory_mode"`
-		MCPServiceNames       string   `json:"mcp_service_names"`
-		OpenClawEnabled       bool     `json:"openclaw_enabled"`
-		OpenClawEnterKeywords []string `json:"openclaw_enter_keywords"`
-		OpenClawExitKeywords  []string `json:"openclaw_exit_keywords"`
-		KnowledgeBaseIDs      []uint   `json:"knowledge_base_ids"`
+		Name             string                  `json:"name" binding:"required,min=2,max=50"`
+		CustomPrompt     string                  `json:"custom_prompt"`
+		LLMConfigID      *string                 `json:"llm_config_id"`
+		TTSConfigID      *string                 `json:"tts_config_id"`
+		Voice            *string                 `json:"voice"`
+		ASRSpeed         string                  `json:"asr_speed"`
+		MemoryMode       *string                 `json:"memory_mode"`
+		MCPServiceNames  string                  `json:"mcp_service_names"`
+		OpenClaw         *OpenClawConfigResponse `json:"openclaw"`
+		KnowledgeBaseIDs []uint                  `json:"knowledge_base_ids"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -448,9 +446,11 @@ func (uc *UserController) UpdateAgent(c *gin.Context) {
 		return
 	}
 	agent.MCPServiceNames = normalizedMCPServiceNames
-	agent.OpenClawEnabled = req.OpenClawEnabled
-	agent.OpenClawEnterKeywords = mustOpenClawKeywordsJSON(req.OpenClawEnterKeywords)
-	agent.OpenClawExitKeywords = mustOpenClawKeywordsJSON(req.OpenClawExitKeywords)
+	openClawCfg := mergeOpenClawConfig(
+		buildOpenClawConfigFromAgent(agent),
+		req.OpenClaw,
+	)
+	applyOpenClawConfigToAgent(&agent, openClawCfg)
 
 	if err := uc.DB.Save(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新智能体失败"})

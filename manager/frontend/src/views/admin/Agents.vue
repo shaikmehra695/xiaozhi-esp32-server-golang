@@ -126,6 +126,14 @@
             <el-option label="长记忆" value="long" />
           </el-select>
         </el-form-item>
+        <el-form-item label="OpenClaw">
+          <el-button type="primary" plain style="width: 100%" @click="showOpenClawSettings">
+            打开OpenClaw设置
+          </el-button>
+          <div style="margin-top: 6px; color: #909399; font-size: 12px;">
+            已配置: {{ agentForm.openclaw_allowed ? '开启' : '关闭' }}，进入词 {{ agentForm.openclaw_enter_keywords.length }} 个，退出词 {{ agentForm.openclaw_exit_keywords.length }} 个。
+          </div>
+        </el-form-item>
         <el-form-item label="状态" prop="status">
           <el-select v-model="agentForm.status" style="width: 100%">
             <el-option label="活跃" value="active" />
@@ -138,6 +146,72 @@
         <el-button type="primary" @click="saveAgent" :loading="saving">
           {{ editingAgent ? '更新' : '添加' }}
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="showOpenClawDialog"
+      title="OpenClaw设置"
+      width="680px"
+    >
+      <div>
+        <el-form label-width="100px">
+          <el-form-item label="开关">
+            <el-switch v-model="agentForm.openclaw_allowed" />
+          </el-form-item>
+          <el-form-item label="进入关键词">
+            <el-select
+              v-model="agentForm.openclaw_enter_keywords"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              style="width: 100%"
+              placeholder="输入后回车，可添加多个关键词"
+            />
+          </el-form-item>
+          <el-form-item label="退出关键词">
+            <el-select
+              v-model="agentForm.openclaw_exit_keywords"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              style="width: 100%"
+              placeholder="输入后回车，可添加多个关键词"
+            />
+          </el-form-item>
+        </el-form>
+
+        <el-divider />
+
+        <div v-loading="openClawEndpointLoading">
+          <el-alert
+            title="接入点信息"
+            :description="editingAgent ? '此URL包含token，请勿泄露。' : '新建智能体时尚未生成接入点，保存后可查看。'"
+            :type="editingAgent ? 'warning' : 'info'"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px"
+          />
+          <div class="mcp-endpoint-display">
+            <div class="endpoint-header">
+              <div class="endpoint-label">OpenClaw接入点URL：</div>
+              <div style="display: flex; gap: 8px;">
+                <el-button size="small" @click="fetchOpenClawEndpoint" :disabled="!editingAgent" :loading="openClawEndpointLoading">刷新</el-button>
+                <el-button size="small" type="primary" @click="copyOpenClawEndpoint">复制URL</el-button>
+              </div>
+            </div>
+            <div class="endpoint-content">
+              {{ openClawEndpointData.endpoint || '暂无接入点数据' }}
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showOpenClawDialog = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -264,6 +338,11 @@ const currentAgentId = ref(null)
 const callingTool = ref(false)
 const mcpCallResult = ref('')
 const mcpCallForm = ref({ tool_name: '', argumentsText: '{}' })
+const showOpenClawDialog = ref(false)
+const openClawEndpointLoading = ref(false)
+const openClawEndpointData = ref({
+  endpoint: ''
+})
 
 const agentForm = ref({
   user_id: null,
@@ -273,6 +352,9 @@ const agentForm = ref({
   tts_config_id: null,
   asr_speed: 'normal',
   memory_mode: 'short',
+  openclaw_allowed: false,
+  openclaw_enter_keywords: [],
+  openclaw_exit_keywords: [],
   status: 'active'
 })
 
@@ -325,6 +407,7 @@ const loadConfigs = async () => {
 
 const editAgent = (agent) => {
   editingAgent.value = agent
+  const openclawConfig = parseOpenClawConfigFromAgent(agent)
   agentForm.value = {
     user_id: agent.user_id,
     name: agent.name,
@@ -333,9 +416,13 @@ const editAgent = (agent) => {
     tts_config_id: agent.tts_config_id,
     asr_speed: agent.asr_speed || 'normal',
     memory_mode: agent.memory_mode || 'short',
+    openclaw_allowed: !!openclawConfig.allowed,
+    openclaw_enter_keywords: normalizeKeywordList(openclawConfig.enter_keywords),
+    openclaw_exit_keywords: normalizeKeywordList(openclawConfig.exit_keywords),
     status: agent.status
   }
   showAddDialog.value = true
+  openClawEndpointData.value.endpoint = ''
 }
 
 const saveAgent = async () => {
@@ -346,11 +433,23 @@ const saveAgent = async () => {
 
   saving.value = true
   try {
+    const payload = {
+      ...agentForm.value,
+      openclaw: {
+        allowed: !!agentForm.value.openclaw_allowed,
+        enter_keywords: normalizeKeywordList(agentForm.value.openclaw_enter_keywords),
+        exit_keywords: normalizeKeywordList(agentForm.value.openclaw_exit_keywords)
+      }
+    }
+    delete payload.openclaw_allowed
+    delete payload.openclaw_enter_keywords
+    delete payload.openclaw_exit_keywords
+
     if (editingAgent.value) {
-      await api.put(`/admin/agents/${editingAgent.value.id}`, agentForm.value)
+      await api.put(`/admin/agents/${editingAgent.value.id}`, payload)
       ElMessage.success('智能体更新成功')
     } else {
-      await api.post('/admin/agents', agentForm.value)
+      await api.post('/admin/agents', payload)
       ElMessage.success('智能体添加成功')
     }
     showAddDialog.value = false
@@ -389,6 +488,7 @@ const deleteAgent = async (agent) => {
 
 const resetForm = () => {
   editingAgent.value = null
+  openClawEndpointData.value.endpoint = ''
   agentForm.value = {
     user_id: null,
     name: '',
@@ -397,6 +497,9 @@ const resetForm = () => {
     tts_config_id: null,
     asr_speed: 'normal',
     memory_mode: 'short',
+    openclaw_allowed: false,
+    openclaw_enter_keywords: [],
+    openclaw_exit_keywords: [],
     status: 'active'
   }
   
@@ -452,6 +555,86 @@ const getMemoryModeType = (mode) => {
     long: 'success'
   }
   return typeMap[mode] || ''
+}
+
+const normalizeKeywordList = (keywords) => {
+  if (!Array.isArray(keywords)) return []
+  const unique = []
+  const seen = new Set()
+  for (const item of keywords) {
+    const keyword = String(item || '').trim()
+    if (!keyword || seen.has(keyword)) continue
+    seen.add(keyword)
+    unique.push(keyword)
+  }
+  return unique
+}
+
+const parseOpenClawConfigFromAgent = (agent) => {
+  if (agent && agent.openclaw && typeof agent.openclaw === 'object') {
+    return agent.openclaw
+  }
+
+  if (!agent || !agent.openclaw_config || typeof agent.openclaw_config !== 'string') {
+    return { allowed: false, enter_keywords: [], exit_keywords: [] }
+  }
+
+  try {
+    const parsed = JSON.parse(agent.openclaw_config)
+    if (parsed && typeof parsed === 'object') {
+      return {
+        allowed: !!parsed.allowed,
+        enter_keywords: normalizeKeywordList(parsed.enter_keywords),
+        exit_keywords: normalizeKeywordList(parsed.exit_keywords)
+      }
+    }
+  } catch (_) {
+    // ignore invalid payload
+  }
+
+  return { allowed: false, enter_keywords: [], exit_keywords: [] }
+}
+
+const fetchOpenClawEndpoint = async () => {
+  if (!editingAgent.value?.id) {
+    openClawEndpointData.value.endpoint = ''
+    return
+  }
+  openClawEndpointLoading.value = true
+  try {
+    const response = await api.get(`/admin/agents/${editingAgent.value.id}/openclaw-endpoint`)
+    openClawEndpointData.value.endpoint = response.data?.data?.endpoint || ''
+  } catch (error) {
+    console.error('获取OpenClaw接入点失败:', error)
+    openClawEndpointData.value.endpoint = ''
+    ElMessage.error('获取OpenClaw接入点失败')
+  } finally {
+    openClawEndpointLoading.value = false
+  }
+}
+
+const copyOpenClawEndpoint = async () => {
+  const endpoint = openClawEndpointData.value.endpoint
+  if (!endpoint) {
+    ElMessage.warning('暂无可复制的OpenClaw接入点')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(endpoint)
+    ElMessage.success('OpenClaw接入点已复制')
+  } catch (error) {
+    console.error('复制OpenClaw接入点失败:', error)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+const showOpenClawSettings = async () => {
+  showOpenClawDialog.value = true
+  if (editingAgent.value?.id) {
+    await fetchOpenClawEndpoint()
+  } else {
+    openClawEndpointData.value.endpoint = ''
+  }
 }
 
 // 显示MCP接入点

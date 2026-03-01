@@ -230,6 +230,16 @@
             </div>
           </div>
 
+          <div class="form-group">
+            <label class="form-label">OpenClaw</label>
+            <el-button type="primary" plain size="large" style="width: 100%" @click="showOpenClawSettings">
+              打开OpenClaw设置
+            </el-button>
+            <div class="form-help">
+              已配置: {{ form.openclaw_allowed ? '开启' : '关闭' }}，进入词 {{ form.openclaw_enter_keywords.length }} 个，退出词 {{ form.openclaw_exit_keywords.length }} 个。
+            </div>
+          </div>
+
           <div class="form-group" v-loading="mcpServiceOptionsLoading">
             <label class="form-label">MCP服务</label>
             <el-select
@@ -362,6 +372,72 @@
         <el-button @click="showMCPDialog = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="showOpenClawDialog"
+      title="OpenClaw设置"
+      width="680px"
+    >
+      <div>
+        <el-form label-width="100px">
+          <el-form-item label="开关">
+            <el-switch v-model="form.openclaw_allowed" />
+          </el-form-item>
+          <el-form-item label="进入关键词">
+            <el-select
+              v-model="form.openclaw_enter_keywords"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              style="width: 100%"
+              placeholder="输入后回车，可添加多个关键词"
+            />
+          </el-form-item>
+          <el-form-item label="退出关键词">
+            <el-select
+              v-model="form.openclaw_exit_keywords"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              style="width: 100%"
+              placeholder="输入后回车，可添加多个关键词"
+            />
+          </el-form-item>
+        </el-form>
+
+        <el-divider />
+
+        <div v-loading="openClawEndpointLoading">
+          <el-alert
+            title="接入点信息"
+            description="此URL包含token，请勿泄露。"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px"
+          />
+          <div class="mcp-endpoint-display">
+            <div class="endpoint-header">
+              <div class="endpoint-label">OpenClaw接入点URL：</div>
+              <div style="display: flex; gap: 8px;">
+                <el-button size="small" @click="fetchOpenClawEndpoint" :loading="openClawEndpointLoading">刷新</el-button>
+                <el-button size="small" type="primary" @click="copyOpenClawEndpoint">复制URL</el-button>
+              </div>
+            </div>
+            <div class="endpoint-content">
+              {{ openClawEndpointData.endpoint || '暂无接入点数据' }}
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showOpenClawDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -401,7 +477,10 @@ const form = reactive({
   asr_speed: 'normal',
   knowledge_base_ids: [],
   memory_mode: 'short',
-  mcp_service_names: ''
+  mcp_service_names: '',
+  openclaw_allowed: false,
+  openclaw_enter_keywords: [],
+  openclaw_exit_keywords: []
 })
 
 // LLM配置数据
@@ -447,6 +526,11 @@ const mcpTools = ref([])
 const callingTool = ref(false)
 const mcpCallResult = ref('')
 const mcpCallForm = ref({ tool_name: '', argumentsText: '{}' })
+const showOpenClawDialog = ref(false)
+const openClawEndpointLoading = ref(false)
+const openClawEndpointData = ref({
+  endpoint: ''
+})
 
 // 加载LLM配置
 const loadLlmConfigs = async () => {
@@ -477,6 +561,7 @@ const loadAgent = async () => {
   try {
     const response = await api.get(`/user/agents/${route.params.id}`)
     const agent = response.data.data
+    const openclawConfig = parseOpenClawConfigFromAgent(agent)
     
     // 映射基本字段
     Object.assign(form, {
@@ -486,7 +571,10 @@ const loadAgent = async () => {
       voice: agent.voice || null,
       knowledge_base_ids: agent.knowledge_base_ids || [],
       memory_mode: agent.memory_mode || 'short',
-      mcp_service_names: agent.mcp_service_names || ''
+      mcp_service_names: agent.mcp_service_names || '',
+      openclaw_allowed: !!openclawConfig.allowed,
+      openclaw_enter_keywords: normalizeKeywordList(openclawConfig.enter_keywords),
+      openclaw_exit_keywords: normalizeKeywordList(openclawConfig.exit_keywords)
     })
     selectedMcpServices.value = normalizeMcpServiceNames((form.mcp_service_names || '').split(','))
     syncMcpServiceNamesToForm()
@@ -573,6 +661,44 @@ const normalizeMcpServiceNames = (names) => {
   return unique
 }
 
+const normalizeKeywordList = (keywords) => {
+  if (!Array.isArray(keywords)) return []
+  const unique = []
+  const seen = new Set()
+  for (const item of keywords) {
+    const keyword = String(item || '').trim()
+    if (!keyword || seen.has(keyword)) continue
+    seen.add(keyword)
+    unique.push(keyword)
+  }
+  return unique
+}
+
+const parseOpenClawConfigFromAgent = (agent) => {
+  if (agent && agent.openclaw && typeof agent.openclaw === 'object') {
+    return agent.openclaw
+  }
+
+  if (!agent || !agent.openclaw_config || typeof agent.openclaw_config !== 'string') {
+    return { allowed: false, enter_keywords: [], exit_keywords: [] }
+  }
+
+  try {
+    const parsed = JSON.parse(agent.openclaw_config)
+    if (parsed && typeof parsed === 'object') {
+      return {
+        allowed: !!parsed.allowed,
+        enter_keywords: normalizeKeywordList(parsed.enter_keywords),
+        exit_keywords: normalizeKeywordList(parsed.exit_keywords)
+      }
+    }
+  } catch (_) {
+    // ignore invalid payload
+  }
+
+  return { allowed: false, enter_keywords: [], exit_keywords: [] }
+}
+
 const syncMcpServiceNamesToForm = () => {
   selectedMcpServices.value = normalizeMcpServiceNames(selectedMcpServices.value)
   form.mcp_service_names = selectedMcpServices.value.join(',')
@@ -609,6 +735,40 @@ const loadMcpServiceOptions = async () => {
   } finally {
     mcpServiceOptionsLoading.value = false
   }
+}
+
+const fetchOpenClawEndpoint = async () => {
+  openClawEndpointLoading.value = true
+  try {
+    const response = await api.get(`/user/agents/${route.params.id}/openclaw-endpoint`)
+    openClawEndpointData.value.endpoint = response.data?.data?.endpoint || ''
+  } catch (error) {
+    console.error('获取OpenClaw接入点失败:', error)
+    openClawEndpointData.value.endpoint = ''
+    ElMessage.error('获取OpenClaw接入点失败')
+  } finally {
+    openClawEndpointLoading.value = false
+  }
+}
+
+const copyOpenClawEndpoint = async () => {
+  const endpoint = openClawEndpointData.value.endpoint
+  if (!endpoint) {
+    ElMessage.warning('暂无可复制的OpenClaw接入点')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(endpoint)
+    ElMessage.success('OpenClaw接入点已复制')
+  } catch (error) {
+    console.error('复制OpenClaw接入点失败:', error)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+const showOpenClawSettings = async () => {
+  showOpenClawDialog.value = true
+  await fetchOpenClawEndpoint()
 }
 
 // 加载角色列表（全局+用户角色）
@@ -727,8 +887,20 @@ const handleSave = async () => {
   try {
     saving.value = true
     syncMcpServiceNamesToForm()
-    
-    const response = await api.put(`/user/agents/${route.params.id}`, form)
+
+    const payload = {
+      ...form,
+      openclaw: {
+        allowed: !!form.openclaw_allowed,
+        enter_keywords: normalizeKeywordList(form.openclaw_enter_keywords),
+        exit_keywords: normalizeKeywordList(form.openclaw_exit_keywords)
+      }
+    }
+    delete payload.openclaw_allowed
+    delete payload.openclaw_enter_keywords
+    delete payload.openclaw_exit_keywords
+
+    await api.put(`/user/agents/${route.params.id}`, payload)
     
     ElMessage.success('保存成功')
     router.push('/user/agents')

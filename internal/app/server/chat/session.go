@@ -737,6 +737,21 @@ func (s *ChatSession) isOpenClawExitKeyword(text string) bool {
 	return containsOpenClawKeyword(text, s.clientState.DeviceConfig.OpenClaw.ExitKeywords)
 }
 
+func openClawLogSnippet(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
 func (s *ChatSession) GetRandomGreeting() string {
 	greetingList := viper.GetStringSlice("greeting_list")
 	if len(greetingList) == 0 {
@@ -1065,34 +1080,92 @@ func (s *ChatSession) actionDoChat(ctx context.Context, text string, speakerResu
 	default:
 	}
 
+	agentID := strings.TrimSpace(s.clientState.AgentID)
+	deviceID := strings.TrimSpace(s.clientState.DeviceID)
+	openclawSessionID := strings.TrimSpace(s.clientState.SessionID)
+	trimmedText := strings.TrimSpace(text)
+
+	openclawManager := openclaw.GetManager()
 	if s.clientState.DeviceConfig.OpenClaw.Allowed {
-		if s.clientState.OpenClawMode {
-			if s.isOpenClawExitKeyword(text) {
-				s.clientState.OpenClawMode = false
+		isOpenClawMode := openclawManager.IsModeEnabled(agentID, deviceID)
+		isEnterKeyword := s.isOpenClawEnterKeyword(text)
+		isExitKeyword := false
+		if isOpenClawMode {
+			isExitKeyword = s.isOpenClawExitKeyword(text)
+		}
+		log.Debugf(
+			"OpenClaw路由判定: agent=%s device=%s session=%s allowed=%v mode=%v enter_keyword=%v exit_keyword=%v text_len=%d text_trim_len=%d text_snippet=%q",
+			agentID,
+			deviceID,
+			openclawSessionID,
+			s.clientState.DeviceConfig.OpenClaw.Allowed,
+			isOpenClawMode,
+			isEnterKeyword,
+			isExitKeyword,
+			len(text),
+			len(trimmedText),
+			openClawLogSnippet(trimmedText, 64),
+		)
+		if isOpenClawMode {
+			if isExitKeyword {
+				exited := openclawManager.ExitMode(agentID, deviceID)
 				_ = s.AddTextToTTSQueue("已退出OpenClaw模式")
-				log.Infof("设备 %s 退出OpenClaw模式", s.clientState.DeviceID)
+				log.Infof("设备 %s 退出OpenClaw模式: agent=%s exited=%v", deviceID, agentID, exited)
 				return nil
 			}
 
-			_, err := openclaw.GetManager().SendMessage(
-				s.clientState.AgentID,
-				s.clientState.DeviceID,
+			log.Infof(
+				"OpenClaw发送STT: agent=%s device=%s session=%s text_len=%d text_snippet=%q",
+				agentID,
+				deviceID,
+				openclawSessionID,
+				len(trimmedText),
+				openClawLogSnippet(trimmedText, 64),
+			)
+			messageID, err := openclawManager.SendMessage(
+				agentID,
+				deviceID,
 				text,
-				s.clientState.SessionID,
+				openclawSessionID,
 			)
 			if err != nil {
-				log.Warnf("设备 %s OpenClaw消息发送失败，已回退普通模式: %v", s.clientState.DeviceID, err)
-				s.clientState.OpenClawMode = false
+				log.Warnf(
+					"设备 %s OpenClaw消息发送失败，已回退普通模式: agent=%s session=%s text_snippet=%q err=%v",
+					deviceID,
+					agentID,
+					openclawSessionID,
+					openClawLogSnippet(trimmedText, 64),
+					err,
+				)
+				openclawManager.ExitMode(agentID, deviceID)
 				_ = s.AddTextToTTSQueue("OpenClaw当前不可用，已退出OpenClaw模式")
+			} else {
+				log.Infof("OpenClaw发送STT成功: agent=%s device=%s session=%s message_id=%s", agentID, deviceID, openclawSessionID, messageID)
 			}
 			return nil
 		}
 
-		if s.isOpenClawEnterKeyword(text) {
-			s.clientState.OpenClawMode = true
+		if isEnterKeyword {
+			if !openclawManager.EnterMode(agentID, deviceID) {
+				_ = s.AddTextToTTSQueue("OpenClaw当前不可用，请稍后再试")
+				log.Warnf("设备 %s 进入OpenClaw模式失败: agent=%s agent session not ready", deviceID, agentID)
+				return nil
+			}
 			_ = s.AddTextToTTSQueue("已进入OpenClaw模式，请继续说")
-			log.Infof("设备 %s 进入OpenClaw模式", s.clientState.DeviceID)
+			log.Infof("设备 %s 进入OpenClaw模式: agent=%s trigger=%q", deviceID, agentID, openClawLogSnippet(trimmedText, 32))
 			return nil
+		}
+		log.Debugf(
+			"OpenClaw未接管当前STT: agent=%s device=%s mode=%v enter_keyword=%v text_snippet=%q",
+			agentID,
+			deviceID,
+			isOpenClawMode,
+			isEnterKeyword,
+			openClawLogSnippet(trimmedText, 64),
+		)
+	} else {
+		if openclawManager.ExitMode(agentID, deviceID) {
+			log.Debugf("OpenClaw配置未开启，已强制退出模式: agent=%s device=%s", agentID, deviceID)
 		}
 	}
 

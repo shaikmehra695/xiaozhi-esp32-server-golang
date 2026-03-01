@@ -25,6 +25,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/bcrypt"
@@ -2963,10 +2964,20 @@ func (ac *AdminController) GetAgentMcpTools(c *gin.Context) {
 
 func (ac *AdminController) CreateAgent(c *gin.Context) {
 	var agent models.Agent
-	if err := c.ShouldBindJSON(&agent); err != nil {
+	if err := c.ShouldBindBodyWith(&agent, binding.JSON); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	var openClawPayload struct {
+		OpenClaw       *OpenClawConfigResponse `json:"openclaw"`
+		OpenClawConfig *string                 `json:"openclaw_config"`
+	}
+	if err := c.ShouldBindBodyWith(&openClawPayload, binding.JSON); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	agent.MemoryMode = normalizeAgentMemoryMode(agent.MemoryMode)
 	normalizedMCPServiceNames, err := ac.normalizeAndValidateAgentMCPServices(agent.MCPServiceNames)
 	if err != nil {
@@ -2974,8 +2985,20 @@ func (ac *AdminController) CreateAgent(c *gin.Context) {
 		return
 	}
 	agent.MCPServiceNames = normalizedMCPServiceNames
-	agent.OpenClawEnterKeywords = normalizeOpenClawKeywordsRaw(agent.OpenClawEnterKeywords)
-	agent.OpenClawExitKeywords = normalizeOpenClawKeywordsRaw(agent.OpenClawExitKeywords)
+
+	var openClawCfg OpenClawConfigResponse
+	switch {
+	case openClawPayload.OpenClaw != nil:
+		openClawCfg = normalizeOpenClawConfig(*openClawPayload.OpenClaw)
+	case openClawPayload.OpenClawConfig != nil:
+		openClawCfg = parseOpenClawConfig(*openClawPayload.OpenClawConfig)
+	default:
+		openClawCfg = mergeOpenClawConfig(
+			defaultOpenClawConfig(),
+			nil,
+		)
+	}
+	applyOpenClawConfigToAgent(&agent, openClawCfg)
 
 	if err := ac.DB.Create(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建智能体失败"})
@@ -2993,11 +3016,22 @@ func (ac *AdminController) UpdateAgent(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "智能体不存在"})
 		return
 	}
+	currentOpenClawCfg := buildOpenClawConfigFromAgent(agent)
 
-	if err := c.ShouldBindJSON(&agent); err != nil {
+	if err := c.ShouldBindBodyWith(&agent, binding.JSON); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	var openClawPayload struct {
+		OpenClaw       *OpenClawConfigResponse `json:"openclaw"`
+		OpenClawConfig *string                 `json:"openclaw_config"`
+	}
+	if err := c.ShouldBindBodyWith(&openClawPayload, binding.JSON); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	agent.MemoryMode = normalizeAgentMemoryMode(agent.MemoryMode)
 	normalizedMCPServiceNames, err := ac.normalizeAndValidateAgentMCPServices(agent.MCPServiceNames)
 	if err != nil {
@@ -3005,8 +3039,20 @@ func (ac *AdminController) UpdateAgent(c *gin.Context) {
 		return
 	}
 	agent.MCPServiceNames = normalizedMCPServiceNames
-	agent.OpenClawEnterKeywords = normalizeOpenClawKeywordsRaw(agent.OpenClawEnterKeywords)
-	agent.OpenClawExitKeywords = normalizeOpenClawKeywordsRaw(agent.OpenClawExitKeywords)
+
+	var openClawCfg OpenClawConfigResponse
+	switch {
+	case openClawPayload.OpenClaw != nil:
+		openClawCfg = normalizeOpenClawConfig(*openClawPayload.OpenClaw)
+	case openClawPayload.OpenClawConfig != nil:
+		openClawCfg = parseOpenClawConfig(*openClawPayload.OpenClawConfig)
+	default:
+		openClawCfg = mergeOpenClawConfig(
+			currentOpenClawCfg,
+			nil,
+		)
+	}
+	applyOpenClawConfigToAgent(&agent, openClawCfg)
 
 	if err := ac.DB.Save(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新智能体失败"})
@@ -4779,9 +4825,9 @@ func generateMCPToken(agentID string, userID uint) (string, error) {
 // generateOpenClawToken 生成稳定的OpenClaw JWT Token（同一agentID+userID下保持不变）
 func generateOpenClawToken(agentID string, userID uint) (string, error) {
 	type OpenClawClaims struct {
-		UserID     uint   `json:"userId"`
-		AgentID    string `json:"agentId"`
-		EndpointID string `json:"endpointId"`
+		UserID     uint   `json:"user_id"`
+		AgentID    string `json:"agent_id"`
+		EndpointID string `json:"endpoint_id"`
 		Purpose    string `json:"purpose"`
 		jwt.RegisteredClaims
 	}

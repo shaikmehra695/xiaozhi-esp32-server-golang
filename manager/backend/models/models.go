@@ -46,14 +46,12 @@ type Agent struct {
 	ASRSpeed        string  `json:"asr_speed" gorm:"type:varchar(20);default:'normal'"`  // 语音识别速度: normal/patient/fast
 	MemoryMode      string  `json:"memory_mode" gorm:"type:varchar(20);default:'short'"` // 记忆模式: none/short/long
 	MCPServiceNames string  `json:"mcp_service_names" gorm:"type:text"`                  // 逗号分隔的MCP服务名，空=使用全部已启用全局MCP服务
-	OpenClawEnabled bool    `json:"openclaw_enabled" gorm:"default:false"`               // 是否启用OpenClaw
-	// JSON数组字符串，示例: ["进入openclaw","进入爪子模式"]
-	OpenClawEnterKeywords string `json:"openclaw_enter_keywords" gorm:"type:text"`
-	// JSON数组字符串，示例: ["退出openclaw","退出爪子模式"]
-	OpenClawExitKeywords string    `json:"openclaw_exit_keywords" gorm:"type:text"`
-	Status               string    `json:"status" gorm:"type:varchar(20);default:'active'"` // active, inactive
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	// OpenClaw 配置，JSON字符串，结构：
+	// {"allowed":true,"enter_keywords":["进入openclaw"],"exit_keywords":["退出openclaw"]}
+	OpenClawConfig string    `json:"openclaw_config" gorm:"type:text"`
+	Status         string    `json:"status" gorm:"type:varchar(20);default:'active'"` // active, inactive
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // KnowledgeBase 用户知识库（每用户独立）

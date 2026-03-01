@@ -20,6 +20,21 @@ const (
 	OfflineMessageTTL           = 24 * time.Hour
 )
 
+func logSnippet(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
 type WSMessage struct {
 	ID            string          `json:"id"`
 	Timestamp     int64           `json:"timestamp"`
@@ -60,6 +75,7 @@ type AgentSession struct {
 
 	writeMu sync.Mutex
 	pending sync.Map // correlation_id -> pendingRoute
+	modes   sync.Map // device_id -> bool
 }
 
 func newAgentSession(agentID string, conn *websocket.Conn) *AgentSession {
@@ -75,29 +91,49 @@ func newAgentSession(agentID string, conn *websocket.Conn) *AgentSession {
 func (s *AgentSession) Send(msg WSMessage) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
+		logger.Warnf("OpenClaw ws marshal failed: agent=%s type=%s id=%s corr=%s err=%v", s.agentID, msg.Type, msg.ID, msg.CorrelationID, err)
 		return err
 	}
 
+	logger.Debugf(
+		"OpenClaw ws send start: agent=%s type=%s id=%s corr=%s payload_bytes=%d frame_bytes=%d",
+		s.agentID,
+		msg.Type,
+		msg.ID,
+		msg.CorrelationID,
+		len(msg.Payload),
+		len(data),
+	)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.conn.WriteMessage(websocket.TextMessage, data)
+	if err := s.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		logger.Warnf("OpenClaw ws send failed: agent=%s type=%s id=%s corr=%s err=%v", s.agentID, msg.Type, msg.ID, msg.CorrelationID, err)
+		return err
+	}
+	logger.Debugf("OpenClaw ws send ok: agent=%s type=%s id=%s corr=%s", s.agentID, msg.Type, msg.ID, msg.CorrelationID)
+	return nil
 }
 
 func (s *AgentSession) TrackPending(correlationID string, deviceID string) {
-	if strings.TrimSpace(correlationID) == "" || strings.TrimSpace(deviceID) == "" {
+	correlationID = strings.TrimSpace(correlationID)
+	deviceID = strings.TrimSpace(deviceID)
+	if correlationID == "" || deviceID == "" {
 		return
 	}
 	s.pending.Store(correlationID, pendingRoute{
 		DeviceID:  deviceID,
 		CreatedAt: time.Now(),
 	})
+	logger.Debugf("OpenClaw pending tracked: agent=%s correlation_id=%s device=%s", s.agentID, correlationID, deviceID)
 }
 
 func (s *AgentSession) RemovePending(correlationID string) {
-	if strings.TrimSpace(correlationID) == "" {
+	correlationID = strings.TrimSpace(correlationID)
+	if correlationID == "" {
 		return
 	}
 	s.pending.Delete(correlationID)
+	logger.Debugf("OpenClaw pending removed: agent=%s correlation_id=%s", s.agentID, correlationID)
 }
 
 func (s *AgentSession) ResolvePending(correlationID string) (string, bool) {
@@ -115,11 +151,61 @@ func (s *AgentSession) ResolvePending(correlationID string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	logger.Debugf("OpenClaw pending resolved: agent=%s correlation_id=%s device=%s", s.agentID, correlationID, route.DeviceID)
 	return route.DeviceID, route.DeviceID != ""
 }
 
 func (s *AgentSession) IsSameConn(conn *websocket.Conn) bool {
 	return s.conn == conn
+}
+
+func (s *AgentSession) EnterMode(deviceID string) bool {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return false
+	}
+	s.modes.Store(deviceID, true)
+	return true
+}
+
+func (s *AgentSession) ExitMode(deviceID string) bool {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return false
+	}
+	s.modes.Delete(deviceID)
+	return true
+}
+
+func (s *AgentSession) IsModeEnabled(deviceID string) bool {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return false
+	}
+	value, ok := s.modes.Load(deviceID)
+	if !ok {
+		return false
+	}
+	enabled, ok := value.(bool)
+	return ok && enabled
+}
+
+func (s *AgentSession) copyModesFrom(other *AgentSession) {
+	if other == nil {
+		return
+	}
+	other.modes.Range(func(key, value interface{}) bool {
+		deviceID, ok := key.(string)
+		if !ok {
+			return true
+		}
+		enabled, ok := value.(bool)
+		if !ok || !enabled {
+			return true
+		}
+		s.modes.Store(deviceID, true)
+		return true
+	})
 }
 
 func (s *AgentSession) Close() {
@@ -157,9 +243,12 @@ func (m *Manager) RegisterAgentConnection(agentID string, conn *websocket.Conn) 
 
 	newSession := newAgentSession(agentID, conn)
 	if oldSession, ok := m.sessions.Get(agentID); ok && oldSession != nil {
+		newSession.copyModesFrom(oldSession)
+		logger.Infof("OpenClaw session replaced: agent=%s", agentID)
 		oldSession.Close()
 	}
 	m.sessions.Set(agentID, newSession)
+	logger.Infof("OpenClaw session registered: agent=%s", agentID)
 	return newSession
 }
 
@@ -176,6 +265,7 @@ func (m *Manager) UnregisterAgentConnection(agentID string, session *AgentSessio
 
 	if session == nil || current == session {
 		m.sessions.Remove(agentID)
+		logger.Infof("OpenClaw session unregistered: agent=%s", agentID)
 	}
 }
 
@@ -192,39 +282,61 @@ func (m *Manager) GetAgentSession(agentID string) *AgentSession {
 }
 
 func (m *Manager) SendMessage(agentID string, deviceID string, content string, sessionID string) (string, error) {
+	rawContent := content
 	agentID = strings.TrimSpace(agentID)
 	deviceID = strings.TrimSpace(deviceID)
 	content = strings.TrimSpace(content)
+	sessionID = strings.TrimSpace(sessionID)
+
+	logger.Debugf(
+		"OpenClaw SendMessage requested: agent=%s device=%s session=%s content_len=%d content_trim_len=%d content_snippet=%q",
+		agentID,
+		deviceID,
+		sessionID,
+		len(rawContent),
+		len(content),
+		logSnippet(content, 64),
+	)
 
 	if agentID == "" {
-		return "", fmt.Errorf("agentID is required")
+		err := fmt.Errorf("agentID is required")
+		logger.Warnf("OpenClaw SendMessage rejected: %v", err)
+		return "", err
 	}
 	if deviceID == "" {
-		return "", fmt.Errorf("deviceID is required")
+		err := fmt.Errorf("deviceID is required")
+		logger.Warnf("OpenClaw SendMessage rejected: agent=%s err=%v", agentID, err)
+		return "", err
 	}
 	if content == "" {
-		return "", fmt.Errorf("content is required")
+		err := fmt.Errorf("content is required")
+		logger.Warnf("OpenClaw SendMessage rejected: agent=%s device=%s err=%v", agentID, deviceID, err)
+		return "", err
 	}
 
 	session := m.GetAgentSession(agentID)
 	if session == nil {
-		return "", fmt.Errorf("openclaw session not found for agent %s", agentID)
+		err := fmt.Errorf("openclaw session not found for agent %s", agentID)
+		logger.Warnf("OpenClaw SendMessage rejected: agent=%s device=%s session=%s err=%v", agentID, deviceID, sessionID, err)
+		return "", err
 	}
 
 	messageID := uuid.NewString()
 	payloadBytes, err := json.Marshal(MessagePayload{
 		Content:   content,
-		SessionID: strings.TrimSpace(sessionID),
+		SessionID: sessionID,
 		Metadata: map[string]interface{}{
 			"device_id": deviceID,
 			"agent_id":  agentID,
 		},
 	})
 	if err != nil {
+		logger.Warnf("OpenClaw SendMessage payload marshal failed: agent=%s device=%s message_id=%s err=%v", agentID, deviceID, messageID, err)
 		return "", err
 	}
 
 	session.TrackPending(messageID, deviceID)
+	logger.Debugf("OpenClaw SendMessage dispatching: agent=%s device=%s session=%s message_id=%s payload_bytes=%d", agentID, deviceID, sessionID, messageID, len(payloadBytes))
 	err = session.Send(WSMessage{
 		ID:        messageID,
 		Timestamp: time.Now().UnixMilli(),
@@ -233,10 +345,51 @@ func (m *Manager) SendMessage(agentID string, deviceID string, content string, s
 	})
 	if err != nil {
 		session.RemovePending(messageID)
+		logger.Warnf("OpenClaw SendMessage send failed: agent=%s device=%s session=%s message_id=%s err=%v", agentID, deviceID, sessionID, messageID, err)
 		return "", err
 	}
 
+	logger.Debugf("OpenClaw SendMessage dispatched: agent=%s device=%s session=%s message_id=%s", agentID, deviceID, sessionID, messageID)
 	return messageID, nil
+}
+
+func (m *Manager) EnterMode(agentID string, deviceID string) bool {
+	agentID = strings.TrimSpace(agentID)
+	deviceID = strings.TrimSpace(deviceID)
+	session := m.GetAgentSession(agentID)
+	if session == nil {
+		logger.Warnf("OpenClaw EnterMode failed: agent=%s device=%s reason=no_agent_session", agentID, deviceID)
+		return false
+	}
+	ok := session.EnterMode(deviceID)
+	logger.Infof("OpenClaw mode enabled: agent=%s device=%s ok=%v", agentID, deviceID, ok)
+	return ok
+}
+
+func (m *Manager) ExitMode(agentID string, deviceID string) bool {
+	agentID = strings.TrimSpace(agentID)
+	deviceID = strings.TrimSpace(deviceID)
+	session := m.GetAgentSession(agentID)
+	if session == nil {
+		logger.Debugf("OpenClaw ExitMode ignored: agent=%s device=%s reason=no_agent_session", agentID, deviceID)
+		return false
+	}
+	ok := session.ExitMode(deviceID)
+	logger.Infof("OpenClaw mode disabled: agent=%s device=%s ok=%v", agentID, deviceID, ok)
+	return ok
+}
+
+func (m *Manager) IsModeEnabled(agentID string, deviceID string) bool {
+	agentID = strings.TrimSpace(agentID)
+	deviceID = strings.TrimSpace(deviceID)
+	session := m.GetAgentSession(agentID)
+	if session == nil {
+		logger.Debugf("OpenClaw mode check: agent=%s device=%s enabled=false reason=no_agent_session", agentID, deviceID)
+		return false
+	}
+	enabled := session.IsModeEnabled(deviceID)
+	logger.Debugf("OpenClaw mode check: agent=%s device=%s enabled=%v", agentID, deviceID, enabled)
+	return enabled
 }
 
 func (m *Manager) HandleResponse(
@@ -246,33 +399,58 @@ func (m *Manager) HandleResponse(
 	payload ResponsePayload,
 	deliver func(deviceID string, text string) bool,
 ) {
+	agentID = strings.TrimSpace(agentID)
+	correlationID = strings.TrimSpace(correlationID)
+	sessionID := strings.TrimSpace(payload.SessionID)
 	content := strings.TrimSpace(payload.Content)
 	if content == "" {
+		logger.Warnf("OpenClaw response ignored: empty content, agent=%s correlation_id=%s session=%s", agentID, correlationID, sessionID)
 		return
 	}
 
 	deviceID := ""
-	if session != nil {
-		if resolvedDeviceID, ok := session.ResolvePending(correlationID); ok {
-			deviceID = strings.TrimSpace(resolvedDeviceID)
-		}
-	}
-
-	if deviceID == "" && payload.Metadata != nil {
+	routeSource := ""
+	if payload.Metadata != nil {
 		if rawDeviceID, ok := payload.Metadata["device_id"].(string); ok {
 			deviceID = strings.TrimSpace(rawDeviceID)
+			if deviceID != "" {
+				routeSource = "metadata.device_id"
+			}
+		}
+	}
+	if deviceID != "" && session != nil {
+		session.RemovePending(correlationID)
+	}
+	if deviceID == "" && session != nil {
+		if resolvedDeviceID, ok := session.ResolvePending(correlationID); ok {
+			deviceID = strings.TrimSpace(resolvedDeviceID)
+			if deviceID != "" {
+				routeSource = "pending.correlation_id"
+			}
 		}
 	}
 
 	if deviceID == "" {
-		logger.Warnf("OpenClaw response missing device route, agent=%s correlation_id=%s", agentID, correlationID)
+		logger.Warnf("OpenClaw response missing device route, agent=%s correlation_id=%s session=%s", agentID, correlationID, sessionID)
 		return
 	}
+	logger.Infof(
+		"OpenClaw response routed: agent=%s device=%s session=%s correlation_id=%s route=%s content_len=%d content_snippet=%q",
+		agentID,
+		deviceID,
+		sessionID,
+		correlationID,
+		routeSource,
+		len(content),
+		logSnippet(content, 64),
+	)
 
 	if deliver != nil && deliver(deviceID, content) {
+		logger.Debugf("OpenClaw response delivered online: agent=%s device=%s correlation_id=%s", agentID, deviceID, correlationID)
 		return
 	}
 
+	logger.Warnf("OpenClaw response queued offline: agent=%s device=%s correlation_id=%s", agentID, deviceID, correlationID)
 	m.AddOfflineMessage(deviceID, content, correlationID)
 }
 
@@ -296,6 +474,7 @@ func (m *Manager) AddOfflineMessage(deviceID string, text string, correlationID 
 		msgList = msgList[len(msgList)-MaxOfflineMessagesPerDevice:]
 	}
 	m.offline[deviceID] = msgList
+	logger.Infof("OpenClaw offline message appended: device=%s correlation_id=%s total=%d", deviceID, correlationID, len(msgList))
 }
 
 func (m *Manager) ReplayOfflineMessages(deviceID string, deliver func(msg OfflineMessage) error) (int, int) {

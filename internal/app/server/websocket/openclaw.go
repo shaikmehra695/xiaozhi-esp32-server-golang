@@ -14,11 +14,26 @@ import (
 )
 
 type OpenClawClaims struct {
-	UserID     uint   `json:"userId"`
-	AgentID    string `json:"agentId"`
-	EndpointID string `json:"endpointId"`
+	UserID     uint   `json:"user_id"`
+	AgentID    string `json:"agent_id"`
+	EndpointID string `json:"endpoint_id"`
 	Purpose    string `json:"purpose"`
 	jwt.RegisteredClaims
+}
+
+func openClawSnippet(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func (s *WebSocketServer) handleOpenClawWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +96,14 @@ func (s *WebSocketServer) handleOpenClawWebSocket(w http.ResponseWriter, r *http
 			log.Warnf("OpenClaw message decode failed, agent=%s err=%v", agentID, err)
 			continue
 		}
+		log.Debugf(
+			"OpenClaw inbound message: agent=%s type=%s id=%s corr=%s payload_bytes=%d",
+			agentID,
+			wsMsg.Type,
+			wsMsg.ID,
+			wsMsg.CorrelationID,
+			len(wsMsg.Payload),
+		)
 
 		switch wsMsg.Type {
 		case "handshake":
@@ -108,6 +131,23 @@ func handleOpenClawResponse(agentID string, session *openclaw.AgentSession, wsMs
 		log.Warnf("OpenClaw response payload decode failed, agent=%s err=%v", agentID, err)
 		return
 	}
+	metadataDeviceID := ""
+	if payload.Metadata != nil {
+		if rawDeviceID, ok := payload.Metadata["device_id"].(string); ok {
+			metadataDeviceID = strings.TrimSpace(rawDeviceID)
+		}
+	}
+	content := strings.TrimSpace(payload.Content)
+	log.Infof(
+		"OpenClaw response received: agent=%s message_id=%s correlation_id=%s session=%s metadata_device=%s content_len=%d content_snippet=%q",
+		agentID,
+		wsMsg.ID,
+		wsMsg.CorrelationID,
+		strings.TrimSpace(payload.SessionID),
+		metadataDeviceID,
+		len(content),
+		openClawSnippet(content, 64),
+	)
 	openclaw.GetManager().HandleResponse(agentID, session, wsMsg.CorrelationID, payload, deliver)
 }
 
