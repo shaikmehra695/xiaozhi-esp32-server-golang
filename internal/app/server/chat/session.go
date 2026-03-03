@@ -828,6 +828,7 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 
 	if viper.GetBool("enable_greeting") && !s.clientState.IsWelcomeSpeaking {
 		s.HandleWelcome()
+		return nil
 	}
 
 	return s.OnListenStart()
