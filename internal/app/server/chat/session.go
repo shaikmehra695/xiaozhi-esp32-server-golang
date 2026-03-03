@@ -553,6 +553,10 @@ func (s *ChatSession) HandleCommonHelloMessage(msg *ClientMessage) error {
 
 	isDuplicateHello := s.helloInited
 	if isDuplicateHello {
+		// 仅在重复 hello 场景尝试刷新设备维度配置；失败时降级处理，不阻断 hello
+		if err := s.refreshDeviceConfigOnHello(); err != nil {
+			log.Warnf("设备 %s duplicate hello 刷新配置失败，降级继续: %v", clientState.DeviceID, err)
+		}
 		if isMcp, ok := msg.Features["mcp"]; ok && isMcp && !s.mcpHelloInited {
 			s.mcpHelloInited = true
 			go initMcp(s.clientState, s.serverTransport)
@@ -581,6 +585,30 @@ func (s *ChatSession) HandleCommonHelloMessage(msg *ClientMessage) error {
 	}
 
 	s.helloInited = true
+	return nil
+}
+
+func (s *ChatSession) refreshDeviceConfigOnHello() error {
+	configProvider, err := user_config.GetProvider(viper.GetString("config_provider.type"))
+	if err != nil {
+		return fmt.Errorf("获取配置提供者失败: %w", err)
+	}
+
+	deviceConfig, err := configProvider.GetUserConfig(s.clientState.Ctx, s.clientState.DeviceID)
+	if err != nil {
+		return fmt.Errorf("获取设备配置失败: %w", err)
+	}
+	deviceConfig.MemoryMode = NormalizeMemoryMode(deviceConfig.MemoryMode)
+
+	prevAgentID := s.clientState.AgentID
+	s.clientState.AgentID = deviceConfig.AgentId
+	s.clientState.DeviceConfig = deviceConfig
+	s.clientState.SystemPrompt = deviceConfig.SystemPrompt
+	// 角色可能已切换，清空声纹临时TTS配置，避免旧配置污染
+	s.clientState.SpeakerTTSConfig = nil
+	applyOutputAudioFormatForTTS(s.clientState)
+
+	log.Infof("设备 %s hello 刷新配置成功，agent: %s -> %s", s.clientState.DeviceID, prevAgentID, deviceConfig.AgentId)
 	return nil
 }
 
