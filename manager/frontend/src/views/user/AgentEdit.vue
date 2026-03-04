@@ -230,6 +230,16 @@
             </div>
           </div>
 
+          <div class="form-group">
+            <label class="form-label">OpenClaw</label>
+            <el-button type="primary" size="large" style="width: 100%" @click="showOpenClawSettings">
+              查看openclaw
+            </el-button>
+            <div class="form-help">
+              已配置: {{ form.openclaw_allowed ? '开启' : '关闭' }}，进入词 {{ form.openclaw_enter_keywords.length }} 个，退出词 {{ form.openclaw_exit_keywords.length }} 个。
+            </div>
+          </div>
+
           <div class="form-group" v-loading="mcpServiceOptionsLoading">
             <label class="form-label">MCP服务</label>
             <el-select
@@ -362,6 +372,118 @@
         <el-button @click="showMCPDialog = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="showOpenClawDialog"
+      title="OpenClaw设置"
+      width="680px"
+    >
+      <div>
+        <div class="openclaw-tip-row">
+          <span class="openclaw-tip-title">接入tips</span>
+          <el-tooltip effect="light" placement="top-start" :show-after="200" :enterable="true" popper-class="openclaw-tip-popper">
+            <template #content>
+              <div class="openclaw-tip-content">
+                <div>架构：设备语音 -> 服务端路由 -> OpenClaw 会话 -> xiaozhi 插件。</div>
+                <div>安装：执行 <code>openclaw plugins install @xiaozhi_openclaw/xiaozhi</code>。</div>
+                <div>配置channel：把上方接入点 URL 发给 OpenClaw，并告诉它“配置xiaozhi渠道插件”。</div>
+                <div>进入逻辑：命中进入词（默认“打开龙虾/进入龙虾”）后进入 OpenClaw 模式，后续文本优先走 OpenClaw。</div>
+                <div>退出逻辑：在 OpenClaw 模式下命中退出词（默认“关闭龙虾/退出龙虾”）即退出，恢复普通 LLM 对话。</div>
+                <el-link :href="openClawDocURL" target="_blank" type="primary" :underline="false">
+                  查看完整文档
+                </el-link>
+              </div>
+            </template>
+            <el-icon class="openclaw-tip-icon"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </div>
+
+        <el-form label-width="100px">
+          <el-form-item label="开关">
+            <el-switch v-model="form.openclaw_allowed" />
+          </el-form-item>
+          <el-form-item label="进入关键词">
+            <el-select
+              v-model="form.openclaw_enter_keywords"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              style="width: 100%"
+              placeholder="输入后回车，可添加多个关键词"
+            />
+          </el-form-item>
+          <el-form-item label="退出关键词">
+            <el-select
+              v-model="form.openclaw_exit_keywords"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              style="width: 100%"
+              placeholder="输入后回车，可添加多个关键词"
+            />
+          </el-form-item>
+        </el-form>
+
+        <el-divider />
+
+        <div v-loading="openClawEndpointLoading">
+          <div class="openclaw-status-bar">
+            <div class="endpoint-label">连接状态：</div>
+            <el-tag :type="openClawStatusTagType">{{ openClawStatusText }}</el-tag>
+          </div>
+          <div v-if="openClawEndpointData.status_message" class="openclaw-status-message">
+            {{ openClawEndpointData.status_message }}
+          </div>
+          <div class="mcp-endpoint-display">
+            <div class="endpoint-header">
+              <div class="endpoint-label">OpenClaw接入点URL：</div>
+              <div style="display: flex; gap: 8px;">
+                <el-button size="small" @click="fetchOpenClawEndpoint" :loading="openClawEndpointLoading">刷新</el-button>
+                <el-button size="small" type="primary" @click="copyOpenClawEndpoint">复制URL</el-button>
+              </div>
+            </div>
+            <div class="endpoint-content">
+              {{ openClawEndpointData.endpoint || '暂无接入点数据' }}
+            </div>
+          </div>
+        </div>
+
+        <el-divider />
+        <el-alert
+          title="对话测试"
+          description="向openclaw发送一条文本，验证连通与回复。"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px"
+        />
+        <el-form label-width="100px">
+          <el-form-item label="测试消息">
+            <el-input
+              v-model="openClawChatTestForm.message"
+              type="textarea"
+              :rows="3"
+              placeholder="请输入测试消息"
+            />
+          </el-form-item>
+        </el-form>
+        <el-button
+          type="primary"
+          @click="testOpenClawChat"
+          :loading="openClawChatTesting"
+        >
+          发送测试
+        </el-button>
+        <div class="mcp-result-box">{{ openClawChatTestResult || '暂无测试结果' }}</div>
+      </div>
+      <template #footer>
+        <el-button @click="showOpenClawDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -390,6 +512,9 @@ const allRoles = computed(() => {
   return [...globalRoles.value, ...userRoles.value].filter(isRoleEnabled)
 })
 const hasAvailableRoles = computed(() => allRoles.value.length > 0)
+const OPENCLAW_DEFAULT_ENTER_KEYWORDS = ['打开龙虾', '进入龙虾']
+const OPENCLAW_DEFAULT_EXIT_KEYWORDS = ['关闭龙虾', '退出龙虾']
+const openClawDocURL = 'https://github.com/hackers365/xiaozhi-esp32-server-golang/blob/main/doc/openclaw_integration.md'
 
 // 表单数据
 const form = reactive({
@@ -401,7 +526,10 @@ const form = reactive({
   asr_speed: 'normal',
   knowledge_base_ids: [],
   memory_mode: 'short',
-  mcp_service_names: ''
+  mcp_service_names: '',
+  openclaw_allowed: false,
+  openclaw_enter_keywords: [...OPENCLAW_DEFAULT_ENTER_KEYWORDS],
+  openclaw_exit_keywords: [...OPENCLAW_DEFAULT_EXIT_KEYWORDS]
 })
 
 // LLM配置数据
@@ -447,6 +575,31 @@ const mcpTools = ref([])
 const callingTool = ref(false)
 const mcpCallResult = ref('')
 const mcpCallForm = ref({ tool_name: '', argumentsText: '{}' })
+const showOpenClawDialog = ref(false)
+const openClawEndpointLoading = ref(false)
+const openClawEndpointData = ref({
+  endpoint: '',
+  connected: false,
+  status: 'unknown',
+  status_message: ''
+})
+const openClawChatTesting = ref(false)
+const openClawChatTestResult = ref('')
+const openClawChatTestForm = ref({
+  message: ''
+})
+const openClawStatusText = computed(() => {
+  const status = String(openClawEndpointData.value.status || '').toLowerCase()
+  if (status === 'online') return '已连接'
+  if (status === 'offline') return '未连接'
+  return '状态未知'
+})
+const openClawStatusTagType = computed(() => {
+  const status = String(openClawEndpointData.value.status || '').toLowerCase()
+  if (status === 'online') return 'success'
+  if (status === 'offline') return 'danger'
+  return 'info'
+})
 
 // 加载LLM配置
 const loadLlmConfigs = async () => {
@@ -477,6 +630,7 @@ const loadAgent = async () => {
   try {
     const response = await api.get(`/user/agents/${route.params.id}`)
     const agent = response.data.data
+    const openclawConfig = parseOpenClawConfigFromAgent(agent)
     
     // 映射基本字段
     Object.assign(form, {
@@ -486,7 +640,10 @@ const loadAgent = async () => {
       voice: agent.voice || null,
       knowledge_base_ids: agent.knowledge_base_ids || [],
       memory_mode: agent.memory_mode || 'short',
-      mcp_service_names: agent.mcp_service_names || ''
+      mcp_service_names: agent.mcp_service_names || '',
+      openclaw_allowed: !!openclawConfig.allowed,
+      openclaw_enter_keywords: normalizeKeywordList(openclawConfig.enter_keywords),
+      openclaw_exit_keywords: normalizeKeywordList(openclawConfig.exit_keywords)
     })
     selectedMcpServices.value = normalizeMcpServiceNames((form.mcp_service_names || '').split(','))
     syncMcpServiceNamesToForm()
@@ -573,6 +730,56 @@ const normalizeMcpServiceNames = (names) => {
   return unique
 }
 
+const normalizeKeywordList = (keywords) => {
+  if (!Array.isArray(keywords)) return []
+  const unique = []
+  const seen = new Set()
+  for (const item of keywords) {
+    const keyword = String(item || '').trim()
+    if (!keyword || seen.has(keyword)) continue
+    seen.add(keyword)
+    unique.push(keyword)
+  }
+  return unique
+}
+
+const buildDefaultOpenClawConfig = () => ({
+  allowed: false,
+  enter_keywords: [...OPENCLAW_DEFAULT_ENTER_KEYWORDS],
+  exit_keywords: [...OPENCLAW_DEFAULT_EXIT_KEYWORDS]
+})
+
+const normalizeOpenClawConfig = (raw) => {
+  const enterKeywords = normalizeKeywordList(raw?.enter_keywords)
+  const exitKeywords = normalizeKeywordList(raw?.exit_keywords)
+  return {
+    allowed: !!raw?.allowed,
+    enter_keywords: enterKeywords.length > 0 ? enterKeywords : [...OPENCLAW_DEFAULT_ENTER_KEYWORDS],
+    exit_keywords: exitKeywords.length > 0 ? exitKeywords : [...OPENCLAW_DEFAULT_EXIT_KEYWORDS]
+  }
+}
+
+const parseOpenClawConfigFromAgent = (agent) => {
+  if (agent && agent.openclaw && typeof agent.openclaw === 'object') {
+    return normalizeOpenClawConfig(agent.openclaw)
+  }
+
+  if (!agent || !agent.openclaw_config || typeof agent.openclaw_config !== 'string') {
+    return buildDefaultOpenClawConfig()
+  }
+
+  try {
+    const parsed = JSON.parse(agent.openclaw_config)
+    if (parsed && typeof parsed === 'object') {
+      return normalizeOpenClawConfig(parsed)
+    }
+  } catch (_) {
+    // ignore invalid payload
+  }
+
+  return buildDefaultOpenClawConfig()
+}
+
 const syncMcpServiceNamesToForm = () => {
   selectedMcpServices.value = normalizeMcpServiceNames(selectedMcpServices.value)
   form.mcp_service_names = selectedMcpServices.value.join(',')
@@ -608,6 +815,82 @@ const loadMcpServiceOptions = async () => {
     ElMessage.warning('加载MCP服务选项失败')
   } finally {
     mcpServiceOptionsLoading.value = false
+  }
+}
+
+const fetchOpenClawEndpoint = async () => {
+  openClawEndpointLoading.value = true
+  try {
+    const response = await api.get(`/user/agents/${route.params.id}/openclaw-endpoint`)
+    const data = response.data?.data || {}
+    const connected = !!data.connected
+    const status = String(data.status || '').trim().toLowerCase()
+    openClawEndpointData.value.endpoint = data.endpoint || ''
+    openClawEndpointData.value.connected = connected
+    openClawEndpointData.value.status = status || (connected ? 'online' : 'offline')
+    openClawEndpointData.value.status_message = typeof data.status_message === 'string' ? data.status_message : ''
+  } catch (error) {
+    console.error('获取OpenClaw接入点失败:', error)
+    openClawEndpointData.value.endpoint = ''
+    openClawEndpointData.value.connected = false
+    openClawEndpointData.value.status = 'unknown'
+    openClawEndpointData.value.status_message = error.response?.data?.error || ''
+    ElMessage.error('获取OpenClaw接入点失败')
+  } finally {
+    openClawEndpointLoading.value = false
+  }
+}
+
+const copyOpenClawEndpoint = async () => {
+  const endpoint = openClawEndpointData.value.endpoint
+  if (!endpoint) {
+    ElMessage.warning('暂无可复制的OpenClaw接入点')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(endpoint)
+    ElMessage.success('OpenClaw接入点已复制')
+  } catch (error) {
+    console.error('复制OpenClaw接入点失败:', error)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+const showOpenClawSettings = async () => {
+  showOpenClawDialog.value = true
+  openClawChatTestResult.value = ''
+  await fetchOpenClawEndpoint()
+}
+
+const testOpenClawChat = async () => {
+  const message = String(openClawChatTestForm.value.message || '').trim()
+  if (!message) {
+    ElMessage.warning('请输入测试消息')
+    return
+  }
+
+  openClawChatTesting.value = true
+  openClawChatTestResult.value = '请求中...'
+  try {
+    const requestTimeoutMs = 610000
+    const response = await api.post(`/user/agents/${route.params.id}/openclaw-chat-test`, {
+      message,
+      timeout_ms: 600000
+    }, {
+      timeout: requestTimeoutMs
+    })
+    const data = response.data?.data || {}
+    const reply = String(data.reply || '')
+    const latency = Number(data.latency_ms)
+    openClawChatTestResult.value = `回复: ${reply || '(空)'}${Number.isFinite(latency) ? `\n耗时: ${latency}ms` : ''}`
+    ElMessage.success('OpenClaw对话测试成功')
+  } catch (error) {
+    const msg = error.response?.data?.error || error.message || 'OpenClaw对话测试失败'
+    openClawChatTestResult.value = `错误: ${msg}`
+    ElMessage.error(msg)
+  } finally {
+    openClawChatTesting.value = false
+    await fetchOpenClawEndpoint()
   }
 }
 
@@ -727,8 +1010,20 @@ const handleSave = async () => {
   try {
     saving.value = true
     syncMcpServiceNamesToForm()
-    
-    const response = await api.put(`/user/agents/${route.params.id}`, form)
+
+    const payload = {
+      ...form,
+      openclaw: {
+        allowed: !!form.openclaw_allowed,
+        enter_keywords: normalizeKeywordList(form.openclaw_enter_keywords),
+        exit_keywords: normalizeKeywordList(form.openclaw_exit_keywords)
+      }
+    }
+    delete payload.openclaw_allowed
+    delete payload.openclaw_enter_keywords
+    delete payload.openclaw_exit_keywords
+
+    await api.put(`/user/agents/${route.params.id}`, payload)
     
     ElMessage.success('保存成功')
     router.push('/user/agents')
@@ -1505,6 +1800,82 @@ onMounted(async () => {
 
 .mcp-endpoint-display {
   margin: 20px 0;
+}
+
+.openclaw-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.openclaw-status-message {
+  margin-bottom: 12px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.openclaw-tip-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.openclaw-tip-title {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.openclaw-tip-icon {
+  font-size: 16px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 2px;
+  cursor: help;
+  transition: all 0.2s ease;
+}
+
+.openclaw-tip-icon:hover {
+  color: #1e40af;
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.openclaw-tip-content {
+  max-width: 420px;
+  color: #111827;
+  font-size: 12px;
+  line-height: 1.7;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.openclaw-tip-content code {
+  background: #f3f4f6;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+:deep(.openclaw-tip-popper) {
+  max-width: 460px;
+  background: #ffffff !important;
+  border: 1px solid #dbeafe !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12) !important;
+}
+
+:deep(.openclaw-tip-popper .el-popper__arrow::before) {
+  background: #ffffff !important;
+  border: 1px solid #dbeafe !important;
+}
+
+:deep(.openclaw-tip-popper .el-link) {
+  color: #2563eb !important;
 }
 
 .endpoint-header {

@@ -12,6 +12,20 @@ import (
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
+var (
+	defaultManagerOpenClawEnterKeywords = []string{"打开龙虾", "进入龙虾"}
+	defaultManagerOpenClawExitKeywords  = []string{"关闭龙虾", "退出龙虾"}
+)
+
+func cloneOpenClawKeywords(keywords []string) []string {
+	if len(keywords) == 0 {
+		return []string{}
+	}
+	cloned := make([]string, len(keywords))
+	copy(cloned, keywords)
+	return cloned
+}
+
 // ConfigManager 配置管理器
 // 提供高层级的配置管理功能，包括缓存、热更新、配置验证等
 type ConfigManager struct {
@@ -85,6 +99,11 @@ func (c *ConfigManager) GetUserConfig(ctx context.Context, deviceID string) (typ
 			AgentId         string                   `json:"agent_id"`
 			MemoryMode      string                   `json:"memory_mode"`
 			MCPServiceNames string                   `json:"mcp_service_names"`
+			OpenClaw        struct {
+				Allowed       bool     `json:"allowed"`
+				EnterKeywords []string `json:"enter_keywords"`
+				ExitKeywords  []string `json:"exit_keywords"`
+			} `json:"openclaw"`
 		} `json:"data"`
 	}
 
@@ -135,6 +154,15 @@ func (c *ConfigManager) GetUserConfig(ctx context.Context, deviceID string) (typ
 	}
 
 	// 构建配置结果
+	enterKeywords := response.Data.OpenClaw.EnterKeywords
+	if len(enterKeywords) == 0 {
+		enterKeywords = cloneOpenClawKeywords(defaultManagerOpenClawEnterKeywords)
+	}
+	exitKeywords := response.Data.OpenClaw.ExitKeywords
+	if len(exitKeywords) == 0 {
+		exitKeywords = cloneOpenClawKeywords(defaultManagerOpenClawExitKeywords)
+	}
+
 	config := types.UConfig{
 		SystemPrompt: response.Data.Prompt, // 使用智能体的自定义提示
 		Asr: types.AsrConfig{
@@ -162,6 +190,11 @@ func (c *ConfigManager) GetUserConfig(ctx context.Context, deviceID string) (typ
 		MemoryMode:      response.Data.MemoryMode,
 		AgentId:         response.Data.AgentId,
 		MCPServiceNames: strings.TrimSpace(response.Data.MCPServiceNames),
+		OpenClaw: types.OpenClawConfig{
+			Allowed:       response.Data.OpenClaw.Allowed,
+			EnterKeywords: enterKeywords,
+			ExitKeywords:  exitKeywords,
+		},
 	}
 	if strings.TrimSpace(config.MemoryMode) == "" {
 		config.MemoryMode = "short"

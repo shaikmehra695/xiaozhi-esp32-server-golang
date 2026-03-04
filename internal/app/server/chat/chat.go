@@ -13,6 +13,7 @@ import (
 	. "xiaozhi-esp32-server-golang/internal/data/client"
 	userconfig "xiaozhi-esp32-server-golang/internal/domain/config"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
+	"xiaozhi-esp32-server-golang/internal/domain/openclaw"
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
@@ -153,11 +154,15 @@ func (c *ChatManager) ReloadDeviceConfig(ctx context.Context) error {
 	}
 	deviceConfig.MemoryMode = NormalizeMemoryMode(deviceConfig.MemoryMode)
 
+	oldAgentID := c.clientState.AgentID
 	c.clientState.AgentID = deviceConfig.AgentId
 	c.clientState.DeviceConfig = deviceConfig
 	c.clientState.SystemPrompt = deviceConfig.SystemPrompt
 	// 切换角色后清空声纹临时TTS配置，避免旧配置污染
 	c.clientState.SpeakerTTSConfig = nil
+	// OpenClaw模式状态由 openclaw manager 按 agent session 维护，配置刷新时主动退出模式。
+	openclaw.GetManager().ExitMode(oldAgentID, c.DeviceID)
+	openclaw.GetManager().ExitMode(c.clientState.AgentID, c.DeviceID)
 	applyOutputAudioFormatForTTS(c.clientState)
 	log.Infof("设备 %s 配置已刷新，当前agent=%s", c.DeviceID, deviceConfig.AgentId)
 	return nil

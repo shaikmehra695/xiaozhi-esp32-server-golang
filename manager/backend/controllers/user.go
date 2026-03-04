@@ -24,6 +24,8 @@ type UserController struct {
 		RequestMcpToolDetailsFromClient(ctx context.Context, agentID string) ([]MCPTool, error)
 		RequestDeviceMcpToolDetailsFromClient(ctx context.Context, deviceID string) ([]MCPTool, error)
 		CallMcpToolFromClient(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error)
+		RequestOpenClawStatusFromClient(ctx context.Context, agentID string) (map[string]interface{}, error)
+		CallOpenClawChatFromClient(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error)
 		InjectMessageToDevice(ctx context.Context, deviceID, message string, skipLlm bool) error
 	}
 }
@@ -290,15 +292,16 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 
 	var req struct {
-		Name             string  `json:"name" binding:"required,min=2,max=50"`
-		CustomPrompt     string  `json:"custom_prompt"`
-		LLMConfigID      *string `json:"llm_config_id"`
-		TTSConfigID      *string `json:"tts_config_id"`
-		Voice            *string `json:"voice"`
-		ASRSpeed         string  `json:"asr_speed"`
-		MemoryMode       string  `json:"memory_mode"`
-		MCPServiceNames  string  `json:"mcp_service_names"`
-		KnowledgeBaseIDs []uint  `json:"knowledge_base_ids"`
+		Name             string                  `json:"name" binding:"required,min=2,max=50"`
+		CustomPrompt     string                  `json:"custom_prompt"`
+		LLMConfigID      *string                 `json:"llm_config_id"`
+		TTSConfigID      *string                 `json:"tts_config_id"`
+		Voice            *string                 `json:"voice"`
+		ASRSpeed         string                  `json:"asr_speed"`
+		MemoryMode       string                  `json:"memory_mode"`
+		MCPServiceNames  string                  `json:"mcp_service_names"`
+		OpenClaw         *OpenClawConfigResponse `json:"openclaw"`
+		KnowledgeBaseIDs []uint                  `json:"knowledge_base_ids"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -334,6 +337,11 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 		MCPServiceNames: normalizedMCPServiceNames,
 		Status:          "active",
 	}
+	openClawCfg := mergeOpenClawConfig(
+		defaultOpenClawConfig(),
+		req.OpenClaw,
+	)
+	applyOpenClawConfigToAgent(&agent, openClawCfg)
 
 	if err := uc.DB.Create(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建智能体失败"})
@@ -400,15 +408,16 @@ func (uc *UserController) UpdateAgent(c *gin.Context) {
 	}
 
 	var req struct {
-		Name             string  `json:"name" binding:"required,min=2,max=50"`
-		CustomPrompt     string  `json:"custom_prompt"`
-		LLMConfigID      *string `json:"llm_config_id"`
-		TTSConfigID      *string `json:"tts_config_id"`
-		Voice            *string `json:"voice"`
-		ASRSpeed         string  `json:"asr_speed"`
-		MemoryMode       *string `json:"memory_mode"`
-		MCPServiceNames  string  `json:"mcp_service_names"`
-		KnowledgeBaseIDs []uint  `json:"knowledge_base_ids"`
+		Name             string                  `json:"name" binding:"required,min=2,max=50"`
+		CustomPrompt     string                  `json:"custom_prompt"`
+		LLMConfigID      *string                 `json:"llm_config_id"`
+		TTSConfigID      *string                 `json:"tts_config_id"`
+		Voice            *string                 `json:"voice"`
+		ASRSpeed         string                  `json:"asr_speed"`
+		MemoryMode       *string                 `json:"memory_mode"`
+		MCPServiceNames  string                  `json:"mcp_service_names"`
+		OpenClaw         *OpenClawConfigResponse `json:"openclaw"`
+		KnowledgeBaseIDs []uint                  `json:"knowledge_base_ids"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -439,6 +448,11 @@ func (uc *UserController) UpdateAgent(c *gin.Context) {
 		return
 	}
 	agent.MCPServiceNames = normalizedMCPServiceNames
+	openClawCfg := mergeOpenClawConfig(
+		buildOpenClawConfigFromAgent(agent),
+		req.OpenClaw,
+	)
+	applyOpenClawConfigToAgent(&agent, openClawCfg)
 
 	if err := uc.DB.Save(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新智能体失败"})
@@ -931,6 +945,127 @@ func (uc *UserController) GetAgentMCPEndpoint(c *gin.Context) {
 
 	// 返回单个endpoint字符串
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"endpoint": endpoint}})
+}
+
+// GetAgentOpenClawEndpoint 获取智能体的OpenClaw接入点URL（用户版本）
+func (uc *UserController) GetAgentOpenClawEndpoint(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	agentID := c.Param("id")
+	if agentID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "agent_id parameter is required"})
+		return
+	}
+
+	var agent models.Agent
+	if err := uc.DB.Where("id = ? AND user_id = ?", agentID, userID).First(&agent).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "智能体不存在或不属于当前用户"})
+		return
+	}
+
+	endpoint, err := GenerateAgentOpenClawEndpoint(uc.DB, agentID, userID.(uint))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	data := gin.H{
+		"endpoint":  endpoint,
+		"status":    "unknown",
+		"connected": false,
+	}
+	if uc.WebSocketController == nil {
+		data["status_message"] = "websocket controller unavailable"
+		c.JSON(http.StatusOK, gin.H{"data": data})
+		return
+	}
+
+	statusResult, statusErr := uc.WebSocketController.RequestOpenClawStatusFromClient(context.Background(), agentID)
+	if statusErr != nil {
+		data["status_message"] = statusErr.Error()
+		c.JSON(http.StatusOK, gin.H{"data": data})
+		return
+	}
+
+	connected, _ := statusResult["connected"].(bool)
+	status, _ := statusResult["status"].(string)
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status == "" {
+		if connected {
+			status = "online"
+		} else {
+			status = "offline"
+		}
+	}
+
+	data["connected"] = connected
+	data["status"] = status
+	if msg, ok := statusResult["status_message"].(string); ok && strings.TrimSpace(msg) != "" {
+		data["status_message"] = msg
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": data})
+}
+
+// CallAgentOpenClawChatTest 调用智能体 OpenClaw 对话测试（用户版本）
+func (uc *UserController) CallAgentOpenClawChatTest(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	agentID := c.Param("id")
+	if agentID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "agent_id parameter is required"})
+		return
+	}
+	if uc.WebSocketController == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "websocket controller unavailable"})
+		return
+	}
+
+	var req struct {
+		Message   string `json:"message" binding:"required"`
+		TimeoutMs int    `json:"timeout_ms"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
+		return
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Message == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "message 不能为空"})
+		return
+	}
+
+	var agent models.Agent
+	if err := uc.DB.Where("id = ? AND user_id = ?", agentID, userID).First(&agent).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "智能体不存在或不属于当前用户"})
+		return
+	}
+
+	body := map[string]interface{}{
+		"agent_id": agentID,
+		"message":  req.Message,
+	}
+	if req.TimeoutMs > 0 {
+		body["timeout_ms"] = req.TimeoutMs
+	}
+
+	result, err := uc.WebSocketController.CallOpenClawChatFromClient(context.Background(), body)
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(strings.ToLower(msg), "not connected"), strings.Contains(msg, "未连接"):
+			c.JSON(http.StatusConflict, gin.H{"error": msg})
+		case strings.Contains(strings.ToLower(msg), "timeout"), strings.Contains(msg, "超时"):
+			c.JSON(http.StatusGatewayTimeout, gin.H{"error": msg})
+		case strings.Contains(strings.ToLower(msg), "missing"), strings.Contains(msg, "参数"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+		case strings.Contains(msg, "没有连接的客户端"):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": msg})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "调用OpenClaw对话测试失败: " + msg})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
 // GetAgentMcpTools 获取智能体的MCP工具列表（用户版本）

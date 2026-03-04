@@ -26,6 +26,7 @@ import (
 	"xiaozhi-esp32-server-golang/internal/domain/mcp"
 	"xiaozhi-esp32-server-golang/internal/domain/memory"
 	"xiaozhi-esp32-server-golang/internal/domain/memory/llm_memory"
+	"xiaozhi-esp32-server-golang/internal/domain/openclaw"
 	"xiaozhi-esp32-server-golang/internal/domain/speaker"
 	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
@@ -639,10 +640,10 @@ func (s *ChatSession) HandleListenMessage(msg *ClientMessage) error {
 }
 
 func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
-	if s.clientState.Status == ClientStatusListening {
+	/*if s.clientState.Status == ClientStatusListening {
 		log.Debugf("设备 %s 正在监听, 跳过唤醒词检测", msg.DeviceID)
 		return nil
-	}
+	}*/
 	// 唤醒词检测
 	s.StopSpeaking(false)
 
@@ -735,6 +736,50 @@ func (a *ChatSession) checkExitWords(text string) bool {
 	return false
 }
 
+func normalizeOpenClawKeywordText(text string) string {
+	return removePunctuation(strings.ToLower(strings.TrimSpace(text)))
+}
+
+func containsOpenClawKeyword(text string, keywords []string) bool {
+	normalizedText := normalizeOpenClawKeywordText(text)
+	if normalizedText == "" {
+		return false
+	}
+	for _, keyword := range keywords {
+		normalizedKeyword := normalizeOpenClawKeywordText(keyword)
+		if normalizedKeyword == "" {
+			continue
+		}
+		if strings.Contains(normalizedText, normalizedKeyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *ChatSession) isOpenClawEnterKeyword(text string) bool {
+	return containsOpenClawKeyword(text, s.clientState.DeviceConfig.OpenClaw.EnterKeywords)
+}
+
+func (s *ChatSession) isOpenClawExitKeyword(text string) bool {
+	return containsOpenClawKeyword(text, s.clientState.DeviceConfig.OpenClaw.ExitKeywords)
+}
+
+func openClawLogSnippet(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
 func (s *ChatSession) GetRandomGreeting() string {
 	greetingList := viper.GetStringSlice("greeting_list")
 	if len(greetingList) == 0 {
@@ -745,8 +790,7 @@ func (s *ChatSession) GetRandomGreeting() string {
 }
 
 func (s *ChatSession) AddTextToTTSQueue(text string) error {
-	s.llmManager.AddTextToTTSQueue(text)
-	return nil
+	return s.llmManager.AddTextToTTSQueue(text)
 }
 
 // InterruptAndClearTTSQueue 触发 TTS 打断并清空发送队列（供 realtime 模式 VAD 打断等场景调用）
@@ -1061,6 +1105,95 @@ func (s *ChatSession) actionDoChat(ctx context.Context, text string, speakerResu
 		log.Debugf("actionDoChat ctx done, return")
 		return nil
 	default:
+	}
+
+	agentID := strings.TrimSpace(s.clientState.AgentID)
+	deviceID := strings.TrimSpace(s.clientState.DeviceID)
+	openclawSessionID := strings.TrimSpace(s.clientState.SessionID)
+	trimmedText := strings.TrimSpace(text)
+
+	openclawManager := openclaw.GetManager()
+	if s.clientState.DeviceConfig.OpenClaw.Allowed {
+		isOpenClawMode := openclawManager.IsModeEnabled(agentID, deviceID)
+		isEnterKeyword := s.isOpenClawEnterKeyword(text)
+		isExitKeyword := false
+		if isOpenClawMode {
+			isExitKeyword = s.isOpenClawExitKeyword(text)
+		}
+		log.Debugf(
+			"OpenClaw路由判定: agent=%s device=%s session=%s allowed=%v mode=%v enter_keyword=%v exit_keyword=%v text_len=%d text_trim_len=%d text_snippet=%q",
+			agentID,
+			deviceID,
+			openclawSessionID,
+			s.clientState.DeviceConfig.OpenClaw.Allowed,
+			isOpenClawMode,
+			isEnterKeyword,
+			isExitKeyword,
+			len(text),
+			len(trimmedText),
+			openClawLogSnippet(trimmedText, 64),
+		)
+		if isOpenClawMode {
+			if isExitKeyword {
+				exited := openclawManager.ExitMode(agentID, deviceID)
+				_ = s.AddTextToTTSQueue("已退出OpenClaw模式")
+				log.Infof("设备 %s 退出OpenClaw模式: agent=%s exited=%v", deviceID, agentID, exited)
+				return nil
+			}
+
+			log.Infof(
+				"OpenClaw发送STT: agent=%s device=%s session=%s text_len=%d text_snippet=%q",
+				agentID,
+				deviceID,
+				openclawSessionID,
+				len(trimmedText),
+				openClawLogSnippet(trimmedText, 64),
+			)
+			messageID, err := openclawManager.SendMessage(
+				agentID,
+				deviceID,
+				text,
+				openclawSessionID,
+			)
+			if err != nil {
+				log.Warnf(
+					"设备 %s OpenClaw消息发送失败，已回退普通模式: agent=%s session=%s text_snippet=%q err=%v",
+					deviceID,
+					agentID,
+					openclawSessionID,
+					openClawLogSnippet(trimmedText, 64),
+					err,
+				)
+				openclawManager.ExitMode(agentID, deviceID)
+				_ = s.AddTextToTTSQueue("OpenClaw当前不可用，已退出OpenClaw模式")
+			} else {
+				log.Infof("OpenClaw发送STT成功: agent=%s device=%s session=%s message_id=%s", agentID, deviceID, openclawSessionID, messageID)
+			}
+			return nil
+		}
+
+		if isEnterKeyword {
+			if !openclawManager.EnterMode(agentID, deviceID) {
+				_ = s.AddTextToTTSQueue("OpenClaw当前不可用，请稍后再试")
+				log.Warnf("设备 %s 进入OpenClaw模式失败: agent=%s agent session not ready", deviceID, agentID)
+				return nil
+			}
+			_ = s.AddTextToTTSQueue("已进入OpenClaw模式，请继续说")
+			log.Infof("设备 %s 进入OpenClaw模式: agent=%s trigger=%q", deviceID, agentID, openClawLogSnippet(trimmedText, 32))
+			return nil
+		}
+		log.Debugf(
+			"OpenClaw未接管当前STT: agent=%s device=%s mode=%v enter_keyword=%v text_snippet=%q",
+			agentID,
+			deviceID,
+			isOpenClawMode,
+			isEnterKeyword,
+			openClawLogSnippet(trimmedText, 64),
+		)
+	} else {
+		if openclawManager.ExitMode(agentID, deviceID) {
+			log.Debugf("OpenClaw配置未开启，已强制退出模式: agent=%s device=%s", agentID, deviceID)
+		}
 	}
 
 	if s.checkExitWords(text) {
