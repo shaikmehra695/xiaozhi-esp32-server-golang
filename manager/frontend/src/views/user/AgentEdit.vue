@@ -493,6 +493,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, VideoPlay, Refresh, InfoFilled, QuestionFilled } from '@element-plus/icons-vue'
 import api from '@/utils/api'
+import { postJSONWithSSE } from '@/utils/sse'
 
 const route = useRoute()
 const router = useRouter()
@@ -862,6 +863,14 @@ const showOpenClawSettings = async () => {
   await fetchOpenClawEndpoint()
 }
 
+const formatOpenClawChatResult = (reply, latency) => {
+  const lines = [`回复: ${String(reply || '') || '(空)'}`]
+  if (Number.isFinite(latency)) {
+    lines.push(`耗时: ${latency}ms`)
+  }
+  return lines.join('\n')
+}
+
 const testOpenClawChat = async () => {
   const message = String(openClawChatTestForm.value.message || '').trim()
   if (!message) {
@@ -870,19 +879,93 @@ const testOpenClawChat = async () => {
   }
 
   openClawChatTesting.value = true
-  openClawChatTestResult.value = '请求中...'
+  openClawChatTestResult.value = '连接中...'
   try {
     const requestTimeoutMs = 610000
-    const response = await api.post(`/user/agents/${route.params.id}/openclaw-chat-test`, {
-      message,
-      timeout_ms: 600000
-    }, {
-      timeout: requestTimeoutMs
+    const timeoutMs = 600000
+    const token = String(localStorage.getItem('token') || '')
+    const chunks = []
+    let finalData = null
+    let streamError = ''
+
+    const normalizePayload = (payload) => (payload && typeof payload === 'object' ? payload : {})
+
+    const response = await postJSONWithSSE({
+      url: `/api/user/agents/${route.params.id}/openclaw-chat-test?stream=1`,
+      body: {
+        message,
+        timeout_ms: timeoutMs
+      },
+      timeoutMs: requestTimeoutMs,
+      token,
+      onEvent: (event, payload) => {
+        const envelope = normalizePayload(payload)
+        if (event === 'start') {
+          openClawChatTestResult.value = '已连接，等待回复...'
+          return
+        }
+        if (event === 'chunk') {
+          const data = normalizePayload(envelope.data)
+          const chunk = typeof data.chunk === 'string' ? data.chunk : ''
+          if (chunk) {
+            chunks.push(chunk)
+          }
+          const reply = String(data.reply || chunks.join(''))
+          const latency = Number(data.latency_ms)
+          openClawChatTestResult.value = `流式回复中...\n${formatOpenClawChatResult(reply, latency)}`
+          return
+        }
+        if (event === 'result') {
+          finalData = normalizePayload(envelope.data)
+          const reply = String(finalData.reply || chunks.join(''))
+          const latency = Number(finalData.latency_ms)
+          openClawChatTestResult.value = formatOpenClawChatResult(reply, latency)
+          return
+        }
+        if (event === 'error') {
+          const data = normalizePayload(envelope.data)
+          const messageText = String(envelope.error || data.error || 'OpenClaw对话测试失败')
+          const partialReply = String(data.reply || chunks.join(''))
+          streamError = messageText
+          openClawChatTestResult.value = partialReply
+            ? `错误: ${messageText}\n已接收: ${partialReply}`
+            : `错误: ${messageText}`
+          return
+        }
+        if (event === 'done') {
+          if (!finalData) {
+            finalData = normalizePayload(envelope.data)
+          }
+          if (envelope.ok === false && !streamError) {
+            streamError = 'OpenClaw对话测试失败'
+          }
+        }
+      }
     })
-    const data = response.data?.data || {}
-    const reply = String(data.reply || '')
-    const latency = Number(data.latency_ms)
-    openClawChatTestResult.value = `回复: ${reply || '(空)'}${Number.isFinite(latency) ? `\n耗时: ${latency}ms` : ''}`
+
+    if (response.mode === 'json') {
+      const data = response.payload?.data || {}
+      const reply = String(data.reply || '')
+      const latency = Number(data.latency_ms)
+      openClawChatTestResult.value = formatOpenClawChatResult(reply, latency)
+      ElMessage.success('OpenClaw对话测试成功')
+      return
+    }
+
+    if (streamError) {
+      throw new Error(streamError)
+    }
+
+    if (finalData && typeof finalData === 'object') {
+      const reply = String(finalData.reply || chunks.join(''))
+      const latency = Number(finalData.latency_ms)
+      openClawChatTestResult.value = formatOpenClawChatResult(reply, latency)
+    } else if (chunks.length > 0) {
+      openClawChatTestResult.value = formatOpenClawChatResult(chunks.join(''), Number.NaN)
+    } else {
+      throw new Error('未收到OpenClaw返回内容')
+    }
+
     ElMessage.success('OpenClaw对话测试成功')
   } catch (error) {
     const msg = error.response?.data?.error || error.message || 'OpenClaw对话测试失败'

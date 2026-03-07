@@ -11,6 +11,7 @@ import (
 	"xiaozhi-esp32-server-golang/internal/app/server/auth"
 	"xiaozhi-esp32-server-golang/internal/app/server/types"
 	"xiaozhi-esp32-server-golang/internal/domain/mcp"
+	"xiaozhi-esp32-server-golang/internal/domain/openclaw"
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
@@ -28,7 +29,7 @@ type WebSocketServer struct {
 	globalMCPManager *mcp.GlobalMCPManager
 
 	onNewConnection    types.OnNewConnection
-	onOpenClawResponse func(deviceID string, text string) bool
+	onOpenClawResponse func(event openclaw.ResponseDelivery) bool
 }
 
 // Option 类型定义
@@ -55,7 +56,7 @@ func WithOnNewConnection(onNewConnection types.OnNewConnection) WebSocketServerO
 	}
 }
 
-func WithOnOpenClawResponse(handler func(deviceID string, text string) bool) WebSocketServerOption {
+func WithOnOpenClawResponse(handler func(event openclaw.ResponseDelivery) bool) WebSocketServerOption {
 	return func(s *WebSocketServer) {
 		s.onOpenClawResponse = handler
 	}

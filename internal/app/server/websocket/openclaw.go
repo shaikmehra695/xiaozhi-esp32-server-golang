@@ -2,7 +2,9 @@ package websocket
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"xiaozhi-esp32-server-golang/internal/domain/openclaw"
@@ -34,6 +36,103 @@ func openClawSnippet(text string, maxRunes int) string {
 		return string(runes)
 	}
 	return string(runes[:maxRunes]) + "..."
+}
+
+func openClawReadMetadataString(metadata map[string]interface{}, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", value))
+	}
+}
+
+func openClawReadMetadataBool(metadata map[string]interface{}, key string) bool {
+	if metadata == nil {
+		return false
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return false
+	}
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		s := strings.TrimSpace(strings.ToLower(v))
+		return s == "true" || s == "1" || s == "yes" || s == "on"
+	case json.Number:
+		n, err := v.Int64()
+		return err == nil && n != 0
+	case float64:
+		return v != 0
+	case float32:
+		return v != 0
+	case int:
+		return v != 0
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	default:
+		return false
+	}
+}
+
+func openClawReadMetadataInt64(metadata map[string]interface{}, key string) int64 {
+	if metadata == nil {
+		return 0
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return 0
+	}
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case int64:
+		return v
+	case uint:
+		return int64(v)
+	case uint32:
+		return int64(v)
+	case uint64:
+		if v > uint64((1<<63)-1) {
+			return 0
+		}
+		return int64(v)
+	case float64:
+		return int64(v)
+	case float32:
+		return int64(v)
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0
+		}
+		return n
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return n
+	default:
+		return 0
+	}
 }
 
 func (s *WebSocketServer) handleOpenClawWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +224,7 @@ func (s *WebSocketServer) handleOpenClawWebSocket(w http.ResponseWriter, r *http
 	}
 }
 
-func handleOpenClawResponse(agentID string, session *openclaw.AgentSession, wsMsg openclaw.WSMessage, deliver func(deviceID string, text string) bool) {
+func handleOpenClawResponse(agentID string, session *openclaw.AgentSession, wsMsg openclaw.WSMessage, deliver func(event openclaw.ResponseDelivery) bool) {
 	var payload openclaw.ResponsePayload
 	if err := json.Unmarshal(wsMsg.Payload, &payload); err != nil {
 		log.Warnf("OpenClaw response payload decode failed, agent=%s err=%v", agentID, err)
@@ -138,16 +237,39 @@ func handleOpenClawResponse(agentID string, session *openclaw.AgentSession, wsMs
 		}
 	}
 	content := strings.TrimSpace(payload.Content)
-	log.Infof(
-		"OpenClaw response received: agent=%s message_id=%s correlation_id=%s session=%s metadata_device=%s content_len=%d content_snippet=%q",
-		agentID,
-		wsMsg.ID,
-		wsMsg.CorrelationID,
-		strings.TrimSpace(payload.SessionID),
-		metadataDeviceID,
-		len(content),
-		openClawSnippet(content, 64),
-	)
+	streamDone := openClawReadMetadataBool(payload.Metadata, "done")
+	streamSeq := openClawReadMetadataInt64(payload.Metadata, "seq")
+	streamID := openClawReadMetadataString(payload.Metadata, "stream_id")
+	streamPhase := openClawReadMetadataString(payload.Metadata, "phase")
+	isStreaming := streamDone || streamSeq > 0 || streamID != "" || streamPhase != ""
+
+	if isStreaming {
+		log.Infof(
+			"OpenClaw stream response received: agent=%s message_id=%s correlation_id=%s session=%s metadata_device=%s done=%v seq=%d stream_id=%s phase=%s content_len=%d content_snippet=%q",
+			agentID,
+			wsMsg.ID,
+			wsMsg.CorrelationID,
+			strings.TrimSpace(payload.SessionID),
+			metadataDeviceID,
+			streamDone,
+			streamSeq,
+			streamID,
+			streamPhase,
+			len(content),
+			openClawSnippet(content, 64),
+		)
+	} else {
+		log.Infof(
+			"OpenClaw response received: agent=%s message_id=%s correlation_id=%s session=%s metadata_device=%s content_len=%d content_snippet=%q",
+			agentID,
+			wsMsg.ID,
+			wsMsg.CorrelationID,
+			strings.TrimSpace(payload.SessionID),
+			metadataDeviceID,
+			len(content),
+			openClawSnippet(content, 64),
+		)
+	}
 	openclaw.GetManager().HandleResponse(agentID, session, wsMsg.CorrelationID, payload, deliver)
 }
 

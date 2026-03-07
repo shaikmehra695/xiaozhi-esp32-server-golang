@@ -26,6 +26,7 @@ type UserController struct {
 		CallMcpToolFromClient(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error)
 		RequestOpenClawStatusFromClient(ctx context.Context, agentID string) (map[string]interface{}, error)
 		CallOpenClawChatFromClient(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error)
+		CallOpenClawChatStreamFromClient(ctx context.Context, body map[string]interface{}, onResponse func(*WebSocketResponse) error) (map[string]interface{}, error)
 		InjectMessageToDevice(ctx context.Context, deviceID, message string, skipLlm bool) error
 	}
 }
@@ -1045,6 +1046,62 @@ func (uc *UserController) CallAgentOpenClawChatTest(c *gin.Context) {
 	}
 	if req.TimeoutMs > 0 {
 		body["timeout_ms"] = req.TimeoutMs
+	}
+
+	if wantsOpenClawSSE(c) {
+		if !prepareOpenClawSSE(c) {
+			return
+		}
+		_ = writeOpenClawSSE(c, "start", map[string]interface{}{
+			"agent_id": agentID,
+		})
+
+		terminalErrorSent := false
+		result, err := uc.WebSocketController.CallOpenClawChatStreamFromClient(
+			c.Request.Context(),
+			body,
+			func(resp *WebSocketResponse) error {
+				if resp == nil {
+					return nil
+				}
+				payload := map[string]interface{}{
+					"status": resp.Status,
+				}
+				if resp.Body != nil {
+					payload["data"] = resp.Body
+				}
+				if msg := strings.TrimSpace(resp.Error); msg != "" {
+					payload["error"] = msg
+				}
+
+				switch resp.Status {
+				case http.StatusPartialContent:
+					return writeOpenClawSSE(c, "chunk", payload)
+				case http.StatusOK:
+					return writeOpenClawSSE(c, "result", payload)
+				default:
+					terminalErrorSent = true
+					return writeOpenClawSSE(c, "error", payload)
+				}
+			},
+		)
+		if err != nil {
+			if !terminalErrorSent {
+				_ = writeOpenClawSSE(c, "error", map[string]interface{}{
+					"error": err.Error(),
+				})
+			}
+			_ = writeOpenClawSSE(c, "done", map[string]interface{}{
+				"ok": false,
+			})
+			return
+		}
+
+		_ = writeOpenClawSSE(c, "done", map[string]interface{}{
+			"ok":   true,
+			"data": result,
+		})
+		return
 	}
 
 	result, err := uc.WebSocketController.CallOpenClawChatFromClient(context.Background(), body)

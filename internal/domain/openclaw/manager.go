@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,9 @@ import (
 const (
 	MaxOfflineMessagesPerDevice = 20
 	OfflineMessageTTL           = 24 * time.Hour
+
+	openClawSentenceMinLen = 2
+	openClawTestDevicePref = "__openclaw_test__:"
 )
 
 func logSnippet(text string, maxRunes int) string {
@@ -33,6 +37,10 @@ func logSnippet(text string, maxRunes int) string {
 		return string(runes)
 	}
 	return string(runes[:maxRunes]) + "..."
+}
+
+func isOpenClawTestDevice(deviceID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(deviceID), openClawTestDevicePref)
 }
 
 type WSMessage struct {
@@ -55,14 +63,33 @@ type ResponsePayload struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
+type ResponseDelivery struct {
+	DeviceID      string
+	CorrelationID string
+	SessionID     string
+	Text          string
+	IsStart       bool
+	IsEnd         bool
+	Metadata      map[string]interface{}
+}
+
 type OfflineMessage struct {
 	Text          string
 	CorrelationID string
+	IsEnd         bool
 	CreatedAt     time.Time
 }
 
 type pendingRoute struct {
 	DeviceID  string
+	CreatedAt time.Time
+}
+
+type responseStreamState struct {
+	DeviceID  string
+	Buffer    string
+	IsFirst   bool
+	LastSeq   int64
 	CreatedAt time.Time
 }
 
@@ -76,6 +103,7 @@ type AgentSession struct {
 	writeMu sync.Mutex
 	pending sync.Map // correlation_id -> pendingRoute
 	modes   sync.Map // device_id -> bool
+	streams sync.Map // correlation_id -> *responseStreamState
 }
 
 func newAgentSession(agentID string, conn *websocket.Conn) *AgentSession {
@@ -153,6 +181,62 @@ func (s *AgentSession) ResolvePending(correlationID string) (string, bool) {
 	}
 	logger.Debugf("OpenClaw pending resolved: agent=%s correlation_id=%s device=%s", s.agentID, correlationID, route.DeviceID)
 	return route.DeviceID, route.DeviceID != ""
+}
+
+func (s *AgentSession) PeekPending(correlationID string) (string, bool) {
+	correlationID = strings.TrimSpace(correlationID)
+	if correlationID == "" {
+		return "", false
+	}
+	value, ok := s.pending.Load(correlationID)
+	if !ok {
+		return "", false
+	}
+	route, ok := value.(pendingRoute)
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(route.DeviceID), strings.TrimSpace(route.DeviceID) != ""
+}
+
+func (s *AgentSession) LoadOrCreateStream(correlationID string) *responseStreamState {
+	correlationID = strings.TrimSpace(correlationID)
+	if correlationID == "" {
+		return nil
+	}
+	if existing, ok := s.streams.Load(correlationID); ok {
+		if state, ok := existing.(*responseStreamState); ok && state != nil {
+			return state
+		}
+	}
+	newState := &responseStreamState{
+		IsFirst:   true,
+		CreatedAt: time.Now(),
+	}
+	actual, _ := s.streams.LoadOrStore(correlationID, newState)
+	state, _ := actual.(*responseStreamState)
+	return state
+}
+
+func (s *AgentSession) GetStream(correlationID string) (*responseStreamState, bool) {
+	correlationID = strings.TrimSpace(correlationID)
+	if correlationID == "" {
+		return nil, false
+	}
+	value, ok := s.streams.Load(correlationID)
+	if !ok {
+		return nil, false
+	}
+	state, ok := value.(*responseStreamState)
+	return state, ok && state != nil
+}
+
+func (s *AgentSession) RemoveStream(correlationID string) {
+	correlationID = strings.TrimSpace(correlationID)
+	if correlationID == "" {
+		return
+	}
+	s.streams.Delete(correlationID)
 }
 
 func (s *AgentSession) IsSameConn(conn *websocket.Conn) bool {
@@ -328,6 +412,7 @@ func (m *Manager) SendMessage(agentID string, deviceID string, content string, s
 		Metadata: map[string]interface{}{
 			"device_id": deviceID,
 			"agent_id":  agentID,
+			"stream":    true,
 		},
 	})
 	if err != nil {
@@ -397,32 +482,41 @@ func (m *Manager) HandleResponse(
 	session *AgentSession,
 	correlationID string,
 	payload ResponsePayload,
-	deliver func(deviceID string, text string) bool,
+	deliver func(event ResponseDelivery) bool,
 ) {
 	agentID = strings.TrimSpace(agentID)
 	correlationID = strings.TrimSpace(correlationID)
 	sessionID := strings.TrimSpace(payload.SessionID)
 	content := strings.TrimSpace(payload.Content)
-	if content == "" {
-		logger.Warnf("OpenClaw response ignored: empty content, agent=%s correlation_id=%s session=%s", agentID, correlationID, sessionID)
-		return
+	streamDone := parseMetadataBool(payload.Metadata, "done")
+	streamSeq := parseMetadataInt64(payload.Metadata, "seq")
+	streamID := readMetadataString(payload.Metadata, "stream_id")
+	streamPhase := readMetadataString(payload.Metadata, "phase")
+	isStreaming := streamDone || streamSeq > 0 || streamID != "" || streamPhase != ""
+
+	// 非流式默认视为一次性完成；缺失 correlation_id 的流式响应也降级为一次性处理。
+	if !isStreaming || correlationID == "" {
+		streamDone = true
 	}
 
 	deviceID := ""
 	routeSource := ""
 	if payload.Metadata != nil {
-		if rawDeviceID, ok := payload.Metadata["device_id"].(string); ok {
-			deviceID = strings.TrimSpace(rawDeviceID)
-			if deviceID != "" {
-				routeSource = "metadata.device_id"
+		deviceID = readMetadataString(payload.Metadata, "device_id")
+		if deviceID != "" {
+			routeSource = "metadata.device_id"
+		}
+	}
+	if deviceID == "" && session != nil && correlationID != "" {
+		if state, ok := session.GetStream(correlationID); ok && state != nil {
+			if cached := strings.TrimSpace(state.DeviceID); cached != "" {
+				deviceID = cached
+				routeSource = "stream.correlation_id"
 			}
 		}
 	}
-	if deviceID != "" && session != nil {
-		session.RemovePending(correlationID)
-	}
-	if deviceID == "" && session != nil {
-		if resolvedDeviceID, ok := session.ResolvePending(correlationID); ok {
+	if deviceID == "" && session != nil && correlationID != "" {
+		if resolvedDeviceID, ok := session.PeekPending(correlationID); ok {
 			deviceID = strings.TrimSpace(resolvedDeviceID)
 			if deviceID != "" {
 				routeSource = "pending.correlation_id"
@@ -431,33 +525,311 @@ func (m *Manager) HandleResponse(
 	}
 
 	if deviceID == "" {
-		logger.Warnf("OpenClaw response missing device route, agent=%s correlation_id=%s session=%s", agentID, correlationID, sessionID)
+		logger.Warnf(
+			"OpenClaw response missing device route, agent=%s correlation_id=%s session=%s done=%v seq=%d stream_id=%s phase=%s",
+			agentID,
+			correlationID,
+			sessionID,
+			streamDone,
+			streamSeq,
+			streamID,
+			streamPhase,
+		)
 		return
 	}
+
+	var state *responseStreamState
+	if session != nil && correlationID != "" {
+		state = session.LoadOrCreateStream(correlationID)
+		if state != nil && strings.TrimSpace(state.DeviceID) == "" {
+			state.DeviceID = deviceID
+		}
+	}
+
+	if state != nil && streamSeq > 0 {
+		if state.LastSeq > 0 && streamSeq <= state.LastSeq {
+			logger.Warnf(
+				"OpenClaw response seq out-of-order, agent=%s correlation_id=%s seq=%d last_seq=%d",
+				agentID,
+				correlationID,
+				streamSeq,
+				state.LastSeq,
+			)
+		}
+		state.LastSeq = streamSeq
+	}
+
+	workingText := content
+	if state != nil {
+		if content != "" {
+			state.Buffer += content
+		}
+		workingText = state.Buffer
+	}
+
 	logger.Infof(
-		"OpenClaw response routed: agent=%s device=%s session=%s correlation_id=%s route=%s content_len=%d content_snippet=%q",
+		"OpenClaw response routed: agent=%s device=%s session=%s correlation_id=%s route=%s done=%v seq=%d stream_id=%s phase=%s content_len=%d content_snippet=%q",
 		agentID,
 		deviceID,
 		sessionID,
 		correlationID,
 		routeSource,
+		streamDone,
+		streamSeq,
+		streamID,
+		streamPhase,
 		len(content),
 		logSnippet(content, 64),
 	)
 
-	if deliver != nil && deliver(deviceID, content) {
-		logger.Debugf("OpenClaw response delivered online: agent=%s device=%s correlation_id=%s", agentID, deviceID, correlationID)
+	isFirst := true
+	if state != nil {
+		isFirst = state.IsFirst
+	}
+
+	sentences := make([]string, 0)
+	remaining := strings.TrimSpace(workingText)
+	if remaining != "" {
+		sentences, remaining = extractOpenClawSentences(workingText, openClawSentenceMinLen, isFirst)
+	}
+	if state != nil {
+		state.Buffer = remaining
+	}
+
+	emit := func(text string, isStart bool, isEnd bool) {
+		text = strings.TrimSpace(text)
+		if text == "" && !isEnd {
+			return
+		}
+		event := ResponseDelivery{
+			DeviceID:      deviceID,
+			CorrelationID: correlationID,
+			SessionID:     sessionID,
+			Text:          text,
+			IsStart:       isStart,
+			IsEnd:         isEnd,
+			Metadata:      payload.Metadata,
+		}
+		if deliver != nil && deliver(event) {
+			logger.Debugf(
+				"OpenClaw response delivered online: agent=%s device=%s correlation_id=%s start=%v end=%v text_len=%d",
+				agentID,
+				deviceID,
+				correlationID,
+				isStart,
+				isEnd,
+				len(text),
+			)
+			return
+		}
+		logger.Warnf("OpenClaw response queued offline: agent=%s device=%s correlation_id=%s", agentID, deviceID, correlationID)
+		m.AddOfflineMessage(deviceID, text, correlationID, isEnd)
+	}
+
+	// 对话测试设备（__openclaw_test__）直接透传分片，避免拆句导致离线队列条目暴涨并触发20条上限截断。
+	if isOpenClawTestDevice(deviceID) {
+		if content != "" {
+			emit(content, isFirst, streamDone)
+			if state != nil {
+				state.IsFirst = false
+				state.Buffer = ""
+			}
+		} else if streamDone {
+			emit("", isFirst, true)
+		}
+
+		if streamDone && session != nil && correlationID != "" {
+			session.RemovePending(correlationID)
+			session.RemoveStream(correlationID)
+		}
 		return
 	}
 
-	logger.Warnf("OpenClaw response queued offline: agent=%s device=%s correlation_id=%s", agentID, deviceID, correlationID)
-	m.AddOfflineMessage(deviceID, content, correlationID)
+	for i, sentence := range sentences {
+		emit(sentence, isFirst && i == 0, false)
+	}
+	if state != nil && len(sentences) > 0 {
+		state.IsFirst = false
+	}
+
+	if !streamDone {
+		return
+	}
+
+	finalText := remaining
+	finalIsStart := isFirst
+	if state != nil {
+		finalText = strings.TrimSpace(state.Buffer)
+		finalIsStart = state.IsFirst
+	}
+
+	if finalText != "" {
+		emit(finalText, finalIsStart, true)
+		if state != nil {
+			state.IsFirst = false
+			state.Buffer = ""
+		}
+	} else {
+		// 结束帧允许空 content，用于驱动接收端收尾。
+		emit("", finalIsStart, true)
+	}
+
+	if session != nil && correlationID != "" {
+		session.RemovePending(correlationID)
+		session.RemoveStream(correlationID)
+	}
 }
 
-func (m *Manager) AddOfflineMessage(deviceID string, text string, correlationID string) {
+func readMetadataString(metadata map[string]interface{}, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, exists := metadata[key]
+	if !exists || value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func parseMetadataBool(metadata map[string]interface{}, key string) bool {
+	if metadata == nil {
+		return false
+	}
+	value, exists := metadata[key]
+	if !exists || value == nil {
+		return false
+	}
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		b, err := strconv.ParseBool(strings.TrimSpace(v))
+		return err == nil && b
+	case json.Number:
+		n, err := v.Int64()
+		return err == nil && n != 0
+	case float64:
+		return v != 0
+	case float32:
+		return v != 0
+	case int:
+		return v != 0
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	case uint:
+		return v != 0
+	case uint32:
+		return v != 0
+	case uint64:
+		return v != 0
+	default:
+		return false
+	}
+}
+
+func parseMetadataInt64(metadata map[string]interface{}, key string) int64 {
+	if metadata == nil {
+		return 0
+	}
+	value, exists := metadata[key]
+	if !exists || value == nil {
+		return 0
+	}
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case int64:
+		return v
+	case uint:
+		return int64(v)
+	case uint32:
+		return int64(v)
+	case uint64:
+		if v > uint64((1<<63)-1) {
+			return 0
+		}
+		return int64(v)
+	case float64:
+		return int64(v)
+	case float32:
+		return int64(v)
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0
+		}
+		return n
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return n
+	default:
+		return 0
+	}
+}
+
+func isOpenClawSentenceSeparator(r rune, isFirst bool) bool {
+	switch r {
+	case '。', '？', '！', ';', '；', ':', '：', '\n', '.', '?', '!':
+		return true
+	case '，', ',':
+		return isFirst
+	default:
+		return false
+	}
+}
+
+func extractOpenClawSentences(text string, minLen int, isFirst bool) ([]string, string) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil, ""
+	}
+	runes := []rune(trimmed)
+	start := 0
+	sentences := make([]string, 0, 4)
+	firstSplit := isFirst
+
+	for i, r := range runes {
+		if !isOpenClawSentenceSeparator(r, firstSplit) {
+			continue
+		}
+		segment := strings.TrimSpace(string(runes[start : i+1]))
+		if segment != "" && len([]rune(segment)) >= minLen {
+			sentences = append(sentences, segment)
+			start = i + 1
+			if firstSplit {
+				firstSplit = false
+			}
+		}
+	}
+
+	remaining := strings.TrimSpace(string(runes[start:]))
+	return sentences, remaining
+}
+
+func (m *Manager) AddOfflineMessage(deviceID string, text string, correlationID string, isEnd bool) {
 	deviceID = strings.TrimSpace(deviceID)
 	text = strings.TrimSpace(text)
-	if deviceID == "" || text == "" {
+	correlationID = strings.TrimSpace(correlationID)
+	if deviceID == "" {
+		return
+	}
+	if text == "" && !isEnd {
 		return
 	}
 
@@ -465,16 +837,30 @@ func (m *Manager) AddOfflineMessage(deviceID string, text string, correlationID 
 	defer m.offlineMu.Unlock()
 
 	m.pruneOfflineLocked(deviceID)
-	msgList := append(m.offline[deviceID], OfflineMessage{
+	msgList := m.offline[deviceID]
+	if text == "" && isEnd {
+		// 结束帧允许空内容：优先标记同 correlation 的最后一条为结束；不存在则写入空结束标记。
+		for i := len(msgList) - 1; i >= 0; i-- {
+			if correlationID == "" || strings.TrimSpace(msgList[i].CorrelationID) == correlationID {
+				msgList[i].IsEnd = true
+				m.offline[deviceID] = msgList
+				logger.Infof("OpenClaw offline message marked end: device=%s correlation_id=%s total=%d", deviceID, correlationID, len(msgList))
+				return
+			}
+		}
+	}
+
+	msgList = append(msgList, OfflineMessage{
 		Text:          text,
 		CorrelationID: correlationID,
+		IsEnd:         isEnd,
 		CreatedAt:     time.Now(),
 	})
 	if len(msgList) > MaxOfflineMessagesPerDevice {
 		msgList = msgList[len(msgList)-MaxOfflineMessagesPerDevice:]
 	}
 	m.offline[deviceID] = msgList
-	logger.Infof("OpenClaw offline message appended: device=%s correlation_id=%s total=%d", deviceID, correlationID, len(msgList))
+	logger.Infof("OpenClaw offline message appended: device=%s correlation_id=%s end=%v total=%d", deviceID, correlationID, isEnd, len(msgList))
 }
 
 func (m *Manager) ReplayOfflineMessages(deviceID string, deliver func(msg OfflineMessage) error) (int, int) {

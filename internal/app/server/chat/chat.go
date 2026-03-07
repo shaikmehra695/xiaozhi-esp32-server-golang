@@ -229,3 +229,7 @@ func (c *ChatManager) InjectMessage(message string, skipLlm bool) error {
 		return c.session.AddAsrResultToQueue(message, nil)
 	}
 }
+
+func (c *ChatManager) InjectOpenClawResponse(event openclaw.ResponseDelivery) error {
+	return c.session.InjectOpenClawResponse(event)
+}

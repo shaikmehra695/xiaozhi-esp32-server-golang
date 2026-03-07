@@ -731,6 +731,138 @@ func (ctrl *WebSocketController) CallOpenClawChatFromClient(ctx context.Context,
 	return response.Body, nil
 }
 
+type wsClientResponse struct {
+	clientID string
+	response *WebSocketResponse
+}
+
+// CallOpenClawChatStreamFromClient 请求客户端执行 OpenClaw 对话测试（流式回调）
+func (ctrl *WebSocketController) CallOpenClawChatStreamFromClient(
+	ctx context.Context,
+	body map[string]interface{},
+	onResponse func(*WebSocketResponse) error,
+) (map[string]interface{}, error) {
+	if body == nil {
+		body = map[string]interface{}{}
+	}
+	timeoutMs := normalizeOpenClawChatTimeoutMs(body["timeout_ms"])
+	body["timeout_ms"] = timeoutMs
+	body["stream_events"] = true
+	waitTimeout := time.Duration(timeoutMs)*time.Millisecond + 5*time.Second
+
+	responseChan := make(chan wsClientResponse, 64)
+	requestID := uuid.New().String()
+	callbacksRegistered := 0
+
+	for item := range ctrl.clientsMap.IterBuffered() {
+		client := item.Val
+		if !client.isConnected {
+			continue
+		}
+
+		clientID := client.ID
+		responseHandler := func(response *WebSocketResponse) {
+			select {
+			case responseChan <- wsClientResponse{clientID: clientID, response: response}:
+			default:
+				log.Printf("OpenClaw流式响应通道已满，丢弃响应: %s", requestID)
+			}
+		}
+
+		client.mu.Lock()
+		client.callbacks[requestID] = responseHandler
+		client.mu.Unlock()
+		callbacksRegistered++
+
+		request := WebSocketRequest{
+			ID:     requestID,
+			Method: "POST",
+			Path:   "/api/openclaw/chat",
+			Body:   body,
+		}
+		if err := client.conn.WriteJSON(request); err != nil {
+			log.Printf("向客户端 %s 发送OpenClaw流式请求失败: %v", client.ID, err)
+		}
+	}
+
+	if callbacksRegistered == 0 {
+		return nil, fmt.Errorf("没有连接的客户端")
+	}
+
+	defer func() {
+		for item := range ctrl.clientsMap.IterBuffered() {
+			client := item.Val
+			client.mu.Lock()
+			delete(client.callbacks, requestID)
+			client.mu.Unlock()
+		}
+	}()
+
+	selectedClientID := ""
+	failedClients := map[string]bool{}
+	firstError := ""
+	timeout := time.After(waitTimeout)
+
+	for {
+		select {
+		case event := <-responseChan:
+			resp := event.response
+			if resp == nil {
+				continue
+			}
+
+			if selectedClientID == "" {
+				if resp.Status >= http.StatusBadRequest {
+					failedClients[event.clientID] = true
+					if firstError == "" {
+						msg := strings.TrimSpace(resp.Error)
+						if msg != "" {
+							firstError = msg
+						}
+					}
+					if len(failedClients) >= callbacksRegistered {
+						if firstError != "" {
+							return nil, fmt.Errorf("%s", firstError)
+						}
+						return nil, fmt.Errorf("所有客户端都返回失败")
+					}
+					continue
+				}
+				selectedClientID = event.clientID
+			}
+
+			if event.clientID != selectedClientID {
+				continue
+			}
+
+			if onResponse != nil {
+				if err := onResponse(resp); err != nil {
+					return nil, err
+				}
+			}
+
+			if resp.Status == http.StatusOK {
+				if resp.Body == nil {
+					return map[string]interface{}{}, nil
+				}
+				return resp.Body, nil
+			}
+
+			if resp.Status >= http.StatusBadRequest {
+				msg := strings.TrimSpace(resp.Error)
+				if msg == "" {
+					msg = fmt.Sprintf("OpenClaw流式请求失败: status=%d", resp.Status)
+				}
+				return nil, fmt.Errorf("%s", msg)
+			}
+		case <-timeout:
+			return nil, fmt.Errorf("请求超时")
+		case <-ctx.Done():
+			return nil, fmt.Errorf("上下文取消")
+		}
+	}
+}
+
 func (ctrl *WebSocketController) broadcastRequestAndWaitFirstSuccess(ctx context.Context, method, path string, body map[string]interface{}) (*WebSocketResponse, error) {
 	return ctrl.broadcastRequestAndWaitFirstSuccessWithTimeout(ctx, method, path, body, defaultBroadcastRequestTimeout)
 }

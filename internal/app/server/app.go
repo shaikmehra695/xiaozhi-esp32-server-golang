@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 	"xiaozhi-esp32-server-golang/internal/app/mqtt_server"
@@ -328,13 +329,24 @@ func (a *App) OnNewConnection(transport types.IConn) {
 }
 
 // OnOpenClawResponse OpenClaw实时响应下发回调
-func (a *App) OnOpenClawResponse(deviceID string, text string) bool {
+func (a *App) OnOpenClawResponse(event openclaw.ResponseDelivery) bool {
+	deviceID := strings.TrimSpace(event.DeviceID)
+	if deviceID == "" {
+		return false
+	}
 	chatManager, exists := a.GetChatManager(deviceID)
 	if !exists || chatManager == nil {
 		return false
 	}
-	if err := chatManager.InjectMessage(text, true); err != nil {
-		log.Warnf("OpenClaw实时消息注入失败, device=%s err=%v", deviceID, err)
+	if err := chatManager.InjectOpenClawResponse(event); err != nil {
+		log.Warnf(
+			"OpenClaw实时消息注入失败, device=%s correlation_id=%s start=%v end=%v err=%v",
+			deviceID,
+			strings.TrimSpace(event.CorrelationID),
+			event.IsStart,
+			event.IsEnd,
+			err,
+		)
 		return false
 	}
 	return true
@@ -349,6 +361,9 @@ func (a *App) replayOpenClawOfflineMessages(deviceID string) {
 			chatManager, exists := a.GetChatManager(deviceID)
 			if !exists || chatManager == nil {
 				return fmt.Errorf("chat manager not ready")
+			}
+			if strings.TrimSpace(msg.Text) == "" {
+				return nil
 			}
 			return chatManager.InjectMessage(msg.Text, true)
 		})

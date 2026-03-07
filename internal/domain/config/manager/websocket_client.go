@@ -1321,11 +1321,50 @@ func parseOpenClawTimeoutMs(v interface{}) int {
 	return timeout
 }
 
+func parseOpenClawStreamEvents(v interface{}) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		switch strings.ToLower(strings.TrimSpace(x)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	case int:
+		return x != 0
+	case int32:
+		return x != 0
+	case int64:
+		return x != 0
+	case float32:
+		return x != 0
+	case float64:
+		return x != 0
+	}
+	return false
+}
+
+func openClawStreamSnippet(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
 func (c *WebSocketClient) handleOpenClawChatRequest(request *WebSocketRequest) {
 	agentID := ""
 	message := ""
 	sessionID := ""
 	timeoutMs := defaultOpenClawChatTimeoutMs
+	streamEvents := false
 
 	if request.Body != nil {
 		if id, ok := request.Body["agent_id"].(string); ok {
@@ -1338,6 +1377,7 @@ func (c *WebSocketClient) handleOpenClawChatRequest(request *WebSocketRequest) {
 			sessionID = strings.TrimSpace(rawSessionID)
 		}
 		timeoutMs = parseOpenClawTimeoutMs(request.Body["timeout_ms"])
+		streamEvents = parseOpenClawStreamEvents(request.Body["stream_events"])
 	}
 
 	if agentID == "" {
@@ -1359,6 +1399,11 @@ func (c *WebSocketClient) handleOpenClawChatRequest(request *WebSocketRequest) {
 	}
 
 	testDeviceID := buildOpenClawTestDeviceID(agentID)
+	// 清理测试设备历史缓存，避免串到上一轮测试结果。
+	manager.ReplayOfflineMessages(testDeviceID, func(msg openclaw.OfflineMessage) error {
+		return nil
+	})
+
 	start := time.Now()
 	messageID, err := manager.SendMessage(agentID, testDeviceID, message, sessionID)
 	if err != nil {
@@ -1370,37 +1415,155 @@ func (c *WebSocketClient) handleOpenClawChatRequest(request *WebSocketRequest) {
 		_ = c.SendResponse(request.ID, 500, nil, fmt.Sprintf("openclaw send failed: %v", err))
 		return
 	}
+	if streamEvents {
+		log.Infof(
+			"openclaw chat stream started: request_id=%s agent=%s message_id=%s session=%s timeout_ms=%d",
+			request.ID,
+			agentID,
+			messageID,
+			sessionID,
+			timeoutMs,
+		)
+	}
 
 	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
-	reply := ""
+	var replyBuilder strings.Builder
+	chunks := make([]string, 0, 8)
+	done := false
+	firstChunkLatencyMs := -1
 	for time.Now().Before(deadline) {
 		manager.ReplayOfflineMessages(testDeviceID, func(msg openclaw.OfflineMessage) error {
-			if strings.TrimSpace(msg.CorrelationID) == messageID || strings.TrimSpace(msg.CorrelationID) == "" {
-				reply = strings.TrimSpace(msg.Text)
+			correlationID := strings.TrimSpace(msg.CorrelationID)
+			if correlationID != "" && correlationID != messageID {
+				return nil
+			}
+			chunk := strings.TrimSpace(msg.Text)
+			if chunk != "" {
+				replyBuilder.WriteString(chunk)
+				chunks = append(chunks, chunk)
+				if firstChunkLatencyMs < 0 {
+					firstChunkLatencyMs = int(time.Since(start).Milliseconds())
+				}
+				if streamEvents {
+					log.Infof(
+						"openclaw chat stream chunk received: request_id=%s agent=%s message_id=%s chunk_index=%d chunk_len=%d chunk_snippet=%q",
+						request.ID,
+						agentID,
+						messageID,
+						len(chunks),
+						len(chunk),
+						openClawStreamSnippet(chunk, 64),
+					)
+				}
+				if streamEvents {
+					partialBody := map[string]interface{}{
+						"agent_id":    agentID,
+						"message_id":  messageID,
+						"chunk":       chunk,
+						"chunk_index": len(chunks),
+						"reply":       strings.TrimSpace(replyBuilder.String()),
+						"latency_ms":  int(time.Since(start).Milliseconds()),
+						"done":        false,
+					}
+					if firstChunkLatencyMs >= 0 {
+						partialBody["first_chunk_latency_ms"] = firstChunkLatencyMs
+					}
+					if err := c.SendResponse(request.ID, http.StatusPartialContent, partialBody, ""); err != nil {
+						log.Warnf("openclaw chat stream partial response send failed: request_id=%s, err=%v", request.ID, err)
+					}
+				}
+			}
+			if msg.IsEnd {
+				if streamEvents {
+					log.Infof(
+						"openclaw chat stream end marker received: request_id=%s agent=%s message_id=%s chunk_count=%d partial_reply_len=%d elapsed_ms=%d",
+						request.ID,
+						agentID,
+						messageID,
+						len(chunks),
+						len(strings.TrimSpace(replyBuilder.String())),
+						int(time.Since(start).Milliseconds()),
+					)
+				}
+				done = true
 			}
 			return nil
 		})
-		if reply != "" {
+		if done {
 			break
 		}
 		time.Sleep(120 * time.Millisecond)
 	}
+	reply := strings.TrimSpace(replyBuilder.String())
 
-	if reply == "" {
+	if !done {
 		// 清理测试设备离线缓存，避免累积。
 		manager.ReplayOfflineMessages(testDeviceID, func(msg openclaw.OfflineMessage) error {
 			return nil
 		})
-		_ = c.SendResponse(request.ID, 504, nil, "openclaw response timeout")
+		if reply == "" {
+			if streamEvents {
+				log.Warnf(
+					"openclaw chat stream timeout without reply: request_id=%s agent=%s message_id=%s timeout_ms=%d",
+					request.ID,
+					agentID,
+					messageID,
+					timeoutMs,
+				)
+			}
+			_ = c.SendResponse(request.ID, 504, nil, "openclaw response timeout")
+			return
+		}
+		if streamEvents {
+			log.Warnf(
+				"openclaw chat stream timeout with partial reply: request_id=%s agent=%s message_id=%s chunk_count=%d reply_len=%d elapsed_ms=%d",
+				request.ID,
+				agentID,
+				messageID,
+				len(chunks),
+				len(reply),
+				int(time.Since(start).Milliseconds()),
+			)
+		}
+		_ = c.SendResponse(request.ID, 504, map[string]interface{}{
+			"agent_id":               agentID,
+			"message_id":             messageID,
+			"reply":                  reply,
+			"chunks":                 chunks,
+			"chunk_count":            len(chunks),
+			"latency_ms":             int(time.Since(start).Milliseconds()),
+			"first_chunk_latency_ms": firstChunkLatencyMs,
+			"timeout_ms":             timeoutMs,
+			"finished":               false,
+		}, "openclaw response timeout (partial reply received)")
 		return
 	}
 
 	latencyMs := int(time.Since(start).Milliseconds())
+	if streamEvents {
+		log.Infof(
+			"openclaw chat stream completed: request_id=%s agent=%s message_id=%s chunk_count=%d reply_len=%d latency_ms=%d",
+			request.ID,
+			agentID,
+			messageID,
+			len(chunks),
+			len(reply),
+			latencyMs,
+		)
+	}
+	var firstChunkLatency interface{}
+	if firstChunkLatencyMs >= 0 {
+		firstChunkLatency = firstChunkLatencyMs
+	}
 	_ = c.SendResponse(request.ID, 200, map[string]interface{}{
-		"agent_id":   agentID,
-		"message_id": messageID,
-		"reply":      reply,
-		"latency_ms": latencyMs,
-		"timeout_ms": timeoutMs,
+		"agent_id":               agentID,
+		"message_id":             messageID,
+		"reply":                  reply,
+		"chunks":                 chunks,
+		"chunk_count":            len(chunks),
+		"latency_ms":             latencyMs,
+		"first_chunk_latency_ms": firstChunkLatency,
+		"timeout_ms":             timeoutMs,
+		"finished":               true,
 	}, "")
 }
