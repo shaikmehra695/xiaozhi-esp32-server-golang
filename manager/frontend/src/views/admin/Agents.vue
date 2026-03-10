@@ -162,7 +162,7 @@
               <div class="openclaw-tip-content">
                 <div>架构：设备语音 -> 服务端路由 -> OpenClaw 会话 -> xiaozhi 插件。</div>
                 <div>安装：执行 <code>openclaw plugins install @xiaozhi_openclaw/xiaozhi</code>。</div>
-                <div>配置channel：把上方接入点 URL 发给 OpenClaw，并告诉它“配置xiaozhi渠道插件”。</div>
+                <div>接入：按下方命令直接安装插件、添加 xiaozhi channel，并使用系统生成的 URL 与 JWT token。</div>
                 <div>进入逻辑：命中进入词（默认“打开龙虾/进入龙虾”）后进入 OpenClaw 模式，后续文本优先走 OpenClaw。</div>
                 <div>退出逻辑：在 OpenClaw 模式下命中退出词（默认“关闭龙虾/退出龙虾”）即退出，恢复普通 LLM 对话。</div>
                 <el-link :href="openClawDocURL" target="_blank" type="primary" :underline="false">
@@ -216,15 +216,24 @@
           </div>
           <div class="mcp-endpoint-display">
             <div class="endpoint-header">
-              <div class="endpoint-label">OpenClaw接入点URL：</div>
-              <div style="display: flex; gap: 8px;">
+              <div class="endpoint-label">OpenClaw接入命令：</div>
+              <div class="endpoint-actions">
                 <el-button size="small" @click="fetchOpenClawEndpoint" :disabled="!editingAgent" :loading="openClawEndpointLoading">刷新</el-button>
-                <el-button size="small" type="primary" @click="copyOpenClawEndpoint">复制URL</el-button>
+                <el-button size="small" type="primary" @click="copyOpenClawCommands" :disabled="!openClawCommandData.ready">复制命令</el-button>
               </div>
             </div>
-            <div class="endpoint-content">
-              {{ openClawEndpointData.endpoint || '暂无接入点数据' }}
+            <div v-if="openClawCommandData.ready" class="openclaw-command-hint">在 OpenClaw 所在环境依次执行以下命令：</div>
+            <div v-if="openClawCommandData.ready" class="openclaw-command-steps">
+              <div
+                v-for="(step, index) in openClawCommandData.steps"
+                :key="`${step.title}-${index}`"
+                class="openclaw-command-step"
+              >
+                <div class="openclaw-command-step-title">第 {{ index + 1 }} 行：{{ step.title }}</div>
+                <pre class="openclaw-command-content">{{ step.command }}</pre>
+              </div>
             </div>
+            <pre v-else class="openclaw-command-content">{{ openClawCommandDisplayText }}</pre>
           </div>
         </div>
 
@@ -362,6 +371,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, InfoFilled, QuestionFilled } from '@element-plus/icons-vue'
 import api from '../../utils/api'
 import { postJSONWithSSE } from '../../utils/sse'
+import { buildOpenClawCommands } from '../../utils/openclaw'
 
 const agents = ref([])
 const llmConfigs = ref([])
@@ -410,6 +420,16 @@ const openClawStatusTagType = computed(() => {
   if (status === 'online') return 'success'
   if (status === 'offline') return 'danger'
   return 'info'
+})
+const openClawCommandData = computed(() => buildOpenClawCommands(openClawEndpointData.value.endpoint))
+const openClawCommandDisplayText = computed(() => {
+  if (openClawCommandData.value.ready) {
+    return openClawCommandData.value.copyText
+  }
+  if (!editingAgent.value?.id) {
+    return '新建智能体时尚未生成安装命令，保存后可查看。'
+  }
+  return '暂无安装命令，请刷新后重试。'
 })
 const OPENCLAW_DEFAULT_ENTER_KEYWORDS = ['打开龙虾', '进入龙虾']
 const OPENCLAW_DEFAULT_EXIT_KEYWORDS = ['关闭龙虾', '退出龙虾']
@@ -722,17 +742,17 @@ const fetchOpenClawEndpoint = async () => {
   }
 }
 
-const copyOpenClawEndpoint = async () => {
-  const endpoint = openClawEndpointData.value.endpoint
-  if (!endpoint) {
-    ElMessage.warning('暂无可复制的OpenClaw接入点')
+const copyOpenClawCommands = async () => {
+  const commands = openClawCommandData.value.copyText
+  if (!commands) {
+    ElMessage.warning('暂无可复制的 OpenClaw 接入命令')
     return
   }
   try {
-    await navigator.clipboard.writeText(endpoint)
-    ElMessage.success('OpenClaw接入点已复制')
+    await navigator.clipboard.writeText(commands)
+    ElMessage.success('OpenClaw 接入命令已复制')
   } catch (error) {
-    console.error('复制OpenClaw接入点失败:', error)
+    console.error('复制 OpenClaw 接入命令失败:', error)
     ElMessage.error('复制失败，请手动复制')
   }
 }
@@ -1193,7 +1213,19 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 8px;
+}
+
+.endpoint-header .endpoint-label {
+  margin-bottom: 0;
+}
+
+.endpoint-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .endpoint-label {
@@ -1201,6 +1233,39 @@ onMounted(() => {
   font-weight: 500;
   color: #374151;
   margin-bottom: 8px;
+}
+
+.openclaw-command-hint {
+  margin-bottom: 8px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.openclaw-command-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.openclaw-command-step-title {
+  margin-bottom: 6px;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.openclaw-command-content {
+  margin: 0;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  color: #1e293b;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .endpoint-content {
