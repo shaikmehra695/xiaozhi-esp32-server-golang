@@ -449,6 +449,12 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 		var invalidStatusWaitCount int64
 		maxInvalidStatusWaitCount := int64(10) // 最多等待10次（约1秒）
 
+		// 空结果短时保护：避免 ASR 服务异常持续返回空字符串导致主流程死循环
+		const emptyResultProtectWindow = 3 * time.Second
+		const maxEmptyResultInWindow = 3
+		emptyResultWindowStart := time.Now()
+		emptyResultCount := 0
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -474,6 +480,9 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 			log.Debugf("处理asr结果: %s, 耗时: %d ms", text, state.GetAsrDuration())
 
 			if text != "" {
+				// 识别成功后重置空结果计数
+				emptyResultWindowStart = time.Now()
+				emptyResultCount = 0
 
 				// 创建用户消息
 				userMsg := &schema.Message{
@@ -557,6 +566,21 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				// realtime模式下, 继续循环处理下一个 ASR 结果
 				continue
 			} else {
+				now := time.Now()
+				if now.Sub(emptyResultWindowStart) > emptyResultProtectWindow {
+					emptyResultWindowStart = now
+					emptyResultCount = 0
+				}
+				emptyResultCount++
+				if emptyResultCount >= maxEmptyResultInWindow {
+					err := fmt.Errorf("ASR短时间内连续返回空结果(%d次/%s)，触发保护并断开连接", emptyResultCount, emptyResultProtectWindow)
+					log.Errorf(err.Error())
+					if onError != nil {
+						onError(err)
+					}
+					return
+				}
+
 				// text 为空的情况
 				select {
 				case <-ctx.Done():
