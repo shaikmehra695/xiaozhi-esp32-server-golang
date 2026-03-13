@@ -550,8 +550,8 @@ func (p *XunfeiSuperTTSProvider) readSynthesisResponse(ctx context.Context, pipe
 			continue
 		}
 
-		log.Infof("xunfei_super_tts payload.audio: status=%d seq=%d encoding=%s sample_rate=%d channels=%d bit_depth=%d frame_size=%d ced=%s audio_base64_len=%d",
-			audioResp.Status, audioResp.Seq, audioResp.Encoding, audioResp.SampleRate, audioResp.Channels, audioResp.BitDepth, audioResp.FrameSize, strings.TrimSpace(audioResp.Ced), len(audioResp.Audio))
+		//log.Infof("xunfei_super_tts payload.audio: status=%d seq=%d encoding=%s sample_rate=%d channels=%d bit_depth=%d frame_size=%d ced=%s audio_base64_len=%d",
+		//	audioResp.Status, audioResp.Seq, audioResp.Encoding, audioResp.SampleRate, audioResp.Channels, audioResp.BitDepth, audioResp.FrameSize, strings.TrimSpace(audioResp.Ced), len(audioResp.Audio))
 
 		audioData := cleanBase64(audioResp.Audio)
 		if audioData != "" {
@@ -984,7 +984,7 @@ func (p *XunfeiSuperTTSProvider) streamingSynthesisLoop(ctx context.Context, tex
 gotFirstText:
 
 	// 双流式请求状态按协议独立推进：
-	// status=0 启动会话，status=1 发送文本片段，status=2 在输入关闭时收尾。
+	// 首个非空文本必须使用 status=0，后续文本使用 status=1，输入关闭时用 status=2 收尾。
 	sendErrCh := make(chan error, 1)
 	go func() {
 		seq := 0
@@ -1004,15 +1004,11 @@ gotFirstText:
 			return nil
 		}
 
-		if err := writeRequest("", 0); err != nil {
-			fail(err)
-			return
-		}
 		if err := tracker.Append(firstText); err != nil {
 			fail(err)
 			return
 		}
-		if err := writeRequest(firstText, 1); err != nil {
+		if err := writeRequest(firstText, 0); err != nil {
 			fail(err)
 			return
 		}
