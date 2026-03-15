@@ -200,6 +200,8 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 	// 设置 ASR 首次返回字符的回调
 	clientState.OnAsrFirstTextCallback = func(text string, isFinal bool) {
 		log.Debugf("ASR首次返回字符: device=%s, text=%s, isFinal=%v", clientState.DeviceID, text, isFinal)
+		clientState.MarkAsrFirstText()
+		s.EmitMetricHook(clientState.Ctx, MetricAsrFirstText, clientState.Statistic.AsrFirstTextTs, nil)
 		if clientState.IsRealTime() && viper.GetInt("chat.realtime_mode") == 4 {
 			clientState.AfterAsrSessionCtx.Cancel()
 			s.InterruptAndClearTTSQueue()
@@ -1522,7 +1524,10 @@ func (s *ChatSession) EmitMetricHook(ctx context.Context, stage MetricStage, ts 
 		return
 	}
 	hctx := HookContext{Ctx: ctx, Session: s, SessionID: s.clientState.SessionID, DeviceID: s.clientState.DeviceID}
-	_, _, hookErr := s.hookHub.RunMetric(hctx, MetricData{Stage: stage, Ts: ts, Err: err})
+	_, stop, hookErr := s.hookHub.RunMetric(hctx, MetricData{Stage: stage, Ts: ts, Err: err})
+	if stop {
+		log.Debugf("METRIC hook returned stop (ignored): stage=%s", stage)
+	}
 	if hookErr != nil {
 		log.Warnf("METRIC hook 执行失败: stage=%s err=%v", stage, hookErr)
 	}

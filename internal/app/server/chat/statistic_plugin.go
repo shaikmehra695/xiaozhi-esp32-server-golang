@@ -28,6 +28,8 @@ type statisticPlugin struct {
 	currentTurn map[string]int64
 	// sessionID -> turn metrics
 	turns map[string]*turnMetric
+	// sessionID -> last seen ts
+	lastSeen map[string]int64
 }
 
 var (
@@ -35,6 +37,7 @@ var (
 	statPluginInst = &statisticPlugin{
 		currentTurn: make(map[string]int64),
 		turns:       make(map[string]*turnMetric),
+		lastSeen:    make(map[string]int64),
 	}
 )
 
@@ -50,6 +53,10 @@ func (p *statisticPlugin) onMetric(ctx HookContext, data MetricData) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	nowTs := time.Now().UnixMilli()
+	p.lastSeen[ctx.SessionID] = nowTs
+	p.cleanupStale(nowTs)
 
 	tm := p.getOrCreateTurn(ctx.SessionID, data.Stage)
 	switch data.Stage {
@@ -118,9 +125,14 @@ func (p *statisticPlugin) logTurnMetric(sessionID string, tm *turnMetric) {
 	)
 	log.Infof(msg)
 
-	// 简单清理，避免异常场景积压
-	now := time.Now().UnixMilli()
-	if now-tm.turnStartTs > 5*60*1000 {
-		return
+}
+
+func (p *statisticPlugin) cleanupStale(nowTs int64) {
+	const ttl = int64(2 * 60 * 1000)
+	for sessionID, last := range p.lastSeen {
+		if nowTs-last > ttl {
+			delete(p.lastSeen, sessionID)
+			delete(p.turns, sessionID)
+		}
 	}
 }

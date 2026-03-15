@@ -540,10 +540,8 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 
 				// 获取暂存的声纹结果（带超时）
 				speakerResult := a.getSpeakerResult()
-				state.MarkAsrFirstText()
 				state.MarkAsrFinalText()
 				if a.session != nil {
-					a.session.EmitMetricHook(ctx, MetricAsrFirstText, state.Statistic.AsrFirstTextTs, nil)
 					a.session.EmitMetricHook(ctx, MetricAsrFinalText, state.Statistic.AsrFinalTextTs, nil)
 				}
 
