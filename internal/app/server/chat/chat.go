@@ -11,6 +11,7 @@ import (
 	types_conn "xiaozhi-esp32-server-golang/internal/app/server/types"
 	types_audio "xiaozhi-esp32-server-golang/internal/data/audio"
 	. "xiaozhi-esp32-server-golang/internal/data/client"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
 	userconfig "xiaozhi-esp32-server-golang/internal/domain/config"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
 	"xiaozhi-esp32-server-golang/internal/domain/openclaw"
@@ -61,10 +62,13 @@ func NewChatManager(deviceID string, transport types_conn.IConn, options ...Chat
 	cm.transport.OnClose(cm.OnClose)
 
 	serverTransport := NewServerTransport(cm.transport, clientState)
+	hookHub := chathooks.NewHub(cm.ctx)
+	chathooks.RegisterBuiltinPlugins(hookHub)
 
 	cm.session = NewChatSession(
 		clientState,
 		serverTransport,
+		hookHub,
 	)
 
 	return cm, nil

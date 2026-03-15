@@ -14,9 +14,9 @@ import (
 	"time"
 
 	. "xiaozhi-esp32-server-golang/internal/data/client"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
 	config_types "xiaozhi-esp32-server-golang/internal/domain/config/types"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
-	domainhooks "xiaozhi-esp32-server-golang/internal/domain/hooks"
 	"xiaozhi-esp32-server-golang/internal/domain/llm"
 	llm_common "xiaozhi-esp32-server-golang/internal/domain/llm/common"
 	"xiaozhi-esp32-server-golang/internal/domain/mcp"
@@ -245,21 +245,23 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 		onEndFunc = func(err error, args ...any) {
 			l.clientState.MarkLlmEnd()
 			if l.session != nil {
-				l.session.EmitMetricHook(ctx, MetricLlmEnd, l.clientState.Statistic.LlmEndTs, err)
+				l.session.EmitMetricHook(ctx, chathooks.MetricLlmEnd, l.clientState.Statistic.LlmEndTs, err)
 			}
 			strFullText := fullText.String()
-			if l.session != nil && l.session.hookHub != nil {
-				hctx := HookContext{Ctx: ctx, Session: l.session, SessionID: l.clientState.SessionID, DeviceID: l.clientState.DeviceID}
-				payload, stop, hookErr := l.session.hookHub.Emit(domainhooks.EventChatLLMOutput, hctx, LLMOutputData{FullText: strFullText, Err: err})
+			if l.session != nil {
+				payload, stop, hookErr := l.session.emitHook(ctx, chathooks.EventChatLLMOutput, chathooks.LLMOutputData{FullText: strFullText, Err: err})
 				if hookErr != nil {
 					log.Warnf("LLM_OUTPUT hook 执行失败: %v", hookErr)
 				}
-				if hookOut, ok := payload.(LLMOutputData); ok {
+				if hookOut, ok := payload.(chathooks.LLMOutputData); ok {
 					strFullText = hookOut.FullText
 					err = hookOut.Err
 				}
 				if stop {
 					log.Infof("LLM_OUTPUT hook 请求停止当前流程")
+					if needSendTtsCmd && !l.clientState.IsRealTime() {
+						l.ttsManager.EnqueueTtsStop(ctx)
+					}
 					return
 				}
 			}
@@ -361,21 +363,23 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 	ok, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
 	l.clientState.MarkLlmEnd()
 	if l.session != nil {
-		l.session.EmitMetricHook(ctx, MetricLlmEnd, l.clientState.Statistic.LlmEndTs, err)
+		l.session.EmitMetricHook(ctx, chathooks.MetricLlmEnd, l.clientState.Statistic.LlmEndTs, err)
 	}
 	strFullText := fullText.String()
-	if l.session != nil && l.session.hookHub != nil {
-		hctx := HookContext{Ctx: ctx, Session: l.session, SessionID: l.clientState.SessionID, DeviceID: l.clientState.DeviceID}
-		payload, stop, hookErr := l.session.hookHub.Emit(domainhooks.EventChatLLMOutput, hctx, LLMOutputData{FullText: strFullText, Err: err})
+	if l.session != nil {
+		payload, stop, hookErr := l.session.emitHook(ctx, chathooks.EventChatLLMOutput, chathooks.LLMOutputData{FullText: strFullText, Err: err})
 		if hookErr != nil {
 			log.Warnf("LLM_OUTPUT hook 执行失败: %v", hookErr)
 		}
-		if hookOut, ok := payload.(LLMOutputData); ok {
+		if hookOut, ok := payload.(chathooks.LLMOutputData); ok {
 			strFullText = hookOut.FullText
 			err = hookOut.Err
 		}
 		if stop {
 			log.Infof("LLM_OUTPUT hook 请求停止当前流程")
+			if needSendTtsCmd && !l.clientState.IsRealTime() {
+				l.ttsManager.EnqueueTtsStop(ctx)
+			}
 			return ok, err
 		}
 	}
@@ -503,7 +507,7 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 					if !llmFirstTokenMarked {
 						state.MarkLlmFirstToken()
 						if l.session != nil {
-							l.session.EmitMetricHook(ctx, MetricLlmFirstToken, state.Statistic.LlmFirstTokenTs, nil)
+							l.session.EmitMetricHook(ctx, chathooks.MetricLlmFirstToken, state.Statistic.LlmFirstTokenTs, nil)
 						}
 						llmFirstTokenMarked = true
 					}
@@ -1096,9 +1100,8 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 	//组装历史消息和当前用户的消息
 	requestMessages := l.GetMessages(ctx, userMessage, MaxMessageCount, speakerResult)
 
-	if l.session != nil && l.session.hookHub != nil {
-		hctx := HookContext{Ctx: ctx, Session: l.session, SessionID: l.clientState.SessionID, DeviceID: l.clientState.DeviceID}
-		payload, stop, hookErr := l.session.hookHub.Emit(domainhooks.EventChatLLMInput, hctx, LLMInputData{
+	if l.session != nil {
+		payload, stop, hookErr := l.session.emitHook(ctx, chathooks.EventChatLLMInput, chathooks.LLMInputData{
 			UserMessage:     userMessage,
 			RequestMessages: requestMessages,
 			Tools:           einoTools,
@@ -1106,7 +1109,7 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 		if hookErr != nil {
 			log.Warnf("LLM_INPUT hook 执行失败: %v", hookErr)
 		}
-		if hookOut, ok := payload.(LLMInputData); ok {
+		if hookOut, ok := payload.(chathooks.LLMInputData); ok {
 			userMessage = hookOut.UserMessage
 			requestMessages = hookOut.RequestMessages
 			einoTools = hookOut.Tools
@@ -1119,7 +1122,7 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 
 	clientState.SetStartLlmTs()
 	if l.session != nil {
-		l.session.EmitMetricHook(ctx, MetricLlmStart, clientState.Statistic.LlmStartTs, nil)
+		l.session.EmitMetricHook(ctx, chathooks.MetricLlmStart, clientState.Statistic.LlmStartTs, nil)
 	}
 	clientState.SetStatus(ClientStatusLLMStart)
 

@@ -1,11 +1,9 @@
-package chat
+package hooks
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
-	domainhooks "xiaozhi-esp32-server-golang/internal/domain/hooks"
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
@@ -25,46 +23,39 @@ type turnMetric struct {
 
 type statisticPlugin struct {
 	mu sync.Mutex
-	// sessionID -> current turn
+
 	currentTurn map[string]int64
-	// sessionID -> turn metrics
-	turns map[string]*turnMetric
-	// sessionID -> last seen ts
-	lastSeen map[string]int64
+	turns       map[string]*turnMetric
+	lastSeen    map[string]int64
 }
 
-var (
-	statPluginOnce sync.Once
-	statPluginInst = &statisticPlugin{
+func RegisterBuiltinPlugins(hub *Hub) {
+	if hub == nil {
+		return
+	}
+
+	plugin := &statisticPlugin{
 		currentTurn: make(map[string]int64),
 		turns:       make(map[string]*turnMetric),
 		lastSeen:    make(map[string]int64),
 	}
-)
-
-func ensureStatisticPluginRegistered() {
-	statPluginOnce.Do(func() {
-		GlobalHookHub().RegisterAsync(domainhooks.EventChatMetric, "statistic_plugin", 100, statPluginInst.onMetric)
-	})
+	hub.RegisterAsync(EventChatMetric, "statistic_plugin", 100, plugin.onMetric)
 }
 
-func (p *statisticPlugin) onMetric(ctx domainhooks.Context, payload any) {
+func (p *statisticPlugin) onMetric(ctx Context, payload any) {
 	data, ok := payload.(MetricData)
-	if !ok {
+	if !ok || ctx.SessionID == "" {
 		return
 	}
-	sessionID, _ := ctx.Meta[domainhooks.MetaSessionID].(string)
-	if sessionID == "" {
-		return
-	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	nowTs := time.Now().UnixMilli()
-	p.lastSeen[sessionID] = nowTs
+	p.lastSeen[ctx.SessionID] = nowTs
 	p.cleanupStale(nowTs)
 
-	tm := p.getOrCreateTurn(sessionID, data.Stage)
+	tm := p.getOrCreateTurn(ctx.SessionID, data.Stage)
 	switch data.Stage {
 	case MetricTurnStart:
 		tm.turnStartTs = data.Ts
@@ -84,8 +75,8 @@ func (p *statisticPlugin) onMetric(ctx domainhooks.Context, payload any) {
 		tm.ttsFirstFrameTs = data.Ts
 	case MetricTtsStop:
 		tm.ttsStopTs = data.Ts
-		p.logTurnMetric(sessionID, tm)
-		delete(p.turns, sessionID)
+		p.logTurnMetric(ctx.SessionID, tm)
+		delete(p.turns, ctx.SessionID)
 	}
 }
 
@@ -96,13 +87,15 @@ func (p *statisticPlugin) getOrCreateTurn(sessionID string, stage MetricStage) *
 		p.turns[sessionID] = tm
 		return tm
 	}
+
 	if tm, ok := p.turns[sessionID]; ok {
 		return tm
 	}
-	// 兜底：若缺失 turn_start，按当前 turn 建立一个
+
 	if p.currentTurn[sessionID] == 0 {
 		p.currentTurn[sessionID] = 1
 	}
+
 	tm := &turnMetric{turnID: p.currentTurn[sessionID]}
 	p.turns[sessionID] = tm
 	return tm
@@ -116,7 +109,7 @@ func calcDelta(start, end int64) int64 {
 }
 
 func (p *statisticPlugin) logTurnMetric(sessionID string, tm *turnMetric) {
-	msg := fmt.Sprintf(
+	log.Infof(
 		"metric turn=%d session=%s asr_first=%dms asr_final=%dms llm_first=%dms llm_total=%dms tts_first=%dms tts_total=%dms e2e_first=%dms e2e_total=%dms",
 		tm.turnID,
 		sessionID,
@@ -129,8 +122,6 @@ func (p *statisticPlugin) logTurnMetric(sessionID string, tm *turnMetric) {
 		calcDelta(tm.turnStartTs, tm.ttsFirstFrameTs),
 		calcDelta(tm.turnStartTs, tm.ttsStopTs),
 	)
-	log.Infof(msg)
-
 }
 
 func (p *statisticPlugin) cleanupStale(nowTs int64) {
@@ -139,6 +130,7 @@ func (p *statisticPlugin) cleanupStale(nowTs int64) {
 		if nowTs-last > ttl {
 			delete(p.lastSeen, sessionID)
 			delete(p.turns, sessionID)
+			delete(p.currentTurn, sessionID)
 		}
 	}
 }

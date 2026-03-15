@@ -11,7 +11,7 @@ import (
 	. "xiaozhi-esp32-server-golang/internal/data/client"
 	"xiaozhi-esp32-server-golang/internal/domain/asr"
 	"xiaozhi-esp32-server-golang/internal/domain/audio"
-	domainhooks "xiaozhi-esp32-server-golang/internal/domain/hooks"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
 	"xiaozhi-esp32-server-golang/internal/domain/speaker"
 	"xiaozhi-esp32-server-golang/internal/domain/vad/inter"
 	"xiaozhi-esp32-server-golang/internal/pool"
@@ -526,7 +526,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
 				state.OnVoiceSilence()
 				if a.session != nil {
-					a.session.EmitMetricHook(ctx, MetricTurnStart, state.Statistic.TurnStartTs, nil)
+					a.session.EmitMetricHook(ctx, chathooks.MetricTurnStart, state.Statistic.TurnStartTs, nil)
 				}
 
 				//发送asr消息
@@ -543,16 +543,15 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				speakerResult := a.getSpeakerResult()
 				state.MarkAsrFinalText()
 				if a.session != nil {
-					a.session.EmitMetricHook(ctx, MetricAsrFinalText, state.Statistic.AsrFinalTextTs, nil)
+					a.session.EmitMetricHook(ctx, chathooks.MetricAsrFinalText, state.Statistic.AsrFinalTextTs, nil)
 				}
 
-				if a.session != nil && a.session.hookHub != nil {
-					hctx := HookContext{Ctx: ctx, Session: a.session, SessionID: state.SessionID, DeviceID: state.DeviceID}
-					payload, stop, hookErr := a.session.hookHub.Emit(domainhooks.EventChatASROutput, hctx, ASROutputData{Text: text, SpeakerResult: speakerResult})
+				if a.session != nil {
+					payload, stop, hookErr := a.session.emitHook(ctx, chathooks.EventChatASROutput, chathooks.ASROutputData{Text: text, SpeakerResult: speakerResult})
 					if hookErr != nil {
 						log.Warnf("ASR_OUTPUT hook 执行失败: %v", hookErr)
 					}
-					if hookOut, ok := payload.(ASROutputData); ok {
+					if hookOut, ok := payload.(chathooks.ASROutputData); ok {
 						text = hookOut.Text
 						speakerResult = hookOut.SpeakerResult
 					}

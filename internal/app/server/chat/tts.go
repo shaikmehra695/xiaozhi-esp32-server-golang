@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 	. "xiaozhi-esp32-server-golang/internal/data/client"
-	domainhooks "xiaozhi-esp32-server-golang/internal/domain/hooks"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
 	llm_common "xiaozhi-esp32-server-golang/internal/domain/llm/common"
 	"xiaozhi-esp32-server-golang/internal/domain/tts"
 	"xiaozhi-esp32-server-golang/internal/pool"
@@ -176,7 +176,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				if needReportFirstFrame && totalFrames == 1 {
 					t.clientState.MarkTtsFirstFrame()
 					if t.session != nil {
-						t.session.EmitMetricHook(ctx, MetricTtsFirstFrame, t.clientState.Statistic.TtsFirstFrameTs, nil)
+						t.session.EmitMetricHook(ctx, chathooks.MetricTtsFirstFrame, t.clientState.Statistic.TtsFirstFrameTs, nil)
 					}
 					log.Debugf("从接收音频结束 asr->llm->tts首帧 整体 耗时: %d ms", t.clientState.GetAsrLlmTtsDuration())
 					needReportFirstFrame = false
@@ -192,20 +192,20 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 					elem.OnEnd(elem.Err)
 				}
 			case AudioQueueKindTtsStart:
-				if t.session != nil && t.session.hookHub != nil {
-					hctx := HookContext{Ctx: ctx, Session: t.session, SessionID: t.clientState.SessionID, DeviceID: t.clientState.DeviceID}
-					_, stop, hookErr := t.session.hookHub.Emit(domainhooks.EventChatTTSOutputStart, hctx, TTSOutputStartData{})
+				if t.session != nil {
+					_, stop, hookErr := t.session.emitHook(ctx, chathooks.EventChatTTSOutputStart, chathooks.TTSOutputStartData{})
 					if hookErr != nil {
 						log.Warnf("TTS_OUTPUT_START hook 执行失败: %v", hookErr)
 					}
 					if stop {
 						log.Infof("TTS_OUTPUT_START hook 请求停止当前流程")
+						t.InterruptAndClearQueue()
 						continue
 					}
 				}
 				t.clientState.SetStartTtsTs()
 				if t.session != nil {
-					t.session.EmitMetricHook(ctx, MetricTtsStart, t.clientState.Statistic.TtsStartTs, nil)
+					t.session.EmitMetricHook(ctx, chathooks.MetricTtsStart, t.clientState.Statistic.TtsStartTs, nil)
 				}
 				if err := t.serverTransport.SendTtsStart(); err != nil {
 					log.Errorf("发送 TtsStart 失败: %v", err)
@@ -229,16 +229,17 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				}
 				// 固定150ms等待，确保客户端播放完成
 				time.Sleep(150 * time.Millisecond)
+				var stopErr error
 				if err := t.serverTransport.SendTtsStop(); err != nil {
+					stopErr = err
 					log.Errorf("发送 TtsStop 失败: %v", err)
 				}
 				t.clientState.MarkTtsStop()
 				if t.session != nil {
-					t.session.EmitMetricHook(ctx, MetricTtsStop, t.clientState.Statistic.TtsStopTs, nil)
+					t.session.EmitMetricHook(ctx, chathooks.MetricTtsStop, t.clientState.Statistic.TtsStopTs, stopErr)
 				}
-				if t.session != nil && t.session.hookHub != nil {
-					hctx := HookContext{Ctx: ctx, Session: t.session, SessionID: t.clientState.SessionID, DeviceID: t.clientState.DeviceID}
-					_, _, hookErr := t.session.hookHub.Emit(domainhooks.EventChatTTSOutputStop, hctx, TTSOutputStopData{})
+				if t.session != nil {
+					_, _, hookErr := t.session.emitHook(ctx, chathooks.EventChatTTSOutputStop, chathooks.TTSOutputStopData{Err: stopErr})
 					if hookErr != nil {
 						log.Warnf("TTS_OUTPUT_STOP hook 执行失败: %v", hookErr)
 					}
@@ -423,13 +424,12 @@ func (t *TTSManager) handleTextResponse(ctx context.Context, llmResponse llm_com
 		return nil
 	}
 
-	if t.session != nil && t.session.hookHub != nil {
-		hctx := HookContext{Ctx: ctx, Session: t.session, SessionID: t.clientState.SessionID, DeviceID: t.clientState.DeviceID}
-		payload, stop, hookErr := t.session.hookHub.Emit(domainhooks.EventChatTTSInput, hctx, TTSInputData{Text: llmResponse.Text, IsStart: llmResponse.IsStart, IsEnd: llmResponse.IsEnd})
+	if t.session != nil {
+		payload, stop, hookErr := t.session.emitHook(ctx, chathooks.EventChatTTSInput, chathooks.TTSInputData{Text: llmResponse.Text, IsStart: llmResponse.IsStart, IsEnd: llmResponse.IsEnd})
 		if hookErr != nil {
 			log.Warnf("TTS_INPUT hook 执行失败: %v", hookErr)
 		}
-		if hookOut, ok := payload.(TTSInputData); ok {
+		if hookOut, ok := payload.(chathooks.TTSInputData); ok {
 			llmResponse.Text = hookOut.Text
 			llmResponse.IsStart = hookOut.IsStart
 			llmResponse.IsEnd = hookOut.IsEnd

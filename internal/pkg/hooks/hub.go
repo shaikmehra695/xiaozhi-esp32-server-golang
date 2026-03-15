@@ -3,14 +3,13 @@ package hooks
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sort"
 	"sync"
 )
 
 type Context struct {
 	Ctx  context.Context
-	Meta map[string]any
+	Meta any
 }
 
 type SyncHandler func(Context, any) (any, bool, error)
@@ -29,39 +28,107 @@ type namedAsync struct {
 }
 
 type Hub struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu sync.RWMutex
 
 	syncHandlers  map[string][]namedSync
 	asyncHandlers map[string][]namedAsync
 
-	asyncTasks chan func()
+	asyncMu    sync.Mutex
+	asyncCond  *sync.Cond
+	asyncQueue []func()
 }
 
-func NewHub() *Hub {
+func NewHub(parent context.Context) *Hub {
+	if parent == nil {
+		parent = context.Background()
+	}
+
+	ctx, cancel := context.WithCancel(parent)
 	h := &Hub{
+		ctx:           ctx,
+		cancel:        cancel,
 		syncHandlers:  make(map[string][]namedSync),
 		asyncHandlers: make(map[string][]namedAsync),
-		asyncTasks:    make(chan func(), 256),
 	}
-	workers := runtime.NumCPU() / 2
-	if workers < 2 {
-		workers = 2
-	}
-	for i := 0; i < workers; i++ {
-		go func() {
-			for task := range h.asyncTasks {
-				if task != nil {
-					task()
-				}
-			}
-		}()
-	}
+	h.asyncCond = sync.NewCond(&h.asyncMu)
+
+	go h.runAsync()
 	return h
+}
+
+func (h *Hub) Close() {
+	if h == nil || h.cancel == nil {
+		return
+	}
+	h.cancel()
+	h.asyncCond.Broadcast()
+}
+
+func (h *Hub) runAsync() {
+	for {
+		task := h.popAsync()
+		if task == nil {
+			return
+		}
+		task()
+	}
+}
+
+func (h *Hub) popAsync() func() {
+	h.asyncMu.Lock()
+	defer h.asyncMu.Unlock()
+
+	for len(h.asyncQueue) == 0 && h.ctx.Err() == nil {
+		h.asyncCond.Wait()
+	}
+
+	if len(h.asyncQueue) == 0 {
+		return nil
+	}
+
+	task := h.asyncQueue[0]
+	h.asyncQueue[0] = nil
+	h.asyncQueue = h.asyncQueue[1:]
+	return task
+}
+
+func (h *Hub) pushAsync(task func()) {
+	if task == nil {
+		return
+	}
+
+	h.asyncMu.Lock()
+	defer h.asyncMu.Unlock()
+
+	if h.ctx.Err() != nil {
+		return
+	}
+
+	h.asyncQueue = append(h.asyncQueue, task)
+	h.asyncCond.Signal()
+}
+
+func (h *Hub) emitAsync(ctx Context, hooks []namedAsync, payload any) {
+	for _, hk := range hooks {
+		handler := hk.handler
+		c := ctx
+		p := payload
+
+		if h.ctx.Err() != nil {
+			return
+		}
+
+		h.pushAsync(func() { handler(c, p) })
+	}
 }
 
 func (h *Hub) RegisterSync(event, name string, priority int, handler SyncHandler) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
 	cur := h.syncHandlers[event]
 	next := make([]namedSync, 0, len(cur)+1)
 	next = append(next, cur...)
@@ -73,6 +140,7 @@ func (h *Hub) RegisterSync(event, name string, priority int, handler SyncHandler
 func (h *Hub) RegisterAsync(event, name string, priority int, handler AsyncHandler) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
 	cur := h.asyncHandlers[event]
 	next := make([]namedAsync, 0, len(cur)+1)
 	next = append(next, cur...)
@@ -99,18 +167,7 @@ func (h *Hub) Emit(event string, ctx Context, payload any) (any, bool, error) {
 			return out, true, nil
 		}
 	}
+
 	h.emitAsync(ctx, asyncs, out)
 	return out, false, nil
-}
-
-func (h *Hub) emitAsync(ctx Context, hooks []namedAsync, payload any) {
-	for _, hk := range hooks {
-		handler := hk.handler
-		c := ctx
-		p := payload
-		select {
-		case h.asyncTasks <- func() { handler(c, p) }:
-		default:
-		}
-	}
 }

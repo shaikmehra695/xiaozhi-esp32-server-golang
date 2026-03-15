@@ -18,10 +18,10 @@ import (
 	. "xiaozhi-esp32-server-golang/internal/data/client"
 	"xiaozhi-esp32-server-golang/internal/data/history"
 	. "xiaozhi-esp32-server-golang/internal/data/msg"
+	chathooks "xiaozhi-esp32-server-golang/internal/domain/chat/hooks"
 	user_config "xiaozhi-esp32-server-golang/internal/domain/config"
 	"xiaozhi-esp32-server-golang/internal/domain/config/types"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
-	domainhooks "xiaozhi-esp32-server-golang/internal/domain/hooks"
 	"xiaozhi-esp32-server-golang/internal/domain/llm"
 	llm_common "xiaozhi-esp32-server-golang/internal/domain/llm/common"
 	"xiaozhi-esp32-server-golang/internal/domain/mcp"
@@ -77,25 +77,24 @@ type ChatSession struct {
 	openClawWarmupMu sync.Mutex
 	openClawWarmup   *openClawWarmupTask
 
-	hookHub *HookHub
+	hookHub *chathooks.Hub
 }
 
 type ChatSessionOption func(*ChatSession)
 
-func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, opts ...ChatSessionOption) *ChatSession {
+func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, hookHub *chathooks.Hub, opts ...ChatSessionOption) *ChatSession {
 	s := &ChatSession{
 		clientState:        clientState,
 		serverTransport:    serverTransport,
 		chatTextQueue:      util.NewQueue[AsrResponseChannelItem](10),
 		speakerResultReady: make(chan struct{}, 1), // 缓冲为1，避免阻塞
 		openClawStreams:    make(map[string]chan llm_common.LLMResponseStruct),
+		hookHub:            hookHub,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	s.hookHub = GlobalHookHub()
-	ensureStatisticPluginRegistered()
 	s.asrManager = NewASRManager(clientState, serverTransport)
 	s.asrManager.session = s // 设置 session 引用
 	s.ttsManager = NewTTSManager(clientState, serverTransport, s)
@@ -202,7 +201,7 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 	clientState.OnAsrFirstTextCallback = func(text string, isFinal bool) {
 		log.Debugf("ASR首次返回字符: device=%s, text=%s, isFinal=%v", clientState.DeviceID, text, isFinal)
 		clientState.MarkAsrFirstText()
-		s.EmitMetricHook(clientState.Ctx, MetricAsrFirstText, clientState.Statistic.AsrFirstTextTs, nil)
+		s.EmitMetricHook(clientState.Ctx, chathooks.MetricAsrFirstText, clientState.Statistic.AsrFirstTextTs, nil)
 		if clientState.IsRealTime() && viper.GetInt("chat.realtime_mode") == 4 {
 			clientState.AfterAsrSessionCtx.Cancel()
 			s.InterruptAndClearTTSQueue()
@@ -1221,6 +1220,10 @@ func (s *ChatSession) Close() {
 			s.speakerManager.Close()
 		}
 
+		if s.hookHub != nil {
+			s.hookHub.Close()
+		}
+
 		if s.clientState != nil {
 			eventbus.Get().Publish(eventbus.TopicSessionEnd, s.clientState)
 		}
@@ -1520,12 +1523,27 @@ func (s *ChatSession) switchTTSForSpeaker(speakerResult *speaker.IdentifyResult)
 	return nil
 }
 
-func (s *ChatSession) EmitMetricHook(ctx context.Context, stage MetricStage, ts int64, err error) {
+func (s *ChatSession) emitHook(ctx context.Context, event string, payload any) (any, bool, error) {
 	if s == nil || s.hookHub == nil {
-		return
+		return payload, false, nil
 	}
-	hctx := HookContext{Ctx: ctx, Session: s, SessionID: s.clientState.SessionID, DeviceID: s.clientState.DeviceID}
-	_, stop, hookErr := s.hookHub.Emit(domainhooks.EventChatMetric, hctx, MetricData{Stage: stage, Ts: ts, Err: err})
+
+	sessionID := ""
+	deviceID := ""
+	if s.clientState != nil {
+		sessionID = s.clientState.SessionID
+		deviceID = s.clientState.DeviceID
+	}
+
+	return s.hookHub.Emit(event, chathooks.Context{
+		Ctx:       ctx,
+		SessionID: sessionID,
+		DeviceID:  deviceID,
+	}, payload)
+}
+
+func (s *ChatSession) EmitMetricHook(ctx context.Context, stage chathooks.MetricStage, ts int64, err error) {
+	_, stop, hookErr := s.emitHook(ctx, chathooks.EventChatMetric, chathooks.MetricData{Stage: stage, Ts: ts, Err: err})
 	if stop {
 		log.Debugf("METRIC hook returned stop (ignored): stage=%s", stage)
 	}
