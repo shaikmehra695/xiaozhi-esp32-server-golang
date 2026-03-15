@@ -201,7 +201,7 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 	clientState.OnAsrFirstTextCallback = func(text string, isFinal bool) {
 		log.Debugf("ASR首次返回字符: device=%s, text=%s, isFinal=%v", clientState.DeviceID, text, isFinal)
 		clientState.MarkAsrFirstText()
-		s.EmitMetricHook(clientState.Ctx, chathooks.MetricAsrFirstText, clientState.Statistic.AsrFirstTextTs, nil)
+		s.TraceAsrFirstText(clientState.Ctx, clientState.Statistic.AsrFirstTextTs)
 		if clientState.IsRealTime() && viper.GetInt("chat.realtime_mode") == 4 {
 			clientState.AfterAsrSessionCtx.Cancel()
 			s.InterruptAndClearTTSQueue()
@@ -1523,31 +1523,67 @@ func (s *ChatSession) switchTTSForSpeaker(speakerResult *speaker.IdentifyResult)
 	return nil
 }
 
-func (s *ChatSession) emitHook(ctx context.Context, event string, payload any) (any, bool, error) {
-	if s == nil || s.hookHub == nil {
-		return payload, false, nil
-	}
-
+func (s *ChatSession) hookContext(ctx context.Context) chathooks.Context {
 	sessionID := ""
 	deviceID := ""
-	if s.clientState != nil {
+	if s != nil && s.clientState != nil {
 		sessionID = s.clientState.SessionID
 		deviceID = s.clientState.DeviceID
 	}
 
-	return s.hookHub.Emit(event, chathooks.Context{
+	return chathooks.Context{
 		Ctx:       ctx,
 		SessionID: sessionID,
 		DeviceID:  deviceID,
-	}, payload)
+	}
 }
 
-func (s *ChatSession) EmitMetricHook(ctx context.Context, stage chathooks.MetricStage, ts int64, err error) {
-	_, stop, hookErr := s.emitHook(ctx, chathooks.EventChatMetric, chathooks.MetricData{Stage: stage, Ts: ts, Err: err})
+func (s *ChatSession) emitMetricStage(ctx context.Context, stage chathooks.MetricStage, ts int64, err error) {
+	if s == nil {
+		return
+	}
+
+	stop, hookErr := s.hookHub.EmitMetric(s.hookContext(ctx), chathooks.MetricData{Stage: stage, Ts: ts, Err: err})
 	if stop {
 		log.Debugf("METRIC hook returned stop (ignored): stage=%s", stage)
 	}
 	if hookErr != nil {
 		log.Warnf("METRIC hook 执行失败: stage=%s err=%v", stage, hookErr)
 	}
+}
+
+func (s *ChatSession) TraceTurnStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTurnStart, ts, nil)
+}
+
+func (s *ChatSession) TraceAsrFirstText(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricAsrFirstText, ts, nil)
+}
+
+func (s *ChatSession) TraceAsrFinalText(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricAsrFinalText, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmStart, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmFirstToken(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmFirstToken, ts, nil)
+}
+
+func (s *ChatSession) TraceLlmEnd(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricLlmEnd, ts, err)
+}
+
+func (s *ChatSession) TraceTtsStart(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsStart, ts, nil)
+}
+
+func (s *ChatSession) TraceTtsFirstFrame(ctx context.Context, ts int64) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsFirstFrame, ts, nil)
+}
+
+func (s *ChatSession) TraceTtsStop(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricTtsStop, ts, err)
 }

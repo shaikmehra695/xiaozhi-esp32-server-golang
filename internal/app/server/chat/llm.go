@@ -245,18 +245,16 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 		onEndFunc = func(err error, args ...any) {
 			l.clientState.MarkLlmEnd()
 			if l.session != nil {
-				l.session.EmitMetricHook(ctx, chathooks.MetricLlmEnd, l.clientState.Statistic.LlmEndTs, err)
+				l.session.TraceLlmEnd(ctx, l.clientState.Statistic.LlmEndTs, err)
 			}
 			strFullText := fullText.String()
 			if l.session != nil {
-				payload, stop, hookErr := l.session.emitHook(ctx, chathooks.EventChatLLMOutput, chathooks.LLMOutputData{FullText: strFullText, Err: err})
+				payload, stop, hookErr := l.session.hookHub.EmitLLMOutput(l.session.hookContext(ctx), chathooks.LLMOutputData{FullText: strFullText, Err: err})
 				if hookErr != nil {
 					log.Warnf("LLM_OUTPUT hook 执行失败: %v", hookErr)
 				}
-				if hookOut, ok := payload.(chathooks.LLMOutputData); ok {
-					strFullText = hookOut.FullText
-					err = hookOut.Err
-				}
+				strFullText = payload.FullText
+				err = payload.Err
 				if stop {
 					log.Infof("LLM_OUTPUT hook 请求停止当前流程")
 					if needSendTtsCmd && !l.clientState.IsRealTime() {
@@ -363,18 +361,16 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 	ok, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
 	l.clientState.MarkLlmEnd()
 	if l.session != nil {
-		l.session.EmitMetricHook(ctx, chathooks.MetricLlmEnd, l.clientState.Statistic.LlmEndTs, err)
+		l.session.TraceLlmEnd(ctx, l.clientState.Statistic.LlmEndTs, err)
 	}
 	strFullText := fullText.String()
 	if l.session != nil {
-		payload, stop, hookErr := l.session.emitHook(ctx, chathooks.EventChatLLMOutput, chathooks.LLMOutputData{FullText: strFullText, Err: err})
+		payload, stop, hookErr := l.session.hookHub.EmitLLMOutput(l.session.hookContext(ctx), chathooks.LLMOutputData{FullText: strFullText, Err: err})
 		if hookErr != nil {
 			log.Warnf("LLM_OUTPUT hook 执行失败: %v", hookErr)
 		}
-		if hookOut, ok := payload.(chathooks.LLMOutputData); ok {
-			strFullText = hookOut.FullText
-			err = hookOut.Err
-		}
+		strFullText = payload.FullText
+		err = payload.Err
 		if stop {
 			log.Infof("LLM_OUTPUT hook 请求停止当前流程")
 			if needSendTtsCmd && !l.clientState.IsRealTime() {
@@ -507,7 +503,7 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 					if !llmFirstTokenMarked {
 						state.MarkLlmFirstToken()
 						if l.session != nil {
-							l.session.EmitMetricHook(ctx, chathooks.MetricLlmFirstToken, state.Statistic.LlmFirstTokenTs, nil)
+							l.session.TraceLlmFirstToken(ctx, state.Statistic.LlmFirstTokenTs)
 						}
 						llmFirstTokenMarked = true
 					}
@@ -1101,7 +1097,7 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 	requestMessages := l.GetMessages(ctx, userMessage, MaxMessageCount, speakerResult)
 
 	if l.session != nil {
-		payload, stop, hookErr := l.session.emitHook(ctx, chathooks.EventChatLLMInput, chathooks.LLMInputData{
+		payload, stop, hookErr := l.session.hookHub.EmitLLMInput(l.session.hookContext(ctx), chathooks.LLMInputData{
 			UserMessage:     userMessage,
 			RequestMessages: requestMessages,
 			Tools:           einoTools,
@@ -1109,11 +1105,9 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 		if hookErr != nil {
 			log.Warnf("LLM_INPUT hook 执行失败: %v", hookErr)
 		}
-		if hookOut, ok := payload.(chathooks.LLMInputData); ok {
-			userMessage = hookOut.UserMessage
-			requestMessages = hookOut.RequestMessages
-			einoTools = hookOut.Tools
-		}
+		userMessage = payload.UserMessage
+		requestMessages = payload.RequestMessages
+		einoTools = payload.Tools
 		if stop {
 			log.Infof("LLM_INPUT hook 请求停止当前流程")
 			return nil
@@ -1122,7 +1116,7 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 
 	clientState.SetStartLlmTs()
 	if l.session != nil {
-		l.session.EmitMetricHook(ctx, chathooks.MetricLlmStart, clientState.Statistic.LlmStartTs, nil)
+		l.session.TraceLlmStart(ctx, clientState.Statistic.LlmStartTs)
 	}
 	clientState.SetStatus(ClientStatusLLMStart)
 

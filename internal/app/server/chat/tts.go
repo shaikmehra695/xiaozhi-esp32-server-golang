@@ -176,7 +176,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				if needReportFirstFrame && totalFrames == 1 {
 					t.clientState.MarkTtsFirstFrame()
 					if t.session != nil {
-						t.session.EmitMetricHook(ctx, chathooks.MetricTtsFirstFrame, t.clientState.Statistic.TtsFirstFrameTs, nil)
+						t.session.TraceTtsFirstFrame(ctx, t.clientState.Statistic.TtsFirstFrameTs)
 					}
 					log.Debugf("从接收音频结束 asr->llm->tts首帧 整体 耗时: %d ms", t.clientState.GetAsrLlmTtsDuration())
 					needReportFirstFrame = false
@@ -193,7 +193,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				}
 			case AudioQueueKindTtsStart:
 				if t.session != nil {
-					_, stop, hookErr := t.session.emitHook(ctx, chathooks.EventChatTTSOutputStart, chathooks.TTSOutputStartData{})
+					stop, hookErr := t.session.hookHub.EmitTTSOutputStart(t.session.hookContext(ctx))
 					if hookErr != nil {
 						log.Warnf("TTS_OUTPUT_START hook 执行失败: %v", hookErr)
 					}
@@ -205,7 +205,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				}
 				t.clientState.SetStartTtsTs()
 				if t.session != nil {
-					t.session.EmitMetricHook(ctx, chathooks.MetricTtsStart, t.clientState.Statistic.TtsStartTs, nil)
+					t.session.TraceTtsStart(ctx, t.clientState.Statistic.TtsStartTs)
 				}
 				if err := t.serverTransport.SendTtsStart(); err != nil {
 					log.Errorf("发送 TtsStart 失败: %v", err)
@@ -236,10 +236,10 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				}
 				t.clientState.MarkTtsStop()
 				if t.session != nil {
-					t.session.EmitMetricHook(ctx, chathooks.MetricTtsStop, t.clientState.Statistic.TtsStopTs, stopErr)
+					t.session.TraceTtsStop(ctx, t.clientState.Statistic.TtsStopTs, stopErr)
 				}
 				if t.session != nil {
-					_, _, hookErr := t.session.emitHook(ctx, chathooks.EventChatTTSOutputStop, chathooks.TTSOutputStopData{Err: stopErr})
+					_, hookErr := t.session.hookHub.EmitTTSOutputStop(t.session.hookContext(ctx), chathooks.TTSOutputStopData{Err: stopErr})
 					if hookErr != nil {
 						log.Warnf("TTS_OUTPUT_STOP hook 执行失败: %v", hookErr)
 					}
@@ -425,15 +425,13 @@ func (t *TTSManager) handleTextResponse(ctx context.Context, llmResponse llm_com
 	}
 
 	if t.session != nil {
-		payload, stop, hookErr := t.session.emitHook(ctx, chathooks.EventChatTTSInput, chathooks.TTSInputData{Text: llmResponse.Text, IsStart: llmResponse.IsStart, IsEnd: llmResponse.IsEnd})
+		payload, stop, hookErr := t.session.hookHub.EmitTTSInput(t.session.hookContext(ctx), chathooks.TTSInputData{Text: llmResponse.Text, IsStart: llmResponse.IsStart, IsEnd: llmResponse.IsEnd})
 		if hookErr != nil {
 			log.Warnf("TTS_INPUT hook 执行失败: %v", hookErr)
 		}
-		if hookOut, ok := payload.(chathooks.TTSInputData); ok {
-			llmResponse.Text = hookOut.Text
-			llmResponse.IsStart = hookOut.IsStart
-			llmResponse.IsEnd = hookOut.IsEnd
-		}
+		llmResponse.Text = payload.Text
+		llmResponse.IsStart = payload.IsStart
+		llmResponse.IsEnd = payload.IsEnd
 		if stop {
 			log.Infof("TTS_INPUT hook 请求停止当前流程")
 			return nil

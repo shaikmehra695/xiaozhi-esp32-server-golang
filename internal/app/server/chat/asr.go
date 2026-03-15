@@ -526,7 +526,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
 				state.OnVoiceSilence()
 				if a.session != nil {
-					a.session.EmitMetricHook(ctx, chathooks.MetricTurnStart, state.Statistic.TurnStartTs, nil)
+					a.session.TraceTurnStart(ctx, state.Statistic.TurnStartTs)
 				}
 
 				//发送asr消息
@@ -543,18 +543,16 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				speakerResult := a.getSpeakerResult()
 				state.MarkAsrFinalText()
 				if a.session != nil {
-					a.session.EmitMetricHook(ctx, chathooks.MetricAsrFinalText, state.Statistic.AsrFinalTextTs, nil)
+					a.session.TraceAsrFinalText(ctx, state.Statistic.AsrFinalTextTs)
 				}
 
 				if a.session != nil {
-					payload, stop, hookErr := a.session.emitHook(ctx, chathooks.EventChatASROutput, chathooks.ASROutputData{Text: text, SpeakerResult: speakerResult})
+					payload, stop, hookErr := a.session.hookHub.EmitASROutput(a.session.hookContext(ctx), chathooks.ASROutputData{Text: text, SpeakerResult: speakerResult})
 					if hookErr != nil {
 						log.Warnf("ASR_OUTPUT hook 执行失败: %v", hookErr)
 					}
-					if hookOut, ok := payload.(chathooks.ASROutputData); ok {
-						text = hookOut.Text
-						speakerResult = hookOut.SpeakerResult
-					}
+					text = payload.Text
+					speakerResult = payload.SpeakerResult
 					if stop {
 						log.Infof("ASR_OUTPUT hook 请求停止当前流程")
 						continue
