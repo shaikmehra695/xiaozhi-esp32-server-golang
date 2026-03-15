@@ -243,6 +243,9 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 		}
 		onEndFunc = func(err error, args ...any) {
 			l.clientState.MarkLlmEnd()
+			if l.session != nil {
+				l.session.EmitMetricHook(ctx, MetricLlmEnd, l.clientState.Statistic.LlmEndTs, err)
+			}
 			strFullText := fullText.String()
 			if l.session != nil && l.session.hookHub != nil {
 				hctx := HookContext{Ctx: ctx, Session: l.session, SessionID: l.clientState.SessionID, DeviceID: l.clientState.DeviceID}
@@ -354,6 +357,9 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 
 	ok, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
 	l.clientState.MarkLlmEnd()
+	if l.session != nil {
+		l.session.EmitMetricHook(ctx, MetricLlmEnd, l.clientState.Statistic.LlmEndTs, err)
+	}
 	strFullText := fullText.String()
 	if l.session != nil && l.session.hookHub != nil {
 		hctx := HookContext{Ctx: ctx, Session: l.session, SessionID: l.clientState.SessionID, DeviceID: l.clientState.DeviceID}
@@ -491,6 +497,9 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 				if strings.TrimSpace(llmResponse.Text) != "" {
 					if !llmFirstTokenMarked {
 						state.MarkLlmFirstToken()
+						if l.session != nil {
+							l.session.EmitMetricHook(ctx, MetricLlmFirstToken, state.Statistic.LlmFirstTokenTs, nil)
+						}
 						llmFirstTokenMarked = true
 					}
 					// 处理文本内容响应
@@ -1102,6 +1111,9 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 	}
 
 	clientState.SetStartLlmTs()
+	if l.session != nil {
+		l.session.EmitMetricHook(ctx, MetricLlmStart, clientState.Statistic.LlmStartTs, nil)
+	}
 	clientState.SetStatus(ClientStatusLLMStart)
 
 	// 调用内部方法处理 LLM 响应，资源在方法内部管理

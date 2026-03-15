@@ -46,6 +46,26 @@ type TTSOutputStopData struct {
 	Err error
 }
 
+type MetricStage string
+
+const (
+	MetricTurnStart     MetricStage = "turn_start"
+	MetricAsrFirstText  MetricStage = "asr_first_text"
+	MetricAsrFinalText  MetricStage = "asr_final_text"
+	MetricLlmStart      MetricStage = "llm_start"
+	MetricLlmFirstToken MetricStage = "llm_first_token"
+	MetricLlmEnd        MetricStage = "llm_end"
+	MetricTtsStart      MetricStage = "tts_start"
+	MetricTtsFirstFrame MetricStage = "tts_first_frame"
+	MetricTtsStop       MetricStage = "tts_stop"
+)
+
+type MetricData struct {
+	Stage MetricStage
+	Ts    int64
+	Err   error
+}
+
 type ASROutputSyncHook func(HookContext, ASROutputData) (ASROutputData, bool, error)
 type ASROutputAsyncHook func(HookContext, ASROutputData)
 
@@ -63,6 +83,9 @@ type TTSOutputStartAsyncHook func(HookContext, TTSOutputStartData)
 
 type TTSOutputStopSyncHook func(HookContext, TTSOutputStopData) (TTSOutputStopData, bool, error)
 type TTSOutputStopAsyncHook func(HookContext, TTSOutputStopData)
+
+type MetricSyncHook func(HookContext, MetricData) (MetricData, bool, error)
+type MetricAsyncHook func(HookContext, MetricData)
 
 type namedSyncHook[T any] struct {
 	name     string
@@ -96,6 +119,9 @@ type HookHub struct {
 
 	ttsOutputStopSync  []namedSyncHook[TTSOutputStopData]
 	ttsOutputStopAsync []namedAsyncHook[TTSOutputStopData]
+
+	metricSync  []namedSyncHook[MetricData]
+	metricAsync []namedAsyncHook[MetricData]
 
 	asyncTasks chan func()
 }
@@ -139,6 +165,8 @@ type PluginHooks struct {
 	TTSOutputStartAsync TTSOutputStartAsyncHook
 	TTSOutputStopSync   TTSOutputStopSyncHook
 	TTSOutputStopAsync  TTSOutputStopAsyncHook
+	MetricSync          MetricSyncHook
+	MetricAsync         MetricAsyncHook
 }
 
 func AddPluginHooks(p PluginHooks) {
@@ -177,6 +205,12 @@ func AddPluginHooks(p PluginHooks) {
 	}
 	if p.TTSOutputStopAsync != nil {
 		AddTTSOutputStopAsyncHook(p.Name, p.Priority, p.TTSOutputStopAsync)
+	}
+	if p.MetricSync != nil {
+		AddMetricSyncHook(p.Name, p.Priority, p.MetricSync)
+	}
+	if p.MetricAsync != nil {
+		AddMetricAsyncHook(p.Name, p.Priority, p.MetricAsync)
 	}
 }
 
@@ -260,6 +294,16 @@ func (h *HookHub) RunTTSOutputStop(hctx HookContext, in TTSOutputStopData) (TTSO
 	h.mu.RLock()
 	syncHooks := h.ttsOutputStopSync
 	asyncHooks := h.ttsOutputStopAsync
+	h.mu.RUnlock()
+	out, stop, err := runSyncHooks(syncHooks, hctx, in)
+	emitAsyncHooks(h.asyncTasks, asyncHooks, hctx, out)
+	return out, stop, err
+}
+
+func (h *HookHub) RunMetric(hctx HookContext, in MetricData) (MetricData, bool, error) {
+	h.mu.RLock()
+	syncHooks := h.metricSync
+	asyncHooks := h.metricAsync
 	h.mu.RUnlock()
 	out, stop, err := runSyncHooks(syncHooks, hctx, in)
 	emitAsyncHooks(h.asyncTasks, asyncHooks, hctx, out)
@@ -368,6 +412,24 @@ func AddTTSOutputStopAsyncHook(name string, priority int, hook TTSOutputStopAsyn
 	globalHookHub.ttsOutputStopAsync = appendSortedAsyncHook(
 		globalHookHub.ttsOutputStopAsync,
 		namedAsyncHook[TTSOutputStopData]{name: name, priority: priority, hook: hook},
+	)
+}
+
+func AddMetricSyncHook(name string, priority int, hook MetricSyncHook) {
+	globalHookHub.mu.Lock()
+	defer globalHookHub.mu.Unlock()
+	globalHookHub.metricSync = appendSortedSyncHook(
+		globalHookHub.metricSync,
+		namedSyncHook[MetricData]{name: name, priority: priority, hook: hook},
+	)
+}
+
+func AddMetricAsyncHook(name string, priority int, hook MetricAsyncHook) {
+	globalHookHub.mu.Lock()
+	defer globalHookHub.mu.Unlock()
+	globalHookHub.metricAsync = appendSortedAsyncHook(
+		globalHookHub.metricAsync,
+		namedAsyncHook[MetricData]{name: name, priority: priority, hook: hook},
 	)
 }
 

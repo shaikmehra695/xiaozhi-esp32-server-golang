@@ -524,6 +524,9 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 
 				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
 				state.OnVoiceSilence()
+				if a.session != nil {
+					a.session.EmitMetricHook(ctx, MetricTurnStart, state.Statistic.TurnStartTs, nil)
+				}
 
 				//发送asr消息
 				err = a.serverTransport.SendAsrResult(text)
@@ -539,6 +542,10 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				speakerResult := a.getSpeakerResult()
 				state.MarkAsrFirstText()
 				state.MarkAsrFinalText()
+				if a.session != nil {
+					a.session.EmitMetricHook(ctx, MetricAsrFirstText, state.Statistic.AsrFirstTextTs, nil)
+					a.session.EmitMetricHook(ctx, MetricAsrFinalText, state.Statistic.AsrFinalTextTs, nil)
+				}
 
 				if a.session != nil && a.session.hookHub != nil {
 					hctx := HookContext{Ctx: ctx, Session: a.session, SessionID: state.SessionID, DeviceID: state.DeviceID}

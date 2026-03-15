@@ -1515,3 +1515,14 @@ func (s *ChatSession) switchTTSForSpeaker(speakerResult *speaker.IdentifyResult)
 
 	return nil
 }
+
+func (s *ChatSession) EmitMetricHook(ctx context.Context, stage MetricStage, ts int64, err error) {
+	if s == nil || s.hookHub == nil {
+		return
+	}
+	hctx := HookContext{Ctx: ctx, Session: s, SessionID: s.clientState.SessionID, DeviceID: s.clientState.DeviceID}
+	_, _, hookErr := s.hookHub.RunMetric(hctx, MetricData{Stage: stage, Ts: ts, Err: err})
+	if hookErr != nil {
+		log.Warnf("METRIC hook 执行失败: stage=%s err=%v", stage, hookErr)
+	}
+}

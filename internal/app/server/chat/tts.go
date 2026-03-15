@@ -174,6 +174,9 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				playbackTail = playbackTail.Add(frameDuration)
 				if needReportFirstFrame && totalFrames == 1 {
 					t.clientState.MarkTtsFirstFrame()
+					if t.session != nil {
+						t.session.EmitMetricHook(ctx, MetricTtsFirstFrame, t.clientState.Statistic.TtsFirstFrameTs, nil)
+					}
 					log.Debugf("从接收音频结束 asr->llm->tts首帧 整体 耗时: %d ms", t.clientState.GetAsrLlmTtsDuration())
 					needReportFirstFrame = false
 				}
@@ -200,6 +203,9 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 					}
 				}
 				t.clientState.SetStartTtsTs()
+				if t.session != nil {
+					t.session.EmitMetricHook(ctx, MetricTtsStart, t.clientState.Statistic.TtsStartTs, nil)
+				}
 				if err := t.serverTransport.SendTtsStart(); err != nil {
 					log.Errorf("发送 TtsStart 失败: %v", err)
 				}
@@ -226,6 +232,9 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 					log.Errorf("发送 TtsStop 失败: %v", err)
 				}
 				t.clientState.MarkTtsStop()
+				if t.session != nil {
+					t.session.EmitMetricHook(ctx, MetricTtsStop, t.clientState.Statistic.TtsStopTs, nil)
+				}
 				if t.session != nil && t.session.hookHub != nil {
 					hctx := HookContext{Ctx: ctx, Session: t.session, SessionID: t.clientState.SessionID, DeviceID: t.clientState.DeviceID}
 					_, _, hookErr := t.session.hookHub.RunTTSOutputStop(hctx, TTSOutputStopData{})
