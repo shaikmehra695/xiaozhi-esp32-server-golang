@@ -2230,17 +2230,7 @@ func (ac *AdminController) CreateUser(c *gin.Context) {
 	user.Password = string(hashedPassword)
 	log.Printf("[CreateUser] 密码加密成功 - 哈希长度: %d, 哈希前缀: %s", len(user.Password), user.Password[:10])
 
-	if err := ac.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&user).Error; err != nil {
-			return err
-		}
-		if strings.TrimSpace(user.Role) == "user" {
-			if err := initUserVoiceCloneQuotas(tx, user.ID, 0); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+	if err := ac.DB.Create(&user).Error; err != nil {
 		log.Printf("[CreateUser] 数据库创建用户失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建用户失败"})
 		return

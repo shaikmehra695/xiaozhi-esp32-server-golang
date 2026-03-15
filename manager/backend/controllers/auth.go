@@ -130,12 +130,7 @@ func (ac *AuthController) Register(c *gin.Context) {
 		Role:     "user",
 	}
 
-	if err := ac.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&user).Error; err != nil {
-			return err
-		}
-		return initUserVoiceCloneQuotas(tx, user.ID, 0)
-	}); err != nil {
+	if err := ac.DB.Create(&user).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建用户失败"})
 		return
 	}
