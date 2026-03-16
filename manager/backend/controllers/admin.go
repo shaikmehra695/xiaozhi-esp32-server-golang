@@ -2398,7 +2398,7 @@ func (ac *AdminController) GetUserVoiceCloneQuotas(c *gin.Context) {
 	for _, ttsConfig := range ttsConfigs {
 		configIDSet[ttsConfig.ConfigID] = true
 		quota, hasQuota := quotaByConfigID[ttsConfig.ConfigID]
-		maxCount := -1
+		maxCount := 0
 		usedCount := usageByConfigID[ttsConfig.ConfigID]
 		if hasQuota {
 			maxCount = quota.MaxCount
