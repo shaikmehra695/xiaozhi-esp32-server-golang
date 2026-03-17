@@ -19,7 +19,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	// CORS配置
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowAllOrigins = true
-	corsConfig.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"}
+	corsConfig.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization", "X-API-Token"}
 	corsConfig.AllowCredentials = true
 	r.Use(cors.New(corsConfig))
 
