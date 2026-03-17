@@ -100,6 +100,14 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (string, bool, error) {
 				if a.AutoEnd || result.IsFinal {
 					return a.AsrResult.String(), true, nil
 				}
+			} else if a.AsrType == "xunfei" {
+				if result.IsFinal {
+					return result.Text, true, nil
+				}
+				if a.AutoEnd {
+					a.AsrResult.WriteString(result.Text)
+					return a.AsrResult.String(), true, nil
+				}
 			} else {
 				// 其他情况按原有逻辑执行
 				a.AsrResult.WriteString(result.Text)

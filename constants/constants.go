@@ -11,6 +11,7 @@ const (
 	AsrTypeDoubao       = "doubao"
 	AsrTypeAliyunFunASR = "aliyun_funasr"
 	AsrTypeAliyunQwen3  = "aliyun_qwen3"
+	AsrTypeXunfei       = "xunfei"
 )
 
 const (

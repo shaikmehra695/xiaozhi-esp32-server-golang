@@ -123,7 +123,7 @@ vad:
 
 # 自动语音识别（ASR）配置
 asr:
-  provider: "funasr"  # ASR provider: funasr / aliyun_funasr / doubao
+  provider: "funasr"  # ASR provider: funasr / aliyun_funasr / doubao / aliyun_qwen3 / xunfei
   # FunASR配置
   funasr:
     host: "127.0.0.1"          # FunASR服务器地址
@@ -156,6 +156,19 @@ asr:
     enable_punc: true               # 启用标点符号
     enable_itn: true                # 启用反向文本标准化
     enable_ddc: false               # 启用数字检测修正
+    timeout: 30                     # 超时时间（秒）
+
+  # Xunfei ASR config
+  xunfei:
+    appid: ""                      # 讯飞 AppID
+    api_key: ""                    # 讯飞 APIKey
+    api_secret: ""                 # 讯飞 APISecret
+    host: "iat-api.xfyun.cn"       # WebSocket 域名
+    path: "/v2/iat"                # WebSocket 路径
+    domain: "iat"                  # 业务领域
+    language: "zh_cn"              # 语言
+    accent: "mandarin"             # 方言
+    sample_rate: 16000              # 采样率
     timeout: 30                     # 超时时间（秒）
 
 # 文本转语音（TTS）配置
