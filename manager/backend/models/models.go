@@ -132,7 +132,7 @@ type MCPMarketService struct {
 	Enabled     bool   `json:"enabled" gorm:"default:true;index"`
 	Transport   string `json:"transport" gorm:"type:varchar(32);not null"` // sse / streamablehttp
 	URL         string `json:"url" gorm:"type:text;not null"`
-	URLHash     string `json:"url_hash" gorm:"type:varchar(512);not null;uniqueIndex:idx_mcp_market_services_url_hash"`
+	URLHash     string `json:"url_hash" gorm:"type:char(64);not null;uniqueIndex:idx_mcp_market_services_url_hash"` // sha256(url) hex
 	HeadersJSON string `json:"headers_json" gorm:"type:text"`
 
 	MarketID    *uint  `json:"market_id" gorm:"index"` // 关联 configs(type=mcp_market).id
