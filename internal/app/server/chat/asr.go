@@ -563,7 +563,46 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				recoverableErrorWindowStart = time.Now()
 				recoverableErrorCount = 0
 
-				// 创建用户消息
+				//如果是realtime模式下，需要停止 当前的llm和tts
+				if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 2 {
+					log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
+					state.AfterAsrSessionCtx.Cancel()
+					if a.session != nil {
+						a.session.InterruptAndClearTTSQueue()
+					}
+				}
+
+				// 重置重试计数器
+				startIdleTime = time.Now().Unix()
+
+				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
+				state.OnVoiceSilence()
+				if a.session != nil {
+					a.session.TraceTurnStart(ctx, time.Now().UnixMilli())
+				}
+
+				// 获取暂存的声纹结果（带超时）
+				speakerResult := a.getSpeakerResult()
+				state.MarkAsrFinalText()
+				if a.session != nil {
+					a.session.TraceAsrFinalText(ctx, time.Now().UnixMilli())
+				}
+
+				if a.session != nil {
+					payload, stop, hookErr := a.session.hookHub.EmitASROutput(a.session.hookContext(ctx), chathooks.ASROutputData{Text: text, SpeakerResult: speakerResult})
+					if hookErr != nil {
+						log.Warnf("ASR_OUTPUT hook 执行失败: %v", hookErr)
+					}
+					text = payload.Text
+					speakerResult = payload.SpeakerResult
+					if stop {
+						log.Infof("ASR_OUTPUT hook 请求停止当前流程")
+						state.Asr.ClearHistoryAudio()
+						continue
+					}
+				}
+
+				// 创建用户消息，使用 hook 改写后的文本进入后续副作用链
 				userMsg := &schema.Message{
 					Role:    schema.User,
 					Content: text,
@@ -591,25 +630,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					onMessageSave(userMsg, messageID, audioData)
 				}
 
-				//如果是realtime模式下，需要停止 当前的llm和tts
-				if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 2 {
-					log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
-					state.AfterAsrSessionCtx.Cancel()
-					if a.session != nil {
-						a.session.InterruptAndClearTTSQueue()
-					}
-				}
-
-				// 重置重试计数器
-				startIdleTime = time.Now().Unix()
-
-				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
-				state.OnVoiceSilence()
-				if a.session != nil {
-					a.session.TraceTurnStart(ctx, time.Now().UnixMilli())
-				}
-
-				//发送asr消息
+				// 发送给客户端的 ASR 结果也使用 hook 改写后的文本
 				err = a.serverTransport.SendAsrResult(text)
 				if err != nil {
 					log.Errorf("发送asr消息失败: %v", err)
@@ -617,26 +638,6 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 						onError(err)
 					}
 					return
-				}
-
-				// 获取暂存的声纹结果（带超时）
-				speakerResult := a.getSpeakerResult()
-				state.MarkAsrFinalText()
-				if a.session != nil {
-					a.session.TraceAsrFinalText(ctx, time.Now().UnixMilli())
-				}
-
-				if a.session != nil {
-					payload, stop, hookErr := a.session.hookHub.EmitASROutput(a.session.hookContext(ctx), chathooks.ASROutputData{Text: text, SpeakerResult: speakerResult})
-					if hookErr != nil {
-						log.Warnf("ASR_OUTPUT hook 执行失败: %v", hookErr)
-					}
-					text = payload.Text
-					speakerResult = payload.SpeakerResult
-					if stop {
-						log.Infof("ASR_OUTPUT hook 请求停止当前流程")
-						continue
-					}
 				}
 
 				// 添加到队列（迁移到 ASRManager 中处理）
