@@ -606,7 +606,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
 				state.OnVoiceSilence()
 				if a.session != nil {
-					a.session.TraceTurnStart(ctx, state.Statistic.TurnStartTs)
+					a.session.TraceTurnStart(ctx, time.Now().UnixMilli())
 				}
 
 				//发送asr消息
@@ -623,7 +623,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				speakerResult := a.getSpeakerResult()
 				state.MarkAsrFinalText()
 				if a.session != nil {
-					a.session.TraceAsrFinalText(ctx, state.Statistic.AsrFinalTextTs)
+					a.session.TraceAsrFinalText(ctx, time.Now().UnixMilli())
 				}
 
 				if a.session != nil {

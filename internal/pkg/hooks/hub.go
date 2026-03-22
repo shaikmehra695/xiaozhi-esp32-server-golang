@@ -29,6 +29,7 @@ type PluginMeta struct {
 	Priority int
 	Kind     PluginKind
 	Stage    string
+	Enabled  bool
 }
 
 type AsyncConfig struct {
@@ -41,13 +42,15 @@ type AsyncConfig struct {
 type HubOption func(*Hub)
 
 type namedSync struct {
-	meta    PluginMeta
-	handler SyncHandler
+	meta     PluginMeta
+	enabled  bool
+	handler  SyncHandler
 }
 
 type namedAsync struct {
-	meta    PluginMeta
-	handler AsyncHandler
+	meta     PluginMeta
+	enabled  bool
+	handler  AsyncHandler
 }
 
 type PluginStats struct {
@@ -133,9 +136,25 @@ func (e *AsyncExecutor) Submit(task func()) bool {
 	if e.ctx.Err() != nil {
 		return false
 	}
-	if e.cfg.DropWhenFull && e.cfg.QueueSize > 0 && len(e.queue) >= e.cfg.QueueSize {
-		return false
+
+	// 队列满时根据配置处理
+	if e.cfg.QueueSize > 0 && len(e.queue) >= e.cfg.QueueSize {
+		if e.cfg.DropWhenFull {
+			return false
+		}
+		// DropWhenFull=false 时，阻塞等待队列有机会消费
+		// 使用超时避免永久阻塞
+		waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		for len(e.queue) >= e.cfg.QueueSize && waitCtx.Err() == nil {
+			e.cond.Wait()
+		}
+		if waitCtx.Err() != nil {
+			// 超时则丢弃
+			return false
+		}
 	}
+
 	e.queue = append(e.queue, task)
 	e.cond.Signal()
 	return true
@@ -181,7 +200,7 @@ type Hub struct {
 }
 
 func defaultAsyncConfig() AsyncConfig {
-	return AsyncConfig{QueueSize: 1024, WorkerCount: 1, DropWhenFull: false, Timeout: 0}
+	return AsyncConfig{QueueSize: 1024, WorkerCount: 1, DropWhenFull: true, Timeout: 200 * time.Millisecond}
 }
 
 func WithAsyncConfig(cfg AsyncConfig) HubOption {
@@ -242,6 +261,43 @@ func (h *Hub) Close() {
 	}
 }
 
+// EnablePlugin enables a registered plugin by name
+func (h *Hub) EnablePlugin(name string) {
+	h.setPluginEnabled(name, true)
+}
+
+// DisablePlugin disables a registered plugin by name
+func (h *Hub) DisablePlugin(name string) {
+	h.setPluginEnabled(name, false)
+}
+
+func (h *Hub) setPluginEnabled(name string, enabled bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// 遍历 syncHandlers 查找并更新
+	for event, handlers := range h.syncHandlers {
+		for i := range handlers {
+			if handlers[i].meta.Name == name {
+				handlers[i].enabled = enabled
+				h.syncHandlers[event] = handlers
+				return
+			}
+		}
+	}
+
+	// 遍历 asyncHandlers 查找并更新
+	for event, handlers := range h.asyncHandlers {
+		for i := range handlers {
+			if handlers[i].meta.Name == name {
+				handlers[i].enabled = enabled
+				h.asyncHandlers[event] = handlers
+				return
+			}
+		}
+	}
+}
+
 func (h *Hub) Stats() Stats {
 	if h == nil {
 		return Stats{}
@@ -283,6 +339,9 @@ func (h *Hub) PluginMetas() []PluginMeta {
 
 func (h *Hub) emitAsync(ctx Context, hooks []namedAsync, payload any) {
 	for _, hk := range hooks {
+		if !hk.enabled {
+			continue
+		}
 		hook := hk
 		if h.ctx.Err() != nil {
 			return
@@ -384,6 +443,12 @@ func (h *Hub) RegisterSyncMeta(event string, meta PluginMeta, handler SyncHandle
 	}
 	meta.Kind = PluginKindInterceptor
 	meta.Stage = event
+	// 默认为启用状态
+	enabled := meta.Enabled
+	if !meta.Enabled {
+		// 通过 Enabled 字段控制，默认 true
+		enabled = true
+	}
 	h.recordPluginMeta(meta)
 	h.statsMu.Lock()
 	h.ensurePluginStatsLocked(meta.Name)
@@ -391,7 +456,7 @@ func (h *Hub) RegisterSyncMeta(event string, meta PluginMeta, handler SyncHandle
 	cur := h.syncHandlers[event]
 	next := make([]namedSync, 0, len(cur)+1)
 	next = append(next, cur...)
-	next = append(next, namedSync{meta: meta, handler: handler})
+	next = append(next, namedSync{meta: meta, enabled: enabled, handler: handler})
 	sort.SliceStable(next, func(i, j int) bool { return next[i].meta.Priority < next[j].meta.Priority })
 	h.syncHandlers[event] = next
 }
@@ -408,6 +473,11 @@ func (h *Hub) RegisterAsyncMeta(event string, meta PluginMeta, handler AsyncHand
 	}
 	meta.Kind = PluginKindObserver
 	meta.Stage = event
+	// 默认为启用状态
+	enabled := meta.Enabled
+	if !meta.Enabled {
+		enabled = true
+	}
 	h.recordPluginMeta(meta)
 	h.statsMu.Lock()
 	h.ensurePluginStatsLocked(meta.Name)
@@ -415,7 +485,7 @@ func (h *Hub) RegisterAsyncMeta(event string, meta PluginMeta, handler AsyncHand
 	cur := h.asyncHandlers[event]
 	next := make([]namedAsync, 0, len(cur)+1)
 	next = append(next, cur...)
-	next = append(next, namedAsync{meta: meta, handler: handler})
+	next = append(next, namedAsync{meta: meta, enabled: enabled, handler: handler})
 	sort.SliceStable(next, func(i, j int) bool { return next[i].meta.Priority < next[j].meta.Priority })
 	h.asyncHandlers[event] = next
 }
@@ -427,6 +497,9 @@ func (h *Hub) Emit(event string, ctx Context, payload any) (any, bool, error) {
 	h.mu.RUnlock()
 	out := payload
 	for _, hk := range syncs {
+		if !hk.enabled {
+			continue
+		}
 		start := time.Now()
 		h.recordInvocation(hk.meta.Name)
 		next, stop, err := hk.handler(ctx, out)

@@ -245,7 +245,7 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 		onEndFunc = func(err error, args ...any) {
 			l.clientState.MarkLlmEnd()
 			if l.session != nil {
-				l.session.TraceLlmEnd(ctx, l.clientState.Statistic.LlmEndTs, err)
+				l.session.TraceLlmEnd(ctx, time.Now().UnixMilli(), err)
 			}
 			strFullText := fullText.String()
 			if l.session != nil {
@@ -361,7 +361,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 	ok, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
 	l.clientState.MarkLlmEnd()
 	if l.session != nil {
-		l.session.TraceLlmEnd(ctx, l.clientState.Statistic.LlmEndTs, err)
+		l.session.TraceLlmEnd(ctx, time.Now().UnixMilli(), err)
 	}
 	strFullText := fullText.String()
 	if l.session != nil {
@@ -505,7 +505,7 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 					if !llmFirstTokenMarked && hasText {
 						state.MarkLlmFirstToken()
 						if l.session != nil {
-							l.session.TraceLlmFirstToken(ctx, state.Statistic.LlmFirstTokenTs)
+							l.session.TraceLlmFirstToken(ctx, time.Now().UnixMilli())
 						}
 						llmFirstTokenMarked = true
 					}
@@ -1125,7 +1125,7 @@ func (l *LLMManager) DoLLmRequest(ctx context.Context, userMessage *schema.Messa
 
 	clientState.SetStartLlmTs()
 	if l.session != nil {
-		l.session.TraceLlmStart(ctx, clientState.Statistic.LlmStartTs)
+		l.session.TraceLlmStart(ctx, time.Now().UnixMilli())
 	}
 	clientState.SetStatus(ClientStatusLLMStart)
 

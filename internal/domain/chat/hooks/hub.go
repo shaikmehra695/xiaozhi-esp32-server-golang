@@ -176,7 +176,7 @@ func RegisterBuiltinPlugins(hub *Hub, overrides map[string]BuiltinPluginConfig) 
 }
 
 func toPkgMeta(meta PluginMeta, kind pkghooks.PluginKind, event string) pkghooks.PluginMeta {
-	return pkghooks.PluginMeta{Name: meta.Name, Priority: meta.Priority, Kind: kind, Stage: event}
+	return pkghooks.PluginMeta{Name: meta.Name, Priority: meta.Priority, Kind: kind, Stage: event, Enabled: meta.Enabled}
 }
 
 func toPlatformContext(ctx Context) pkghooks.Context {

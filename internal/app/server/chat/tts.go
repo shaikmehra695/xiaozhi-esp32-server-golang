@@ -231,9 +231,8 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				if needReportFirstFrame && totalFrames == 1 {
 					t.clientState.MarkTtsFirstFrame()
 					if t.session != nil {
-						t.session.TraceTtsFirstFrame(ctx, t.clientState.Statistic.TtsFirstFrameTs)
+						t.session.TraceTtsFirstFrame(ctx, time.Now().UnixMilli())
 					}
-					log.Debugf("从接收音频结束 asr->llm->tts首帧 整体 耗时: %d ms", t.clientState.GetAsrLlmTtsDuration())
 					needReportFirstFrame = false
 				}
 			case AudioQueueKindSentenceEnd:
@@ -249,7 +248,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				}
 				t.clientState.SetStartTtsTs()
 				if t.session != nil {
-					t.session.TraceTtsStart(ctx, t.clientState.Statistic.TtsStartTs)
+					t.session.TraceTtsStart(ctx, time.Now().UnixMilli())
 				}
 				if err := t.serverTransport.SendTtsStart(); err != nil {
 					log.Errorf("发送 TtsStart 失败: %v", err)
@@ -291,7 +290,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				}
 				t.clientState.MarkTtsStop()
 				if t.session != nil {
-					t.session.TraceTtsStop(ctx, t.clientState.Statistic.TtsStopTs, stopErr)
+					t.session.TraceTtsStop(ctx, time.Now().UnixMilli(), stopErr)
 				}
 				if t.session != nil {
 					hookErr := t.session.hookHub.EmitTTSOutputStop(t.session.hookContext(ctx), chathooks.TTSOutputStopData{Err: stopErr})
