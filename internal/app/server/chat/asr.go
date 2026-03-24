@@ -534,7 +534,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				}
 
 				switch result.RetryReason {
-				case asr_types.RetryReasonXunfeiServiceInstanceInvalid:
+				case asr_types.RetryReasonXunfeiServiceInstanceInvalid, asr_types.RetryReasonAliyunQwen3ConnectionClosed:
 					a.releaseResource()
 					if isAllowedToRestart() {
 						invalidStatusWaitCount = 0
