@@ -911,6 +911,14 @@ func (vcc *VoiceCloneController) consumeVoiceCloneQuota(tx *gorm.DB, userID uint
 	if ttsConfigID == "" {
 		return nil
 	}
+	var user models.User
+	if err := tx.Select("id", "role").Where("id = ?", userID).First(&user).Error; err == nil {
+		if strings.EqualFold(strings.TrimSpace(user.Role), "admin") {
+			return nil
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
 
 	var quota models.UserVoiceCloneQuota
 	err := tx.Where("user_id = ? AND tts_config_id = ?", userID, ttsConfigID).First(&quota).Error
