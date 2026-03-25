@@ -1,5 +1,12 @@
 package doubao
 
+import "strings"
+
+const (
+	legacyDoubaoNonstreamPath = "bigmodel_nostream"
+	doubaoStreamingPath       = "bigmodel_async"
+)
+
 // DoubaoV2Config 豆包ASR配置结构体
 type DoubaoV2Config struct {
 	AppID             string // 应用ID
@@ -34,6 +41,13 @@ var DefaultConfig = DoubaoV2Config{
 	EnableNonstream:   false,
 	ChunkDuration:     200,
 	Timeout:           30,
+}
+
+func normalizeDoubaoWsURL(wsURL string) string {
+	if wsURL == "" || !strings.Contains(wsURL, legacyDoubaoNonstreamPath) {
+		return wsURL
+	}
+	return strings.ReplaceAll(wsURL, legacyDoubaoNonstreamPath, doubaoStreamingPath)
 }
 
 // DoubaoV2Request 豆包ASR请求结构体

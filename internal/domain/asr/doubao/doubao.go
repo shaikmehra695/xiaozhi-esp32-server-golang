@@ -94,6 +94,11 @@ func NewDoubaoV2ASR(config DoubaoV2Config) (*DoubaoV2ASR, error) {
 	if config.WsURL == "" {
 		config.WsURL = DefaultConfig.WsURL
 	}
+	originalWsURL := config.WsURL
+	config.WsURL = normalizeDoubaoWsURL(config.WsURL)
+	if originalWsURL != config.WsURL {
+		log.Warnf("豆包ASR ws_url 使用了非流式地址，已自动切换为流式地址: %s -> %s", originalWsURL, config.WsURL)
+	}
 	if config.ResourceID == "" {
 		config.ResourceID = DefaultConfig.ResourceID
 	}
