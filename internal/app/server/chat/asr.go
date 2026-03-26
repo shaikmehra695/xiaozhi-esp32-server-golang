@@ -61,6 +61,7 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 			log.Infof("检测到输入采样率 %dHz，统一重采样为 %dHz 供 VAD/声纹/ASR 使用", processingSampleRate, targetSampleRate)
 			processingSampleRate = targetSampleRate
 		}
+		state.ProcessingInputSampleRate = processingSampleRate
 		// 使用一个足够大的缓冲区用于解码（假设最大帧时长为120ms）
 		maxFrameSize := audioFormat.SampleRate * audioFormat.Channels * 120 / 1000
 		audioProcesser, err := audio.GetAudioProcesser(audioFormat.SampleRate, audioFormat.Channels, 20) // 传入一个默认值用于创建解码器

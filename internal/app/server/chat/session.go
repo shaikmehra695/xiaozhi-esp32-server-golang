@@ -1078,6 +1078,10 @@ func (s *ChatSession) OnListenStart() error {
 
 	// 定义消息保存回调
 	onMessageSave := func(userMsg *schema.Message, messageID string, audioData []float32) {
+		audioSampleRate := s.clientState.ProcessingInputSampleRate
+		if audioSampleRate <= 0 {
+			audioSampleRate = s.clientState.InputAudioFormat.SampleRate
+		}
 		// ASR 文本和音频同时获取，一次性保存（不需要两阶段）
 		eventbus.Get().Publish(eventbus.TopicAddMessage, &eventbus.AddMessageEvent{
 			ClientState: s.clientState,
@@ -1085,7 +1089,7 @@ func (s *ChatSession) OnListenStart() error {
 			MessageID:   messageID,
 			AudioData:   [][]byte{util.Float32SliceToBytes(audioData)}, // 转换为字节数组
 			AudioSize:   len(audioData) * 4,                            // float32 = 4 bytes
-			SampleRate:  s.clientState.InputAudioFormat.SampleRate,
+			SampleRate:  audioSampleRate,
 			Channels:    s.clientState.InputAudioFormat.Channels,
 			IsUpdate:    false, // 一次性保存（文本+音频）
 			Timestamp:   time.Now(),

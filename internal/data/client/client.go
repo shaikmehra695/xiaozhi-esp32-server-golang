@@ -98,6 +98,8 @@ type ClientState struct {
 
 	InputAudioFormat  AudioFormat //输入音频格式
 	OutputAudioFormat AudioFormat //输出音频格式
+	// 实际进入 VAD/ASR/声纹链路的输入采样率（可能与 InputAudioFormat.SampleRate 不同）
+	ProcessingInputSampleRate int
 
 	// opus接收的音频数据缓冲区
 	OpusAudioBuffer chan []byte
