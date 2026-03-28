@@ -73,6 +73,8 @@ type TTSManager struct {
 	delayedSentenceReadyQueue chan AudioQueueElem
 	interruptCh               chan interruptRequest // 打断信号：收到后 runSenderLoop 清空 sessionAudioQueue 并继续
 	audioGeneration           atomic.Uint64         // 会话级音频代际：打断时递增，旧代际元素会被发送协程丢弃
+	senderLoopActive          atomic.Bool
+	senderLoopDone            chan struct{} // runSenderLoop 退出时关闭，供同步打断在关闭路径下快速返回
 
 	// 聊天历史音频缓存：持续累积多段TTS音频（Opus帧数组）
 	audioHistoryBuffer [][]byte
@@ -94,6 +96,7 @@ func NewTTSManager(clientState *ClientState, serverTransport *ServerTransport, o
 		delayedSentenceQueue:      make(chan delayedSentenceTask, SessionAudioQueueCap),
 		delayedSentenceReadyQueue: make(chan AudioQueueElem, SessionAudioQueueCap),
 		interruptCh:               make(chan interruptRequest, 1),
+		senderLoopDone:            make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -111,6 +114,12 @@ func (t *TTSManager) Start(ctx context.Context) {
 
 // runSenderLoop 唯一发送协程：从 sessionAudioQueue 取元素按类型分发，流控集中在此；仅 ctx 取消时退出；SessionCtx 取消或收到 TurnAbort 时清空队列并继续
 func (t *TTSManager) runSenderLoop(ctx context.Context) {
+	t.senderLoopActive.Store(true)
+	defer func() {
+		t.senderLoopActive.Store(false)
+		close(t.senderLoopDone)
+	}()
+
 	frameDuration := time.Duration(t.clientState.OutputAudioFormat.FrameDuration) * time.Millisecond
 	cacheFrameCount := 120 / t.clientState.OutputAudioFormat.FrameDuration
 	totalFrames := 0
@@ -479,6 +488,9 @@ func (t *TTSManager) enqueueSessionElem(ctx context.Context, generation uint64, 
 // InterruptAndClearQueue 触发打断：通知 runSenderLoop 清空 sessionAudioQueue 后继续运行（非阻塞）
 func (t *TTSManager) InterruptAndClearQueue() {
 	t.nextAudioGeneration()
+	if !t.senderLoopActive.Load() {
+		return
+	}
 	select {
 	case t.interruptCh <- interruptRequest{}:
 	default:
@@ -491,20 +503,28 @@ func (t *TTSManager) InterruptAndClearQueueSync(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
+	t.nextAudioGeneration()
+	if !t.senderLoopActive.Load() {
+		return nil
+	}
+
 	req := interruptRequest{
 		done: make(chan struct{}),
 	}
-	t.nextAudioGeneration()
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-t.senderLoopDone:
+		return nil
 	case t.interruptCh <- req:
 	}
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-t.senderLoopDone:
+		return nil
 	case <-req.done:
 		return nil
 	}
