@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -63,6 +64,7 @@ type ChatSession struct {
 	helloInited    bool
 	vadLoopStarted bool
 	mcpHelloInited bool
+	listenStartSeq atomic.Uint64
 
 	// 未激活设备高频触发时，短时间内复用最近一次“未激活”判定，避免频繁打接口。
 	activationCheckMu     sync.Mutex
@@ -200,6 +202,7 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 
 	// 设置 ASR 首次返回字符的回调
 	clientState.OnAsrFirstTextCallback = func(text string, isFinal bool) {
+		clientState.Asr.MarkTextReceived()
 		log.Debugf("ASR首次返回字符: device=%s, text=%s, isFinal=%v", clientState.DeviceID, text, isFinal)
 		clientState.MarkAsrFirstText()
 		s.TraceAsrFirstText(clientState.Ctx, time.Now().UnixMilli())
@@ -568,10 +571,12 @@ func (s *ChatSession) HandleCommonHelloMessage(msg *ClientMessage) error {
 
 	isDuplicateHello := s.helloInited
 	if isDuplicateHello {
+		prevAgentID := clientState.AgentID
 		// 仅在重复 hello 场景尝试刷新设备维度配置；失败时降级处理，不阻断 hello
 		if err := s.refreshDeviceConfigOnHello(); err != nil {
 			log.Warnf("设备 %s duplicate hello 刷新配置失败，降级继续: %v", clientState.DeviceID, err)
 		}
+		s.resetOpenClawModeOnHello(prevAgentID, clientState.AgentID)
 		if isMcp, ok := msg.Features["mcp"]; ok && isMcp && !s.mcpHelloInited {
 			s.mcpHelloInited = true
 			go initMcp(s.clientState, s.serverTransport)
@@ -581,6 +586,7 @@ func (s *ChatSession) HandleCommonHelloMessage(msg *ClientMessage) error {
 	}
 
 	// 首次 hello 初始化
+	s.resetOpenClawModeOnHello(clientState.AgentID)
 	session, err := auth.A().CreateSession(msg.DeviceID)
 	if err != nil {
 		return fmt.Errorf("创建会话失败: %v", err)
@@ -601,6 +607,29 @@ func (s *ChatSession) HandleCommonHelloMessage(msg *ClientMessage) error {
 
 	s.helloInited = true
 	return nil
+}
+
+func (s *ChatSession) resetOpenClawModeOnHello(agentIDs ...string) {
+	deviceID := strings.TrimSpace(s.clientState.DeviceID)
+	if deviceID == "" {
+		return
+	}
+
+	openclawManager := openclaw.GetManager()
+	seen := make(map[string]struct{}, len(agentIDs))
+	for _, agentID := range agentIDs {
+		agentID = strings.TrimSpace(agentID)
+		if agentID == "" {
+			continue
+		}
+		if _, exists := seen[agentID]; exists {
+			continue
+		}
+		seen[agentID] = struct{}{}
+		if openclawManager.ExitMode(agentID, deviceID) {
+			log.Infof("设备 %s 在 hello 后重置OpenClaw模式: agent=%s", deviceID, agentID)
+		}
+	}
 }
 
 func (s *ChatSession) refreshDeviceConfigOnHello() error {
@@ -653,11 +682,54 @@ func (s *ChatSession) HandleListenMessage(msg *ClientMessage) error {
 	return nil
 }
 
+func (s *ChatSession) beginListenStart() uint64 {
+	startSeq := s.listenStartSeq.Add(1)
+	s.clientState.SetListenPhase(ListenPhaseStarting)
+	return startSeq
+}
+
+func (s *ChatSession) invalidateListenStart() {
+	s.listenStartSeq.Add(1)
+	s.clientState.SetListenPhase(ListenPhaseIdle)
+}
+
+func (s *ChatSession) isCurrentListenStart(startSeq uint64) bool {
+	return startSeq == s.listenStartSeq.Load()
+}
+
+func (s *ChatSession) isListenStartActive() bool {
+	phase := s.clientState.GetListenPhase()
+	return phase == ListenPhaseStarting || phase == ListenPhaseListening
+}
+
+func (s *ChatSession) handleDetectDuringListening(msg *ClientMessage) error {
+	if strings.TrimSpace(msg.Text) == "" {
+		return nil
+	}
+
+	text := removePunctuation(msg.Text)
+	if !isWakeupWord(text) {
+		log.Debugf("设备 %s 监听已启动，忽略后到达的 detect 文本: %s", msg.DeviceID, text)
+		return nil
+	}
+
+	if viper.GetBool("enable_greeting") && !s.clientState.IsWelcomeSpeaking {
+		s.clientState.IsWelcomeSpeaking = true
+		log.Infof("设备 %s listen start 流程中收到 detect 唤醒词，跳过欢迎语并继续当前监听", msg.DeviceID)
+	}
+
+	return nil
+}
+
 func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
 	/*if s.clientState.Status == ClientStatusListening {
 		log.Debugf("设备 %s 正在监听, 跳过唤醒词检测", msg.DeviceID)
 		return nil
 	}*/
+	if s.isListenStartActive() {
+		return s.handleDetectDuringListening(msg)
+	}
+
 	// 唤醒词检测
 	s.StopSpeaking(false)
 
@@ -733,11 +805,11 @@ func (s *ChatSession) HandleWelcome() {
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
 	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
 
+	s.clientState.IsWelcomeSpeaking = true
+	s.clientState.IsWelcomePlaying = true
 	s.ttsManager.EnqueueTtsStart(s.clientState.Ctx)
 	s.ttsManager.handleTts(ctx, s.ttsManager.currentAudioGeneration(), llm_common.LLMResponseStruct{Text: greetingText}, nil, nil)
 	s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
-
-	s.clientState.IsWelcomeSpeaking = true
 }
 
 func (a *ChatSession) checkExitWords(text string) bool {
@@ -829,6 +901,11 @@ func (s *ChatSession) getOrCreateOpenClawStream(correlationID string) (chan llm_
 	if hasWarmup {
 		options.disableTTSCommands = true
 		options.onEndFunc = func(err error, args ...any) {
+			// 暖场接管了 start，正式 OpenClaw 回复收尾时需要在这里补回 stop；
+			// 不能放在暖场切换点发送，否则会把主回复中途截断。
+			if !s.clientState.IsRealTime() {
+				s.ttsManager.EnqueueTtsStop(ctx)
+			}
 			s.finishOpenClawWarmup(correlationID, false)
 		}
 	}
@@ -891,9 +968,10 @@ func (s *ChatSession) InjectOpenClawResponse(event openclaw.ResponseDelivery) er
 		if task := s.getOpenClawWarmupTask(correlationID); task != nil {
 			if text != "" {
 				// 仅在第一段真正可播正文到达时才停掉暖场，避免被过短前导分片过早抢占。
+				// 暖场自己的首段标记只用于暖场 TTS，不能吞掉正式回复首段的 IsStart，
+				// 否则正式回复会降级成单句 TTS，后续 snapshot 也会被当成第二句再次播报。
 				s.cancelOpenClawWarmup(correlationID, false)
 				s.beginOpenClawSpeech(task)
-				isStart = task.takeSegmentStartFlag()
 			} else {
 				isStart = false
 			}
@@ -1020,6 +1098,16 @@ func (s *ChatSession) CheckDeviceActivated() (bool, error) {
 }
 
 func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
+	if s.clientState.IsWelcomePlaying {
+		log.Infof("设备 %s 欢迎语播放中，忽略 listen start", msg.DeviceID)
+		return nil
+	}
+
+	if s.clientState.GetListenPhase() == ListenPhaseStarting {
+		log.Infof("设备 %s listen start 正在启动中，忽略重复 listen start", msg.DeviceID)
+		return nil
+	}
+
 	isActivated, err := s.CheckDeviceActivated()
 	if err != nil {
 		log.Errorf("检查设备激活状态失败: %v", err)
@@ -1038,7 +1126,14 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 	s.StopSpeaking(false)
 	//}
 
-	return s.OnListenStart()
+	startSeq := s.beginListenStart()
+	go func() {
+		if err := s.OnListenStart(startSeq); err != nil {
+			log.Errorf("设备 %s listen start 启动失败: %v", msg.DeviceID, err)
+		}
+	}()
+
+	return nil
 }
 
 func (s *ChatSession) HandleListenStop() error {
@@ -1052,18 +1147,32 @@ func (s *ChatSession) HandleListenStop() error {
 	return nil
 }
 
-func (s *ChatSession) OnListenStart() error {
+func (s *ChatSession) OnListenStart(startSeq uint64) error {
 	log.Debugf("OnListenStart start")
 	defer log.Debugf("OnListenStart end")
+
+	if !s.isCurrentListenStart(startSeq) {
+		log.Debugf("OnListenStart stale before init, skip")
+		return nil
+	}
 
 	select {
 	case <-s.clientState.Ctx.Done():
 		log.Debugf("OnListenStart Ctx done, return")
+		if s.isCurrentListenStart(startSeq) {
+			s.clientState.SetListenPhase(ListenPhaseIdle)
+		}
 		return nil
 	default:
 	}
 
 	s.clientState.Destroy()
+	if !s.isCurrentListenStart(startSeq) {
+		log.Debugf("OnListenStart stale after destroy, skip")
+		return nil
+	}
+
+	s.clientState.SetListenPhase(ListenPhaseStarting)
 
 	s.clientState.SetStatus(ClientStatusListening)
 
@@ -1075,12 +1184,29 @@ func (s *ChatSession) OnListenStart() error {
 	}
 
 	// 启动asr流式识别，复用 restartAsrRecognition 函数
+	if !s.isCurrentListenStart(startSeq) {
+		log.Debugf("OnListenStart stale before ASR restart, skip")
+		return nil
+	}
 	err := s.asrManager.RestartAsrRecognition(ctx)
 	if err != nil {
 		log.Errorf("asr流式识别失败: %v", err)
+		if s.isCurrentListenStart(startSeq) {
+			s.clientState.SetListenPhase(ListenPhaseIdle)
+		}
 		s.Close()
 		return err
 	}
+
+	if !s.isCurrentListenStart(startSeq) {
+		log.Debugf("OnListenStart stale after ASR restart, cancel current start")
+		if s.clientState.Asr.Cancel != nil {
+			s.clientState.Asr.Cancel()
+		}
+		return nil
+	}
+
+	s.clientState.SetListenPhase(ListenPhaseListening)
 
 	// 定义消息保存回调
 	onMessageSave := func(userMsg *schema.Message, messageID string, audioData []float32) {

@@ -43,6 +43,10 @@ type delayedSentenceTask struct {
 	ExecuteAt time.Time
 }
 
+type interruptRequest struct {
+	done chan struct{}
+}
+
 // SessionAudioQueueCap 会话级音频队列容量，足够大以吸收预取并避免阻塞
 const SessionAudioQueueCap = 150
 
@@ -69,9 +73,11 @@ type TTSManager struct {
 	sessionAudioQueue         chan AudioQueueElem // 会话级全局音频队列，兼容帧与控制消息
 	delayedSentenceQueue      chan delayedSentenceTask
 	delayedSentenceReadyQueue chan AudioQueueElem
-	interruptCh               chan struct{} // 打断信号：收到后 runSenderLoop 清空 sessionAudioQueue 并继续
-	audioGeneration           atomic.Uint64 // 会话级音频代际：打断时递增，旧代际元素会被发送协程丢弃
-	ttsActive                 atomic.Bool   // 当前是否存在已开始但未结束的 TTS 段
+	interruptCh               chan interruptRequest // 打断信号：收到后 runSenderLoop 清空 sessionAudioQueue 并继续
+	audioGeneration           atomic.Uint64         // 会话级音频代际：打断时递增，旧代际元素会被发送协程丢弃
+	ttsActive                 atomic.Bool           // 当前是否存在已开始但未结束的 TTS 段
+	senderLoopActive          atomic.Bool
+	senderLoopDone            chan struct{} // runSenderLoop 退出时关闭，供同步打断在关闭路径下快速返回
 
 	interruptStopMu          sync.Mutex
 	interruptStopPending     bool
@@ -98,7 +104,8 @@ func NewTTSManager(clientState *ClientState, serverTransport *ServerTransport, s
 		sessionAudioQueue:         make(chan AudioQueueElem, SessionAudioQueueCap),
 		delayedSentenceQueue:      make(chan delayedSentenceTask, SessionAudioQueueCap),
 		delayedSentenceReadyQueue: make(chan AudioQueueElem, SessionAudioQueueCap),
-		interruptCh:               make(chan struct{}, 1),
+		interruptCh:               make(chan interruptRequest, 1),
+		senderLoopDone:            make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -116,6 +123,12 @@ func (t *TTSManager) Start(ctx context.Context) {
 
 // runSenderLoop 唯一发送协程：从 sessionAudioQueue 取元素按类型分发，流控集中在此；仅 ctx 取消时退出；SessionCtx 取消或收到 TurnAbort 时清空队列并继续
 func (t *TTSManager) runSenderLoop(ctx context.Context) {
+	t.senderLoopActive.Store(true)
+	defer func() {
+		t.senderLoopActive.Store(false)
+		close(t.senderLoopDone)
+	}()
+
 	frameDuration := time.Duration(t.clientState.OutputAudioFormat.FrameDuration) * time.Millisecond
 	cacheFrameCount := 120 / t.clientState.OutputAudioFormat.FrameDuration
 	totalFrames := 0
@@ -181,8 +194,11 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 			t.finishTtsStop(t.clientState.Ctx, true, ctx.Err())
 			log.Debugf("runSenderLoop ctx done, drained queue and exit")
 			return
-		case <-t.interruptCh:
+		case req := <-t.interruptCh:
 			handleInterrupt()
+			if req.done != nil {
+				close(req.done)
+			}
 			continue
 		case elem := <-t.delayedSentenceReadyQueue:
 			handleDelayedSentence(elem)
@@ -210,7 +226,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				allowedAhead := time.Duration(cacheFrameCount) * frameDuration
 				sendAt := playbackTail.Add(-allowedAhead)
 				if now.Before(sendAt) {
-					waitResult := t.waitUntilSenderDeadline(ctx, sendAt, handleDelayedSentence)
+					waitResult, interruptReq := t.waitUntilSenderDeadline(ctx, sendAt, handleDelayedSentence)
 					switch waitResult {
 					case senderWaitContextDone:
 						t.drainSessionAudioQueue()
@@ -219,6 +235,9 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 						return
 					case senderWaitInterrupted:
 						handleInterrupt()
+						if interruptReq.done != nil {
+							close(interruptReq.done)
+						}
 						continue
 					}
 					now = time.Now()
@@ -270,7 +289,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 			case AudioQueueKindTtsStop:
 				// 等待当前播放尾指针走到最后一帧结束再发 TtsStop
 				if !playbackTail.IsZero() {
-					waitResult := t.waitUntilSenderDeadline(ctx, playbackTail, handleDelayedSentence)
+					waitResult, interruptReq := t.waitUntilSenderDeadline(ctx, playbackTail, handleDelayedSentence)
 					switch waitResult {
 					case senderWaitContextDone:
 						t.drainSessionAudioQueue()
@@ -279,11 +298,14 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 						return
 					case senderWaitInterrupted:
 						handleInterrupt()
+						if interruptReq.done != nil {
+							close(interruptReq.done)
+						}
 						continue
 					}
 				}
 				// 固定150ms等待，确保客户端播放完成
-				waitResult := t.waitUntilSenderDeadline(ctx, time.Now().Add(150*time.Millisecond), handleDelayedSentence)
+				waitResult, interruptReq := t.waitUntilSenderDeadline(ctx, time.Now().Add(150*time.Millisecond), handleDelayedSentence)
 				switch waitResult {
 				case senderWaitContextDone:
 					t.drainSessionAudioQueue()
@@ -292,6 +314,9 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 					return
 				case senderWaitInterrupted:
 					handleInterrupt()
+					if interruptReq.done != nil {
+						close(interruptReq.done)
+					}
 					continue
 				}
 				t.finishTtsStop(t.clientState.Ctx, true, nil)
@@ -447,26 +472,26 @@ const (
 	senderWaitInterrupted
 )
 
-func (t *TTSManager) waitUntilSenderDeadline(ctx context.Context, deadline time.Time, handleDelayed func(AudioQueueElem)) senderWaitResult {
+func (t *TTSManager) waitUntilSenderDeadline(ctx context.Context, deadline time.Time, handleDelayed func(AudioQueueElem)) (senderWaitResult, interruptRequest) {
 	for {
 		now := time.Now()
 		if !now.Before(deadline) {
-			return senderWaitReached
+			return senderWaitReached, interruptRequest{}
 		}
 
 		timer := time.NewTimer(deadline.Sub(now))
 		select {
 		case <-ctx.Done():
 			stopTimer(timer)
-			return senderWaitContextDone
-		case <-t.interruptCh:
+			return senderWaitContextDone, interruptRequest{}
+		case req := <-t.interruptCh:
 			stopTimer(timer)
-			return senderWaitInterrupted
+			return senderWaitInterrupted, req
 		case elem := <-t.delayedSentenceReadyQueue:
 			stopTimer(timer)
 			handleDelayed(elem)
 		case <-timer.C:
-			return senderWaitReached
+			return senderWaitReached, interruptRequest{}
 		}
 	}
 }
@@ -488,16 +513,38 @@ func (t *TTSManager) enqueueSessionElem(ctx context.Context, generation uint64, 
 // InterruptAndClearQueue 触发打断：通知 runSenderLoop 清空 sessionAudioQueue 后继续运行（非阻塞）
 func (t *TTSManager) InterruptAndClearQueue() {
 	t.nextAudioGeneration()
+	if !t.senderLoopActive.Load() {
+		return
+	}
 	select {
-	case t.interruptCh <- struct{}{}:
+	case t.interruptCh <- interruptRequest{}:
 	default:
 	}
 }
 
 // InterruptAndStop 用于需要立即结束当前 TTS 的场景。
 // 它只登记待关闭状态，真正的 stop 与指标收口由 runSenderLoop 在清空队列后统一发出。
-func (t *TTSManager) InterruptAndStop(_ context.Context, sendTtsStop bool, stopErr error) {
+func (t *TTSManager) InterruptAndStop(ctx context.Context, sendTtsStop bool, stopErr error) {
+	t.recordPendingInterruptStop(sendTtsStop, stopErr)
+	t.InterruptAndClearQueue()
+	t.finishPendingInterruptStopIfSenderLoopExited(ctx)
+}
+
+// InterruptAndStopSync 触发同步打断，同时保持 TtsStop/trace/hook 只走 runSenderLoop 的统一收口。
+func (t *TTSManager) InterruptAndStopSync(ctx context.Context, sendTtsStop bool, stopErr error) error {
+	t.recordPendingInterruptStop(sendTtsStop, stopErr)
+	if err := t.InterruptAndClearQueueSync(ctx); err != nil {
+		t.finishPendingInterruptStopIfSenderLoopExited(ctx)
+		return err
+	}
+	t.finishPendingInterruptStopIfSenderLoopExited(ctx)
+	return nil
+}
+
+func (t *TTSManager) recordPendingInterruptStop(sendTtsStop bool, stopErr error) {
 	t.interruptStopMu.Lock()
+	defer t.interruptStopMu.Unlock()
+
 	if t.interruptStopPending {
 		t.interruptStopSendTtsStop = t.interruptStopSendTtsStop || sendTtsStop
 		if t.interruptStopErr == nil {
@@ -508,14 +555,73 @@ func (t *TTSManager) InterruptAndStop(_ context.Context, sendTtsStop bool, stopE
 		t.interruptStopSendTtsStop = sendTtsStop
 		t.interruptStopErr = stopErr
 	}
-	t.interruptStopMu.Unlock()
+}
 
-	t.InterruptAndClearQueue()
+func (t *TTSManager) consumePendingInterruptStop() (bool, bool, error) {
+	t.interruptStopMu.Lock()
+	defer t.interruptStopMu.Unlock()
+
+	if !t.interruptStopPending {
+		return false, false, nil
+	}
+
+	sendTtsStop := t.interruptStopSendTtsStop
+	stopErr := t.interruptStopErr
+	t.interruptStopPending = false
+	t.interruptStopSendTtsStop = false
+	t.interruptStopErr = nil
+	return true, sendTtsStop, stopErr
+}
+
+func (t *TTSManager) finishPendingInterruptStopIfSenderLoopExited(ctx context.Context) {
+	if t.senderLoopActive.Load() {
+		return
+	}
+	if pending, sendTtsStop, stopErr := t.consumePendingInterruptStop(); pending {
+		t.finishTtsStop(ctx, sendTtsStop, stopErr)
+	}
+}
+
+// InterruptAndClearQueueSync 触发打断并等待 runSenderLoop 完成清队列后再返回。
+func (t *TTSManager) InterruptAndClearQueueSync(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	t.nextAudioGeneration()
+	if !t.senderLoopActive.Load() {
+		return nil
+	}
+
+	req := interruptRequest{
+		done: make(chan struct{}),
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.senderLoopDone:
+		return nil
+	case t.interruptCh <- req:
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.senderLoopDone:
+		return nil
+	case <-req.done:
+		return nil
+	}
 }
 
 func (t *TTSManager) finishTtsStop(ctx context.Context, sendTtsStop bool, stopErr error) bool {
 	if !t.ttsActive.Swap(false) {
 		return false
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	if sendTtsStop {
@@ -537,22 +643,6 @@ func (t *TTSManager) finishTtsStop(ctx context.Context, sendTtsStop bool, stopEr
 	}
 
 	return true
-}
-
-func (t *TTSManager) consumePendingInterruptStop() (bool, bool, error) {
-	t.interruptStopMu.Lock()
-	defer t.interruptStopMu.Unlock()
-
-	if !t.interruptStopPending {
-		return false, false, nil
-	}
-
-	sendTtsStop := t.interruptStopSendTtsStop
-	stopErr := t.interruptStopErr
-	t.interruptStopPending = false
-	t.interruptStopSendTtsStop = false
-	t.interruptStopErr = nil
-	return true, sendTtsStop, stopErr
 }
 
 // EnqueueTtsStart 向会话级音频队列投递 TtsStart，由 runSenderLoop 统一发送；队列满时阻塞直到入队或 ctx.Done

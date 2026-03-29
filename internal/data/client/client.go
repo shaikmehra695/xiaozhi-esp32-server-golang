@@ -39,6 +39,10 @@ const (
 	ClientStatusLLMStart   = "llmStart"
 	ClientStatusTTSStart   = "ttsStart"
 
+	ListenPhaseIdle      = "idle"
+	ListenPhaseStarting  = "starting"
+	ListenPhaseListening = "listening"
+
 	MemoryModeNone  = "none"
 	MemoryModeShort = "short"
 	MemoryModeLong  = "long"
@@ -66,6 +70,8 @@ type ClientState struct {
 	Abort bool
 	// 拾音模式
 	ListenMode string
+	// listen start 流程状态: idle / starting / listening
+	ListenPhase string
 	// 设备ID
 	DeviceID string
 	AgentID  string
@@ -115,7 +121,8 @@ type ClientState struct {
 	Status string //状态 listening, llmStart, ttsStart
 
 	IsTtsStart        bool //是否tts开始
-	IsWelcomeSpeaking bool //是否已经欢迎语
+	IsWelcomeSpeaking bool //是否已经播放过欢迎语
+	IsWelcomePlaying  bool //是否正在播放欢迎语
 
 	// 声纹识别相关
 	SpeakerProvider speaker.SpeakerProvider // 声纹识别提供者（在 session 中初始化）
@@ -295,6 +302,26 @@ func (c *ClientState) GetMaxIdleDuration() int64 {
 	return maxIdleDuration
 }
 
+func (c *ClientState) GetPreAsrTextSilenceDuration() int64 {
+	if viper.IsSet("chat.pre_asr_text_silence_duration") {
+		preTextSilenceDuration := viper.GetInt64("chat.pre_asr_text_silence_duration")
+		if preTextSilenceDuration <= 0 {
+			return math.MaxInt64
+		}
+		return preTextSilenceDuration
+	}
+
+	base := c.VoiceStatus.SilenceThresholdTime
+	if base <= 0 {
+		base = 400
+	}
+	preTextSilenceDuration := base * 4
+	if preTextSilenceDuration < 1000 {
+		preTextSilenceDuration = 1000
+	}
+	return preTextSilenceDuration
+}
+
 func (c *ClientState) UpdateLastActiveTs() {
 	c.MqttLastActiveTs = time.Now().Unix()
 }
@@ -310,6 +337,14 @@ func (c *ClientState) SetStatus(status string) {
 
 func (c *ClientState) GetStatus() string {
 	return c.Status
+}
+
+func (c *ClientState) SetListenPhase(phase string) {
+	c.ListenPhase = phase
+}
+
+func (c *ClientState) GetListenPhase() string {
+	return c.ListenPhase
 }
 
 type Ctx struct {
@@ -426,7 +461,9 @@ func (c *ClientState) Destroy() {
 
 	c.Statistic.Reset()
 	c.SetStatus(ClientStatusInit)
+	c.SetListenPhase(ListenPhaseIdle)
 	c.SetTtsStart(false)
+	c.IsWelcomePlaying = false
 }
 
 func (state *ClientState) OnManualStop() {
@@ -435,6 +472,7 @@ func (state *ClientState) OnManualStop() {
 
 func (state *ClientState) OnVoiceSilence() {
 	log.Debugf("OnVoiceSilence, voiceDuration: %d, voiceDurationInSession: %d", state.Vad.GetVoiceDuration(), state.Vad.GetVoiceDurationInSession())
+	state.Asr.ResetReceivedText()
 	state.SetClientVoiceStop(true) //设置停止说话标志位, 此时收到的音频数据不会进vad
 	//客户端停止说话
 	state.Asr.Stop() //停止asr并获取结果，进行llm
@@ -442,6 +480,7 @@ func (state *ClientState) OnVoiceSilence() {
 	state.Vad.Reset() //释放vad实例
 
 	state.SetStatus(ClientStatusListenStop)
+	state.SetListenPhase(ListenPhaseIdle)
 
 	// 如果设置了异步获取声纹结果的回调，则调用
 	if state.OnVoiceSilenceSpeakerCallback != nil {

@@ -1,15 +1,33 @@
 package chat
 
-import "context"
+import (
+	"context"
+	"errors"
+	"time"
+
+	log "xiaozhi-esp32-server-golang/logger"
+)
+
+const stopSpeakingInterruptTimeout = 2 * time.Second
 
 func (s *ChatSession) StopSpeaking(isSendTtsStop bool) {
 	s.clientState.SessionCtx.Cancel()
 	s.clientState.AfterAsrSessionCtx.Cancel()
+	s.clientState.IsWelcomePlaying = false
+	s.invalidateListenStart()
 
 	s.ClearChatTextQueue()
 	s.llmManager.ClearLLMResponseQueue()
 	s.ttsManager.ClearTTSQueue()
-	s.ttsManager.InterruptAndStop(s.clientState.Ctx, isSendTtsStop, context.Canceled)
+	interruptCtx, cancel := context.WithTimeout(context.Background(), stopSpeakingInterruptTimeout)
+	defer cancel()
+	if err := s.ttsManager.InterruptAndStopSync(interruptCtx, isSendTtsStop, context.Canceled); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Warnf("StopSpeaking sync interrupt timed out")
+		} else if !errors.Is(err, context.Canceled) {
+			log.Warnf("StopSpeaking sync interrupt failed: %v", err)
+		}
+	}
 
 }
 

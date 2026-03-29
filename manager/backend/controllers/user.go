@@ -673,13 +673,17 @@ func (uc *UserController) fetchIndexTTSVoices(c *gin.Context, configID, override
 		return nil, err
 	}
 	result := make([]VoiceOption, 0, len(voiceMap))
+	normalizedConfigPrefix := strings.ToLower(strings.TrimSpace(configID))
+	if normalizedConfigPrefix != "" {
+		normalizedConfigPrefix += "_"
+	}
 	for voice := range voiceMap {
 		v := strings.TrimSpace(voice)
 		if v == "" {
 			continue
 		}
-		// 过滤掉 IndexTTS 服务端内部默认前缀音色，优先展示可用系统音色与用户复刻音色
-		if strings.HasPrefix(strings.ToLower(v), "indextts_vllm") {
+		// 过滤掉当前 IndexTTS 配置实例生成的内部前缀音色，避免和复刻音色重复展示。
+		if normalizedConfigPrefix != "" && strings.HasPrefix(strings.ToLower(v), normalizedConfigPrefix) {
 			continue
 		}
 		result = append(result, VoiceOption{Value: v, Label: v})
@@ -771,6 +775,27 @@ func (uc *UserController) GetVoiceOptions(c *gin.Context) {
 							break
 						}
 					}
+				}
+				seen[key] = true
+				result = append(result, opt)
+			}
+		}
+		var sharedClones []models.VoiceClone
+		if err := uc.DB.Table("voice_clones").
+			Select("voice_clones.*").
+			Joins("JOIN users ON users.id = voice_clones.user_id").
+			Where("voice_clones.user_id <> ? AND voice_clones.provider = ? AND voice_clones.tts_config_id = ? AND voice_clones.status = ? AND voice_clones.shared_to_all = ? AND users.role = ?",
+				userID, provider, configID, "active", true, "admin").
+			Order("voice_clones.created_at DESC").
+			Scan(&sharedClones).Error; err == nil {
+			for _, clone := range sharedClones {
+				opt := VoiceOption{
+					Value: clone.ProviderVoiceID,
+					Label: fmt.Sprintf("[管理员共享] %s (%s)", clone.Name, clone.ProviderVoiceID),
+				}
+				key := strings.TrimSpace(opt.Value)
+				if key == "" || seen[key] {
+					continue
 				}
 				seen[key] = true
 				result = append(result, opt)

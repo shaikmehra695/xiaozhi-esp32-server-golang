@@ -168,6 +168,7 @@ func GenClientState(pctx context.Context, deviceID string) (*ClientState, error)
 		Dialogue:          &Dialogue{},
 		Abort:             false,
 		ListenMode:        "auto",
+		ListenPhase:       ListenPhaseIdle,
 		DeviceID:          deviceID,
 		AgentID:           deviceConfig.AgentId,
 		Ctx:               ctx,

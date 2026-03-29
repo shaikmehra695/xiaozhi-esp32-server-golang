@@ -5,8 +5,11 @@ const (
 	EmptyReasonNoServerResponse   = "no_server_response"
 	EmptyReasonProviderEmptyFinal = "provider_empty_final"
 
-	RetryReasonNone                         = ""
-	RetryReasonXunfeiServiceInstanceInvalid = "xunfei_service_instance_invalid"
+	RetryReasonNone                           = ""
+	RetryReasonDoubaoResponseCode45000081     = "doubao_response_code_45000081"
+	RetryReasonDoubaoWaitingNextPacketTimeout = "doubao_waiting_next_packet_timeout"
+	RetryReasonXunfeiServiceInstanceInvalid   = "xunfei_service_instance_invalid"
+	RetryReasonAliyunQwen3ConnectionClosed    = "aliyun_qwen3_connection_closed"
 )
 
 // StreamingResult 流式识别结果

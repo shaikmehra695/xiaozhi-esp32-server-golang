@@ -333,7 +333,52 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 					}
 
 					idleDuration := state.Vad.GetIdleDuration()
+					if state.IsRealTime() && !state.Asr.HasReceivedText() {
+						preTextSilenceDuration := state.GetPreAsrTextSilenceDuration()
+						if idleDuration <= preTextSilenceDuration {
+							log.Debugf(
+								"realtime模式尚未收到ASR首文本，延迟按静音阈值收口: status=%s, idle=%dms, pre_text_timeout=%dms, voice_duration=%dms, voice_duration_in_session=%dms, history_audio_samples=%d",
+								state.Status,
+								idleDuration,
+								preTextSilenceDuration,
+								state.Vad.GetVoiceDuration(),
+								voiceDurationInSession,
+								state.Asr.GetHistoryAudioLen(),
+							)
+							continue
+						}
+
+						log.Warnf(
+							"realtime模式静音超时且仍未收到ASR文本，挂起当前ASR流等待下一次语音: status=%s, idle=%dms, pre_text_timeout=%dms, voice_duration=%dms, voice_duration_in_session=%dms, history_audio_samples=%d",
+							state.Status,
+							idleDuration,
+							preTextSilenceDuration,
+							state.Vad.GetVoiceDuration(),
+							voiceDurationInSession,
+							state.Asr.GetHistoryAudioLen(),
+						)
+						hasTriggeredCancel = false
+						state.Asr.ResetReceivedText()
+						state.Asr.SetPendingRestartOnVoice(true)
+						if state.Asr.Cancel != nil {
+							state.Asr.Cancel()
+						}
+						state.VoiceStatus.Reset()
+						state.Vad.ResetIdleDuration()
+						state.Vad.ResetVoiceDuration()
+						continue
+					}
+
 					if state.IsSilence(idleDuration) { //从有声音到 静默的判断
+						log.Debugf(
+							"判定语音结束，准备停止ASR: status=%s, idle=%dms, voice_duration=%dms, voice_duration_in_session=%dms, history_audio_samples=%d, pending_restart=%v",
+							state.Status,
+							idleDuration,
+							state.Vad.GetVoiceDuration(),
+							state.Vad.GetVoiceDurationInSession(),
+							state.Asr.GetHistoryAudioLen(),
+							state.Asr.ShouldRestartOnVoice(),
+						)
 						// 在 OnVoiceSilence 之前重置标志位，以便下次可以再次触发
 						hasTriggeredCancel = false
 						state.OnVoiceSilence()
@@ -375,6 +420,7 @@ func (a *ASRManager) RestartAsrRecognition(ctx context.Context) error {
 		state.Asr.Cancel()
 	}
 
+	state.Asr.ResetReceivedText()
 	state.VoiceStatus.Reset()
 	state.AsrAudioBuffer.ClearAsrAudioData()
 	state.Asr.ClearHistoryAudio() // 清空历史音频缓存
@@ -535,12 +581,12 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				}
 
 				switch result.RetryReason {
-				case asr_types.RetryReasonXunfeiServiceInstanceInvalid:
+				case asr_types.RetryReasonDoubaoResponseCode45000081, asr_types.RetryReasonXunfeiServiceInstanceInvalid, asr_types.RetryReasonAliyunQwen3ConnectionClosed:
 					a.releaseResource()
 					if isAllowedToRestart() {
 						invalidStatusWaitCount = 0
 						if restartErr := a.RestartAsrRecognition(ctx); restartErr != nil {
-							log.Errorf("xunfei ASR实例失效后重启识别失败: %v", restartErr)
+							log.Errorf("ASR可恢复错误后重启识别失败: reason=%s, err=%v", result.RetryReason, restartErr)
 							if onError != nil {
 								onError(restartErr)
 							}
@@ -549,7 +595,14 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 						continue
 					}
 
-					log.Warnf("ASR可恢复错误发生时当前状态不允许立即重启: status=%s, realtime=%v", state.Status, state.IsRealTime())
+					log.Warnf("ASR可恢复错误发生时当前状态不允许立即重启: reason=%s, status=%s, realtime=%v", result.RetryReason, state.Status, state.IsRealTime())
+					state.Asr.SetPendingRestartOnVoice(true)
+					if state.Asr.Cancel != nil {
+						state.Asr.Cancel()
+					}
+					continue
+				case asr_types.RetryReasonDoubaoWaitingNextPacketTimeout:
+					log.Warnf("doubao ASR 会话空闲超时，挂起当前流并等待下一次语音时重建")
 					state.Asr.SetPendingRestartOnVoice(true)
 					if state.Asr.Cancel != nil {
 						state.Asr.Cancel()
@@ -668,6 +721,18 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				// realtime模式下, 继续循环处理下一个 ASR 结果
 				continue
 			} else {
+				log.Debugf(
+					"ASR空结果详情: status=%s, emptyReason=%s, pending_restart=%v, client_voice_stop=%v, history_audio_samples=%d, voice_duration=%dms, voice_duration_in_session=%dms, idle_duration=%dms, realtime=%v",
+					state.Status,
+					result.EmptyReason,
+					state.Asr.ShouldRestartOnVoice(),
+					state.GetClientVoiceStop(),
+					state.Asr.GetHistoryAudioLen(),
+					state.Vad.GetVoiceDuration(),
+					state.Vad.GetVoiceDurationInSession(),
+					state.Vad.GetIdleDuration(),
+					state.IsRealTime(),
+				)
 				if result.EmptyReason != "" {
 					log.Debugf("ASR空结果已分类: reason=%s, status=%s", result.EmptyReason, state.Status)
 					emptyResultWindowStart = time.Now()
