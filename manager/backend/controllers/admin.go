@@ -966,6 +966,7 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 
 				// 组装成与 config.yaml 相同的格式
 				configItem := gin.H{
+					"provider":   config.Provider,
 					"name":       config.Name,
 					"is_default": config.IsDefault,
 				}

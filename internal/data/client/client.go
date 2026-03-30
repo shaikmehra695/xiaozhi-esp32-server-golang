@@ -395,12 +395,11 @@ func (c *Ctx) CancelWithReason(reason string) {
 
 func (s *ClientState) getLLMProvider() (llm.LLMProvider, error) {
 	llmConfig := s.DeviceConfig.Llm
-	llmType, ok := llmConfig.Config["type"]
-	if !ok {
-		log.Errorf("getLLMProvider err: not found llm type: %+v", llmConfig)
-		return nil, fmt.Errorf("llm config type not found")
+	providerName := llmConfig.Provider
+	if providerName == "" {
+		providerName = "openai"
 	}
-	llmProvider, err := llm.GetLLMProvider(llmType.(string), llmConfig.Config)
+	llmProvider, err := llm.GetLLMProvider(providerName, llmConfig.Config)
 	if err != nil {
 		return nil, fmt.Errorf("创建 LLM 提供者失败: %v", err)
 	}
