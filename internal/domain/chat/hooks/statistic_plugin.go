@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	cmap "github.com/orcaman/concurrent-map/v2"
 	log "xiaozhi-esp32-server-golang/logger"
 )
 
@@ -13,6 +12,7 @@ type turnMetric struct {
 	turnID int64
 
 	turnStartTs     int64
+	turnEndTs       int64
 	asrFirstTextTs  int64
 	asrFinalTextTs  int64
 	llmStartTs      int64
@@ -26,9 +26,9 @@ type turnMetric struct {
 type statisticPlugin struct {
 	mu sync.Mutex
 
-	currentTurn cmap.ConcurrentMap[string, int64]
-	turns       cmap.ConcurrentMap[string, *turnMetric]
-	lastSeen    cmap.ConcurrentMap[string, int64]
+	nextTurn map[string]int64
+	current  map[string]*turnMetric
+	lastSeen map[string]int64
 
 	cleanupCounter   int64
 	cleanupThreshold int64
@@ -36,9 +36,9 @@ type statisticPlugin struct {
 
 func newStatisticPlugin() *statisticPlugin {
 	return &statisticPlugin{
-		currentTurn:      cmap.New[int64](),
-		turns:            cmap.New[*turnMetric](),
-		lastSeen:         cmap.New[int64](),
+		nextTurn:         make(map[string]int64),
+		current:          make(map[string]*turnMetric),
+		lastSeen:         make(map[string]int64),
 		cleanupThreshold: 100,
 	}
 }
@@ -51,7 +51,7 @@ func BuiltinRegistrations() []Registration {
 	meta := PluginMeta{
 		Name:        "statistic_plugin",
 		Version:     "v1",
-		Description: "Aggregate turn metrics and log a summary on TTS stop",
+		Description: "Track only the latest turn metrics and log on turn end",
 		Priority:    100,
 		Enabled:     true,
 		Kind:        PluginKindObserver,
@@ -74,17 +74,83 @@ func (p *statisticPlugin) onMetric(ctx Context, payload any) {
 
 	p.mu.Lock()
 	nowTs := time.Now().UnixMilli()
-	p.lastSeen.Set(ctx.SessionID, nowTs)
+	p.lastSeen[ctx.SessionID] = nowTs
 	if p.cleanupCounter++; p.cleanupCounter%p.cleanupThreshold == 0 {
-		p.cleanupStale(nowTs)
+		p.cleanupStaleLocked(nowTs)
 	}
 
-	tm := p.getOrCreateTurnLocked(ctx.SessionID)
+	tm := p.getTurnForStageLocked(ctx.SessionID, data.Stage)
+	var completed *turnMetric
+	if tm != nil {
+		completed = p.applyMetricLocked(ctx.SessionID, tm, data)
+	}
+	p.mu.Unlock()
+
+	if completed != nil {
+		p.logTurnMetric(ctx.SessionID, completed)
+	}
+}
+
+func (p *statisticPlugin) getTurnForStageLocked(sessionID string, stage MetricStage) *turnMetric {
+	if stage == MetricTurnStart {
+		if tm, ok := p.current[sessionID]; ok && canReuseForLateTurnStart(tm) {
+			return tm
+		}
+		return p.startNewTurnLocked(sessionID)
+	}
+
+	tm, ok := p.current[sessionID]
+	if ok {
+		return tm
+	}
+	if canStartTurnWithoutTurnStart(stage) {
+		return p.startNewTurnLocked(sessionID)
+	}
+	return nil
+}
+
+func canReuseForLateTurnStart(tm *turnMetric) bool {
+	if tm == nil {
+		return false
+	}
+	return tm.turnStartTs == 0 && tm.llmStartTs == 0 && tm.ttsStartTs == 0 && tm.ttsStopTs == 0
+}
+
+func canStartTurnWithoutTurnStart(stage MetricStage) bool {
+	switch stage {
+	case MetricAsrFirstText, MetricAsrFinalText, MetricLlmStart, MetricTtsStart:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *statisticPlugin) startNewTurnLocked(sessionID string) *turnMetric {
+	newTurnID := p.nextTurn[sessionID] + 1
+	p.nextTurn[sessionID] = newTurnID
+
+	tm := &turnMetric{turnID: newTurnID}
+	p.current[sessionID] = tm
+	return tm
+}
+
+func (p *statisticPlugin) applyMetricLocked(sessionID string, tm *turnMetric, data MetricData) *turnMetric {
+	if data.Stage != MetricTurnStart && tm.turnStartTs > 0 && data.Ts > 0 && data.Ts < tm.turnStartTs {
+		return nil
+	}
+
 	switch data.Stage {
 	case MetricTurnStart:
-		if tm.turnStartTs == 0 {
+		if tm.turnStartTs == 0 || (data.Ts > 0 && data.Ts < tm.turnStartTs) {
 			tm.turnStartTs = data.Ts
 		}
+	case MetricTurnEnd:
+		if tm.turnEndTs == 0 {
+			tm.turnEndTs = data.Ts
+		}
+		snapshot := *tm
+		delete(p.current, sessionID)
+		return &snapshot
 	case MetricAsrFirstText:
 		if tm.asrFirstTextTs == 0 {
 			tm.asrFirstTextTs = data.Ts
@@ -98,11 +164,11 @@ func (p *statisticPlugin) onMetric(ctx Context, payload any) {
 			tm.llmStartTs = data.Ts
 		}
 	case MetricLlmFirstToken:
-		if tm.llmFirstTokenTs == 0 {
+		if tm.llmStartTs > 0 && tm.llmFirstTokenTs == 0 {
 			tm.llmFirstTokenTs = data.Ts
 		}
 	case MetricLlmEnd:
-		if tm.llmEndTs == 0 {
+		if tm.llmStartTs > 0 && tm.llmEndTs == 0 {
 			tm.llmEndTs = data.Ts
 		}
 	case MetricTtsStart:
@@ -110,42 +176,15 @@ func (p *statisticPlugin) onMetric(ctx Context, payload any) {
 			tm.ttsStartTs = data.Ts
 		}
 	case MetricTtsFirstFrame:
-		if tm.ttsFirstFrameTs == 0 {
+		if tm.ttsStartTs > 0 && tm.ttsFirstFrameTs == 0 {
 			tm.ttsFirstFrameTs = data.Ts
 		}
 	case MetricTtsStop:
-		if tm.ttsStopTs == 0 {
+		if tm.ttsStartTs > 0 && tm.ttsStopTs == 0 {
 			tm.ttsStopTs = data.Ts
 		}
 	}
-
-	var completed *turnMetric
-	if data.Stage == MetricTtsStop {
-		snapshot := *tm
-		completed = &snapshot
-		p.turns.Remove(ctx.SessionID)
-	}
-	p.mu.Unlock()
-
-	if completed != nil {
-		p.logTurnMetric(ctx.SessionID, completed)
-	}
-}
-
-func (p *statisticPlugin) getOrCreateTurnLocked(sessionID string) *turnMetric {
-	if tm, ok := p.turns.Get(sessionID); ok {
-		return tm
-	}
-
-	newTurnID := int64(1)
-	if val, ok := p.currentTurn.Get(sessionID); ok {
-		newTurnID = val + 1
-	}
-	p.currentTurn.Set(sessionID, newTurnID)
-
-	tm := &turnMetric{turnID: newTurnID}
-	p.turns.Set(sessionID, tm)
-	return tm
+	return nil
 }
 
 func calcDelta(start, end int64) int64 {
@@ -156,32 +195,35 @@ func calcDelta(start, end int64) int64 {
 }
 
 func (p *statisticPlugin) logTurnMetric(sessionID string, tm *turnMetric) {
+	e2eTotalEndTs := tm.turnEndTs
+	if e2eTotalEndTs == 0 {
+		e2eTotalEndTs = tm.ttsStopTs
+	}
+
 	log.Infof(
 		"metric turn=%d session=%s asr_first=%dms asr_final=%dms llm_first=%dms llm_total=%dms tts_first=%dms tts_total=%dms e2e_first=%dms e2e_total=%dms",
 		tm.turnID,
 		sessionID,
 		calcDelta(tm.turnStartTs, tm.asrFirstTextTs),
-		calcDelta(tm.turnStartTs, tm.asrFinalTextTs),
+		calcDelta(tm.asrFirstTextTs, tm.asrFinalTextTs),
 		calcDelta(tm.llmStartTs, tm.llmFirstTokenTs),
 		calcDelta(tm.llmStartTs, tm.llmEndTs),
 		calcDelta(tm.ttsStartTs, tm.ttsFirstFrameTs),
 		calcDelta(tm.ttsStartTs, tm.ttsStopTs),
 		calcDelta(tm.turnStartTs, tm.ttsFirstFrameTs),
-		calcDelta(tm.turnStartTs, tm.ttsStopTs),
+		calcDelta(tm.turnStartTs, e2eTotalEndTs),
 	)
 }
 
-func (p *statisticPlugin) cleanupStale(nowTs int64) {
+func (p *statisticPlugin) cleanupStaleLocked(nowTs int64) {
 	const ttl = int64(2 * 60 * 1000)
-	keysToDelete := make([]string, 0)
-	p.lastSeen.IterCb(func(key string, value int64) {
-		if nowTs-value > ttl {
-			keysToDelete = append(keysToDelete, key)
+
+	for sessionID, lastSeenTs := range p.lastSeen {
+		if nowTs-lastSeenTs <= ttl {
+			continue
 		}
-	})
-	for _, key := range keysToDelete {
-		p.lastSeen.Remove(key)
-		p.turns.Remove(key)
-		p.currentTurn.Remove(key)
+		delete(p.lastSeen, sessionID)
+		delete(p.current, sessionID)
+		delete(p.nextTurn, sessionID)
 	}
 }

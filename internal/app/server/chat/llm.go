@@ -282,6 +282,7 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 			if !l.clientState.IsRealTime() {
 				l.ttsManager.EnqueueTtsStop(ctx)
 			}
+			l.ttsManager.RequestTurnEnd(ctx, err)
 
 			// 从 closure 中获取 fullText
 			audioData := l.ttsManager.GetAndClearAudioHistory()
@@ -383,6 +384,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 		if !l.clientState.IsRealTime() {
 			l.ttsManager.EnqueueTtsStop(ctx)
 		}
+		l.ttsManager.RequestTurnEnd(ctx, err)
 
 		// 收集TTS音频并发送聊天历史事件
 		// 注意：工具调用后的LLM响应（nest > 1）也会累积音频到缓存中，但不会清空
@@ -1118,9 +1120,10 @@ func (l *LLMManager) handleLLMWithContextAndTools(
 				}
 				if message.Content != "" {
 					if !llmFirstTokenMarked {
+						firstTokenTs := time.Now().UnixMilli()
 						l.clientState.MarkLlmFirstToken()
 						if l.session != nil {
-							l.session.TraceLlmFirstToken(ctx, l.clientState.Statistic.LlmFirstTokenTs)
+							l.session.TraceLlmFirstToken(ctx, firstTokenTs)
 						}
 						llmFirstTokenMarked = true
 					}

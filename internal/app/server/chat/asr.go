@@ -466,6 +466,9 @@ func (a *ASRManager) RestartAsrRecognition(ctx context.Context) error {
 	state.Asr.SetPendingRestartOnVoice(false)
 	// 重置统计时间，用于计算本轮对话的整体耗时
 	state.MarkTurnStart()
+	if a.session != nil {
+		a.session.TraceTurnStart(state.Asr.Ctx, state.Statistic.TurnStartTs)
+	}
 	log.Debugf("重启ASR识别成功")
 	return nil
 }
@@ -622,9 +625,6 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 
 				//当获取到asr结果时, 结束语音输入（OnVoiceSilence 中会异步获取声纹结果）
 				state.OnVoiceSilence()
-				if a.session != nil {
-					a.session.TraceTurnStart(ctx, time.Now().UnixMilli())
-				}
 
 				// 获取暂存的声纹结果（带超时）
 				speakerResult := a.getSpeakerResult()

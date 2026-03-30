@@ -55,8 +55,20 @@ type TTSQueueItem struct {
 	llmResponse llm_common.LLMResponseStruct        // 单条模式使用
 	StreamChan  <-chan llm_common.LLMResponseStruct // 流式模式：非 nil 时优先从此 channel 读
 	generation  uint64
+	metricCycle uint64
 	onStartFunc func()
 	onEndFunc   func(err error)
+}
+
+type ttsMetricState struct {
+	cycleID          uint64
+	pendingItems     int
+	activeRequests   int
+	turnEndRequested bool
+	started          bool
+	firstAudio       bool
+	ttsStopped       bool
+	turnEnded        bool
 }
 
 // TTSManager 负责TTS相关的处理
@@ -92,6 +104,9 @@ type TTSManager struct {
 	dualStreamChan chan llm_common.LLMResponseStruct
 	dualStreamDone chan struct{} // 双流式 isSync 等待用：StreamChan 对应的 onEndFunc 信号
 	dualStreamMu   sync.Mutex
+
+	ttsMetricMu    sync.Mutex
+	ttsMetricState ttsMetricState
 }
 
 // NewTTSManager 只接受WithClientState
@@ -132,7 +147,6 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 	frameDuration := time.Duration(t.clientState.OutputAudioFormat.FrameDuration) * time.Millisecond
 	cacheFrameCount := 120 / t.clientState.OutputAudioFormat.FrameDuration
 	totalFrames := 0
-	needReportFirstFrame := false
 	currentSentenceFrames := 0
 	playbackTail := time.Time{}
 
@@ -173,7 +187,6 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 			t.finishTtsStop(t.clientState.Ctx, sendTtsStop, stopErr)
 		}
 		totalFrames = 0
-		needReportFirstFrame = false
 		currentSentenceFrames = 0
 		playbackTail = time.Time{}
 		log.Debugf("runSenderLoop interrupt, drained queue and continue")
@@ -212,9 +225,6 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 			switch elem.Kind {
 			case AudioQueueKindSentenceStart:
 				currentSentenceFrames = 0
-				if elem.IsStart {
-					needReportFirstFrame = true
-				}
 				if !t.enqueueDelayedSentenceTask(ctx, elem) && elem.OnEnd != nil {
 					elem.OnEnd(ctx.Err())
 				}
@@ -257,13 +267,6 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 				totalFrames++
 				currentSentenceFrames++
 				playbackTail = playbackTail.Add(frameDuration)
-				if needReportFirstFrame && totalFrames == 1 {
-					t.clientState.MarkTtsFirstFrame()
-					if t.session != nil {
-						t.session.TraceTtsFirstFrame(ctx, time.Now().UnixMilli())
-					}
-					needReportFirstFrame = false
-				}
 			case AudioQueueKindSentenceEnd:
 				if !t.enqueueDelayedSentenceTask(ctx, elem) && elem.OnEnd != nil {
 					elem.OnEnd(ctx.Err())
@@ -275,11 +278,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 						log.Warnf("TTS_OUTPUT_START hook 执行失败: %v", hookErr)
 					}
 				}
-				t.clientState.SetStartTtsTs()
 				t.ttsActive.Store(true)
-				if t.session != nil {
-					t.session.TraceTtsStart(ctx, time.Now().UnixMilli())
-				}
 				if err := t.serverTransport.SendTtsStart(); err != nil {
 					log.Errorf("发送 TtsStart 失败: %v", err)
 				}
@@ -363,6 +362,199 @@ func (t *TTSManager) currentAudioGeneration() uint64 {
 
 func (t *TTSManager) nextAudioGeneration() uint64 {
 	return t.audioGeneration.Add(1)
+}
+
+func (t *TTSManager) startTtsMetricCycle() uint64 {
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+
+	t.ttsMetricState = ttsMetricState{
+		cycleID: t.ttsMetricState.cycleID + 1,
+	}
+	return t.ttsMetricState.cycleID
+}
+
+func (t *TTSManager) currentTtsMetricCycle() uint64 {
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+	return t.ttsMetricState.cycleID
+}
+
+type ttsMetricCompletion struct {
+	err          error
+	ttsStopTs    int64
+	turnEndTs    int64
+	traceTtsStop bool
+	traceTurnEnd bool
+}
+
+func (t *TTSManager) emitTtsMetricCompletion(ctx context.Context, completion ttsMetricCompletion) {
+	if t.session == nil {
+		return
+	}
+	if completion.traceTtsStop {
+		t.session.TraceTtsStop(ctx, completion.ttsStopTs, completion.err)
+	}
+	if completion.traceTurnEnd {
+		t.session.TraceTurnEnd(ctx, completion.turnEndTs, completion.err)
+	}
+}
+
+func (t *TTSManager) registerTtsMetricItem(cycleID uint64) {
+	if cycleID == 0 {
+		return
+	}
+
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+
+	if t.ttsMetricState.cycleID != cycleID || t.ttsMetricState.turnEnded {
+		return
+	}
+	t.ttsMetricState.pendingItems++
+}
+
+func (t *TTSManager) finishTtsMetricItem(ctx context.Context, cycleID uint64, err error) {
+	t.emitTtsMetricCompletion(ctx, t.finishTtsMetricItemLocked(cycleID, err))
+}
+
+func (t *TTSManager) finishTtsMetricItemLocked(cycleID uint64, err error) ttsMetricCompletion {
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+
+	if t.ttsMetricState.cycleID != cycleID || cycleID == 0 {
+		return ttsMetricCompletion{}
+	}
+	if t.ttsMetricState.pendingItems > 0 {
+		t.ttsMetricState.pendingItems--
+	}
+	return t.maybeFinalizeTtsMetricLocked(err)
+}
+
+func (t *TTSManager) markTtsMetricRequestStart(ctx context.Context, cycleID uint64) {
+	if cycleID == 0 {
+		return
+	}
+
+	var startTs int64
+
+	t.ttsMetricMu.Lock()
+	if t.ttsMetricState.cycleID == cycleID && !t.ttsMetricState.turnEnded {
+		t.ttsMetricState.activeRequests++
+		if !t.ttsMetricState.started {
+			t.clientState.MarkTtsStart()
+			startTs = t.clientState.Statistic.TtsStartTs
+			t.ttsMetricState.started = true
+		}
+	}
+	t.ttsMetricMu.Unlock()
+
+	if startTs > 0 && t.session != nil {
+		t.session.TraceTtsStart(ctx, startTs)
+	}
+}
+
+func (t *TTSManager) markTtsMetricFirstAudio(ctx context.Context, cycleID uint64) {
+	if cycleID == 0 {
+		return
+	}
+
+	var firstAudioTs int64
+
+	t.ttsMetricMu.Lock()
+	if t.ttsMetricState.cycleID == cycleID && t.ttsMetricState.started && !t.ttsMetricState.firstAudio && !t.ttsMetricState.turnEnded {
+		t.clientState.MarkTtsFirstFrame()
+		firstAudioTs = t.clientState.Statistic.TtsFirstFrameTs
+		t.ttsMetricState.firstAudio = true
+	}
+	t.ttsMetricMu.Unlock()
+
+	if firstAudioTs > 0 && t.session != nil {
+		t.session.TraceTtsFirstFrame(ctx, firstAudioTs)
+	}
+}
+
+func (t *TTSManager) finishTtsMetricRequest(ctx context.Context, cycleID uint64, err error) {
+	t.emitTtsMetricCompletion(ctx, t.finishTtsMetricRequestLocked(cycleID, err))
+}
+
+func (t *TTSManager) finishTtsMetricRequestLocked(cycleID uint64, err error) ttsMetricCompletion {
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+
+	if t.ttsMetricState.cycleID != cycleID || cycleID == 0 {
+		return ttsMetricCompletion{}
+	}
+	if t.ttsMetricState.activeRequests > 0 {
+		t.ttsMetricState.activeRequests--
+	}
+	return t.maybeFinalizeTtsMetricLocked(err)
+}
+
+func (t *TTSManager) requestTurnEndLocked(err error) ttsMetricCompletion {
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+
+	if t.ttsMetricState.cycleID == 0 {
+		return ttsMetricCompletion{}
+	}
+	t.ttsMetricState.turnEndRequested = true
+	return t.maybeFinalizeTtsMetricLocked(err)
+}
+
+func (t *TTSManager) forceStopTtsMetric(ctx context.Context, err error) {
+	t.emitTtsMetricCompletion(ctx, t.forceStopTtsMetricLocked(err))
+}
+
+func (t *TTSManager) forceStopTtsMetricLocked(err error) ttsMetricCompletion {
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+
+	if t.ttsMetricState.cycleID == 0 || t.ttsMetricState.turnEnded {
+		return ttsMetricCompletion{}
+	}
+	t.ttsMetricState.turnEndRequested = true
+	return t.finalizeTtsMetricLocked(err)
+}
+
+func (t *TTSManager) maybeFinalizeTtsMetricLocked(err error) ttsMetricCompletion {
+	if !t.ttsMetricState.turnEndRequested || t.ttsMetricState.turnEnded {
+		return ttsMetricCompletion{}
+	}
+	if t.ttsMetricState.pendingItems > 0 || t.ttsMetricState.activeRequests > 0 {
+		return ttsMetricCompletion{}
+	}
+	return t.finalizeTtsMetricLocked(err)
+}
+
+func (t *TTSManager) finalizeTtsMetricLocked(err error) ttsMetricCompletion {
+	if t.ttsMetricState.turnEnded {
+		return ttsMetricCompletion{}
+	}
+
+	completion := ttsMetricCompletion{
+		err:          err,
+		traceTurnEnd: true,
+	}
+	if t.ttsMetricState.started && !t.ttsMetricState.ttsStopped {
+		t.clientState.MarkTtsStop()
+		completion.ttsStopTs = t.clientState.Statistic.TtsStopTs
+		completion.turnEndTs = completion.ttsStopTs
+		completion.traceTtsStop = true
+		t.ttsMetricState.ttsStopped = true
+	} else {
+		completion.turnEndTs = time.Now().UnixMilli()
+	}
+	t.ttsMetricState.turnEnded = true
+	return completion
+}
+
+func (t *TTSManager) pushTTSQueueItem(item TTSQueueItem) error {
+	if err := t.ttsQueue.Push(item); err != nil {
+		return err
+	}
+	t.registerTtsMetricItem(item.metricCycle)
+	return nil
 }
 
 func (t *TTSManager) sentenceControlDelay() time.Duration {
@@ -638,22 +830,27 @@ func (t *TTSManager) finishTtsStop(ctx context.Context, sendTtsStop bool, stopEr
 			log.Errorf("发送 TtsStop 失败: %v", err)
 		}
 	}
-
-	t.clientState.MarkTtsStop()
 	if t.session != nil {
-		t.session.TraceTtsStop(ctx, t.clientState.Statistic.TtsStopTs, stopErr)
 		hookErr := t.session.hookHub.EmitTTSOutputStop(t.session.hookContext(ctx), chathooks.TTSOutputStopData{Err: stopErr})
 		if hookErr != nil {
 			log.Warnf("TTS_OUTPUT_STOP hook 执行失败: %v", hookErr)
 		}
 	}
 
+	t.forceStopTtsMetric(ctx, stopErr)
+
 	return true
 }
 
 // EnqueueTtsStart 向会话级音频队列投递 TtsStart，由 runSenderLoop 统一发送；队列满时阻塞直到入队或 ctx.Done
 func (t *TTSManager) EnqueueTtsStart(ctx context.Context) {
+	t.startTtsMetricCycle()
 	t.enqueueSessionElem(ctx, t.currentAudioGeneration(), AudioQueueElem{Kind: AudioQueueKindTtsStart})
+}
+
+// RequestTurnEnd 标记当前轮逻辑输出结束；实际 turn_end 会在所有 TTS 音频收完后发出。
+func (t *TTSManager) RequestTurnEnd(ctx context.Context, err error) {
+	t.emitTtsMetricCompletion(ctx, t.requestTurnEndLocked(err))
 }
 
 // EnqueueTtsStop 向会话级音频队列投递 TtsStop，由 runSenderLoop 统一发送；队列满时阻塞直到入队或 ctx.Done
@@ -671,16 +868,19 @@ func (t *TTSManager) processTTSQueue(ctx context.Context) {
 			continue
 		}
 
+		itemErr := error(nil)
 		if item.StreamChan != nil {
 			log.Debugf("processTTSQueue start, stream mode")
-			t.handleStreamTts(item)
+			itemErr = t.handleStreamTts(item)
+			t.finishTtsMetricItem(item.ctx, item.metricCycle, itemErr)
 			log.Debugf("processTTSQueue end, stream mode")
 			continue
 		}
 
 		// 非流式：由 handleTts 生成并推送 SentenceStart → Frame… → SentenceEnd
 		log.Debugf("processTTSQueue start, text: %s", item.llmResponse.Text)
-		t.handleTts(item.ctx, item.generation, item.llmResponse, item.onStartFunc, item.onEndFunc)
+		itemErr = t.handleTts(item.ctx, item.generation, item.metricCycle, item.llmResponse, item.onStartFunc, item.onEndFunc)
+		t.finishTtsMetricItem(item.ctx, item.metricCycle, itemErr)
 		log.Debugf("processTTSQueue end, text: %s (pushed)", item.llmResponse.Text)
 	}
 }
@@ -690,20 +890,20 @@ func (t *TTSManager) ClearTTSQueue() {
 }
 
 // handleTts 单条 TTS：生成并向 sessionAudioQueue 推送 SentenceStart → Frame… → SentenceEnd
-func (t *TTSManager) handleTts(ctx context.Context, generation uint64, llmResponse llm_common.LLMResponseStruct, onStartFunc func(), onEndFunc func(error)) {
+func (t *TTSManager) handleTts(ctx context.Context, generation uint64, metricCycle uint64, llmResponse llm_common.LLMResponseStruct, onStartFunc func(), onEndFunc func(error)) error {
 	if strings.TrimSpace(llmResponse.Text) == "" {
 		if onEndFunc != nil {
 			onEndFunc(nil)
 		}
-		return
+		return nil
 	}
-	outChan, release, genErr := t.generateTtsOnly(ctx, llmResponse)
+	outChan, release, genErr := t.generateTtsOnly(ctx, metricCycle, llmResponse)
 	if genErr != nil {
 		log.Errorf("handleTts gen err, text: %s, err: %v", llmResponse.Text, genErr)
 		if onEndFunc != nil {
 			onEndFunc(genErr)
 		}
-		return
+		return genErr
 	}
 	if outChan == nil {
 		if release != nil {
@@ -712,7 +912,15 @@ func (t *TTSManager) handleTts(ctx context.Context, generation uint64, llmRespon
 		if onEndFunc != nil {
 			onEndFunc(nil)
 		}
-		return
+		return nil
+	}
+	requestActive := true
+	firstAudioReported := false
+	finishRequest := func(err error) {
+		if requestActive {
+			t.finishTtsMetricRequest(ctx, metricCycle, err)
+			requestActive = false
+		}
 	}
 	if !t.enqueueSessionElem(ctx, generation, AudioQueueElem{
 		Kind:    AudioQueueKindSentenceStart,
@@ -723,10 +931,11 @@ func (t *TTSManager) handleTts(ctx context.Context, generation uint64, llmRespon
 		if release != nil {
 			release()
 		}
+		finishRequest(ctx.Err())
 		if onEndFunc != nil {
 			onEndFunc(ctx.Err())
 		}
-		return
+		return ctx.Err()
 	}
 	for {
 		select {
@@ -734,15 +943,17 @@ func (t *TTSManager) handleTts(ctx context.Context, generation uint64, llmRespon
 			if release != nil {
 				release()
 			}
+			finishRequest(ctx.Err())
 			if onEndFunc != nil {
 				onEndFunc(ctx.Err())
 			}
-			return
+			return ctx.Err()
 		case frame, ok := <-outChan:
 			if !ok {
 				if release != nil {
 					release()
 				}
+				finishRequest(nil)
 				if !t.enqueueSessionElem(ctx, generation, AudioQueueElem{
 					Kind:  AudioQueueKindSentenceEnd,
 					Text:  llmResponse.Text,
@@ -750,7 +961,11 @@ func (t *TTSManager) handleTts(ctx context.Context, generation uint64, llmRespon
 				}) && onEndFunc != nil {
 					onEndFunc(ctx.Err())
 				}
-				return
+				return ctx.Err()
+			}
+			if !firstAudioReported {
+				t.markTtsMetricFirstAudio(ctx, metricCycle)
+				firstAudioReported = true
 			}
 			frameCopy := make([]byte, len(frame))
 			copy(frameCopy, frame)
@@ -758,10 +973,11 @@ func (t *TTSManager) handleTts(ctx context.Context, generation uint64, llmRespon
 				if release != nil {
 					release()
 				}
+				finishRequest(ctx.Err())
 				if onEndFunc != nil {
 					onEndFunc(ctx.Err())
 				}
-				return
+				return ctx.Err()
 			}
 		}
 	}
@@ -823,13 +1039,17 @@ func (t *TTSManager) handleTextResponse(ctx context.Context, llmResponse llm_com
 			return nil
 		}
 		gen := t.currentAudioGeneration()
+		metricCycle := t.currentTtsMetricCycle()
 		done := make(chan struct{}, 1)
-		t.ttsQueue.Push(TTSQueueItem{
+		if err := t.pushTTSQueueItem(TTSQueueItem{
 			ctx:         ctx,
 			llmResponse: llmResponse,
 			generation:  gen,
+			metricCycle: metricCycle,
 			onEndFunc:   func(error) { signalDone(done) },
-		})
+		}); err != nil {
+			return err
+		}
 		if isSync {
 			return t.waitForSync(ctx, done)
 		}
@@ -850,12 +1070,17 @@ func (t *TTSManager) handleTextResponse(ctx context.Context, llmResponse llm_com
 		t.dualStreamChan = make(chan llm_common.LLMResponseStruct, 16)
 		done := make(chan struct{}, 1)
 		t.dualStreamDone = done
-		t.ttsQueue.Push(TTSQueueItem{
-			ctx:        ctx,
-			StreamChan: t.dualStreamChan,
-			generation: t.currentAudioGeneration(),
-			onEndFunc:  func(error) { signalDone(done) },
-		})
+		if err := t.pushTTSQueueItem(TTSQueueItem{
+			ctx:         ctx,
+			StreamChan:  t.dualStreamChan,
+			generation:  t.currentAudioGeneration(),
+			metricCycle: t.currentTtsMetricCycle(),
+			onEndFunc:   func(error) { signalDone(done) },
+		}); err != nil {
+			t.dualStreamChan = nil
+			t.dualStreamDone = nil
+			return err
+		}
 		log.Debugf("handleTextResponse: dual stream, created StreamChan and pushed item")
 	}
 
@@ -868,7 +1093,14 @@ func (t *TTSManager) handleTextResponse(ctx context.Context, llmResponse llm_com
 	} else if t.dualStreamChan == nil && hasText {
 		// 降级：未收到 IsStart 就来了数据，按单条入队
 		gen := t.currentAudioGeneration()
-		t.ttsQueue.Push(TTSQueueItem{ctx: ctx, llmResponse: llmResponse, generation: gen})
+		if err := t.pushTTSQueueItem(TTSQueueItem{
+			ctx:         ctx,
+			llmResponse: llmResponse,
+			generation:  gen,
+			metricCycle: t.currentTtsMetricCycle(),
+		}); err != nil {
+			return err
+		}
 		log.Debugf("handleTextResponse: dual stream fallback, no active stream, pushed single item")
 	}
 
@@ -988,7 +1220,7 @@ func extractVoiceID(config map[string]interface{}) string {
 }
 
 // generateTtsOnly 方案 C：仅做 TTS 生成，不发送；返回音频 channel 与发送完成后需调用的 ReleaseFunc
-func (t *TTSManager) generateTtsOnly(ctx context.Context, llmResponse llm_common.LLMResponseStruct) (outputChan <-chan []byte, releaseFunc func(), err error) {
+func (t *TTSManager) generateTtsOnly(ctx context.Context, metricCycle uint64, llmResponse llm_common.LLMResponseStruct) (outputChan <-chan []byte, releaseFunc func(), err error) {
 	if strings.TrimSpace(llmResponse.Text) == "" {
 		return nil, nil, nil
 	}
@@ -998,9 +1230,11 @@ func (t *TTSManager) generateTtsOnly(ctx context.Context, llmResponse llm_common
 		return nil, nil, err
 	}
 	ttsProviderInstance := ttsWrapper.GetProvider()
+	t.markTtsMetricRequestStart(ctx, metricCycle)
 	ch, err := ttsProviderInstance.TextToSpeechStream(ctx, llmResponse.Text, t.clientState.OutputAudioFormat.SampleRate, t.clientState.OutputAudioFormat.Channels, t.clientState.OutputAudioFormat.FrameDuration)
 	if err != nil {
 		pool.Release(ttsWrapper)
+		t.finishTtsMetricRequest(ctx, metricCycle, err)
 		log.Errorf("生成 TTS 音频失败: %v", err)
 		return nil, nil, fmt.Errorf("生成 TTS 音频失败: %v", err)
 	}
@@ -1009,33 +1243,43 @@ func (t *TTSManager) generateTtsOnly(ctx context.Context, llmResponse llm_common
 
 // handleDualStreamTts 真正的双流式 TTS：将 StreamChan 里的文本流式输入给 TTS provider，同时流式输出音频。
 // 返回 true 表示已处理（成功或出错），false 表示 provider 不支持双流式需要降级。
-func (t *TTSManager) handleDualStreamTts(item TTSQueueItem) bool {
+func (t *TTSManager) handleDualStreamTts(item TTSQueueItem) (bool, error) {
 	ttsWrapper, err := t.getTTSProviderInstance()
 	if err != nil {
 		log.Errorf("双流式 TTS 获取 provider 失败: %v", err)
-		return false
+		return false, nil
 	}
 	defer pool.Release(ttsWrapper)
 
 	provider := ttsWrapper.GetProvider()
 	adapter, ok := provider.(*tts.ContextTTSAdapter)
 	if !ok {
-		return false
+		return false, nil
 	}
 	dp, ok := adapter.Provider.(tts.DualStreamProvider)
 	if !ok {
-		return false
+		return false, nil
 	}
 
 	textChan := make(chan string, 16)
+	t.markTtsMetricRequestStart(item.ctx, item.metricCycle)
 	eventChan, err := dp.StreamingSynthesize(item.ctx, textChan,
 		t.clientState.OutputAudioFormat.SampleRate,
 		t.clientState.OutputAudioFormat.Channels,
 		t.clientState.OutputAudioFormat.FrameDuration)
 	if err != nil {
 		close(textChan)
+		t.finishTtsMetricRequest(item.ctx, item.metricCycle, err)
 		log.Errorf("双流式 TTS StreamingSynthesize 失败: %v", err)
-		return false
+		return false, nil
+	}
+	requestActive := true
+	firstAudioReported := false
+	finishRequest := func(err error) {
+		if requestActive {
+			t.finishTtsMetricRequest(item.ctx, item.metricCycle, err)
+			requestActive = false
+		}
 	}
 
 	// 从 StreamChan 读 LLM 响应文本并喂给 TTS provider。
@@ -1071,10 +1315,11 @@ func (t *TTSManager) handleDualStreamTts(item TTSQueueItem) bool {
 					Kind: AudioQueueKindSentenceEnd,
 					Text: signal.Text,
 				}) {
+					finishRequest(item.ctx.Err())
 					if item.onEndFunc != nil {
 						item.onEndFunc(item.ctx.Err())
 					}
-					return true
+					return true, item.ctx.Err()
 				}
 			case ttsstream.SentenceSignalStart:
 				startElem := AudioQueueElem{
@@ -1087,36 +1332,46 @@ func (t *TTSManager) handleDualStreamTts(item TTSQueueItem) bool {
 					firstSentence = false
 				}
 				if !t.enqueueSessionElem(item.ctx, item.generation, startElem) {
+					finishRequest(item.ctx.Err())
 					if item.onEndFunc != nil {
 						item.onEndFunc(item.ctx.Err())
 					}
-					return true
+					return true, item.ctx.Err()
 				}
 			}
 		}
 
 		if len(event.Audio) > 0 {
+			if !firstAudioReported {
+				t.markTtsMetricFirstAudio(item.ctx, item.metricCycle)
+				firstAudioReported = true
+			}
 			frameCopy := make([]byte, len(event.Audio))
 			copy(frameCopy, event.Audio)
 			if !t.enqueueSessionElem(item.ctx, item.generation, AudioQueueElem{Kind: AudioQueueKindFrame, Data: frameCopy}) {
+				finishRequest(item.ctx.Err())
 				if item.onEndFunc != nil {
 					item.onEndFunc(item.ctx.Err())
 				}
-				return true
+				return true, item.ctx.Err()
 			}
 		}
 	}
 
+	finishRequest(nil)
 	if !t.enqueueSessionElem(item.ctx, item.generation, AudioQueueElem{Kind: AudioQueueKindSentenceEnd, OnEnd: item.onEndFunc}) && item.onEndFunc != nil {
 		item.onEndFunc(nil)
 	}
-	return true
+	return true, item.ctx.Err()
 }
 
 // handleStreamTts 流式 TTS：从 item.StreamChan 读并逐条 generateTtsOnly，向 sessionAudioQueue 推送 SentenceStart → Frame… → SentenceEnd
-func (t *TTSManager) handleStreamTts(item TTSQueueItem) {
-	if t.SupportsDualStream() && t.handleDualStreamTts(item) {
-		return
+func (t *TTSManager) handleStreamTts(item TTSQueueItem) error {
+	if t.SupportsDualStream() {
+		handled, err := t.handleDualStreamTts(item)
+		if handled {
+			return err
+		}
 	}
 
 	firstSegment := true
@@ -1126,34 +1381,42 @@ func (t *TTSManager) handleStreamTts(item TTSQueueItem) {
 			if !t.enqueueSessionElem(item.ctx, item.generation, AudioQueueElem{Kind: AudioQueueKindSentenceEnd, OnEnd: item.onEndFunc, Err: item.ctx.Err()}) && item.onEndFunc != nil {
 				item.onEndFunc(item.ctx.Err())
 			}
-			return
+			return item.ctx.Err()
 		case resp, ok := <-item.StreamChan:
 			if !ok {
 				if !t.enqueueSessionElem(item.ctx, item.generation, AudioQueueElem{Kind: AudioQueueKindSentenceEnd, OnEnd: item.onEndFunc}) && item.onEndFunc != nil {
 					item.onEndFunc(nil)
 				}
-				return
+				return item.ctx.Err()
 			}
-			outChan, release, genErr := t.generateTtsOnly(item.ctx, resp)
+			outChan, release, genErr := t.generateTtsOnly(item.ctx, item.metricCycle, resp)
 			if genErr != nil {
 				if firstSegment {
 					if !t.enqueueSessionElem(item.ctx, item.generation, AudioQueueElem{Kind: AudioQueueKindSentenceStart, OnStart: item.onStartFunc}) {
 						if item.onEndFunc != nil {
 							item.onEndFunc(item.ctx.Err())
 						}
-						return
+						return item.ctx.Err()
 					}
 				}
 				if !t.enqueueSessionElem(item.ctx, item.generation, AudioQueueElem{Kind: AudioQueueKindSentenceEnd, OnEnd: item.onEndFunc, Err: genErr}) && item.onEndFunc != nil {
 					item.onEndFunc(genErr)
 				}
-				return
+				return genErr
 			}
 			if outChan == nil {
 				if release != nil {
 					release()
 				}
 				continue
+			}
+			requestActive := true
+			firstAudioReported := false
+			finishRequest := func(err error) {
+				if requestActive {
+					t.finishTtsMetricRequest(item.ctx, item.metricCycle, err)
+					requestActive = false
+				}
 			}
 			startElem := AudioQueueElem{
 				Kind:    AudioQueueKindSentenceStart,
@@ -1168,10 +1431,11 @@ func (t *TTSManager) handleStreamTts(item TTSQueueItem) {
 				if release != nil {
 					release()
 				}
+				finishRequest(item.ctx.Err())
 				if item.onEndFunc != nil {
 					item.onEndFunc(item.ctx.Err())
 				}
-				return
+				return item.ctx.Err()
 			}
 			for {
 				select {
@@ -1179,19 +1443,25 @@ func (t *TTSManager) handleStreamTts(item TTSQueueItem) {
 					if release != nil {
 						release()
 					}
+					finishRequest(item.ctx.Err())
 					if item.onEndFunc != nil {
 						item.onEndFunc(item.ctx.Err())
 					}
-					return
+					return item.ctx.Err()
 				case frame, ok := <-outChan:
 					if !ok {
 						if release != nil {
 							release()
 						}
+						finishRequest(nil)
 						if !t.enqueueSessionElem(item.ctx, item.generation, AudioQueueElem{Kind: AudioQueueKindSentenceEnd, Text: resp.Text}) && item.onEndFunc != nil {
 							item.onEndFunc(item.ctx.Err())
 						}
 						goto nextResp
+					}
+					if !firstAudioReported {
+						t.markTtsMetricFirstAudio(item.ctx, item.metricCycle)
+						firstAudioReported = true
 					}
 					frameCopy := make([]byte, len(frame))
 					copy(frameCopy, frame)
@@ -1199,10 +1469,11 @@ func (t *TTSManager) handleStreamTts(item TTSQueueItem) {
 						if release != nil {
 							release()
 						}
+						finishRequest(item.ctx.Err())
 						if item.onEndFunc != nil {
 							item.onEndFunc(item.ctx.Err())
 						}
-						return
+						return item.ctx.Err()
 					}
 				}
 			}

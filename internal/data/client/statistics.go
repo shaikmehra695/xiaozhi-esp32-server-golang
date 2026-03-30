@@ -37,13 +37,13 @@ func (state *ClientState) MarkAsrFinalText() {
 // MarkLlmStart 记录 LLM 开始时间
 func (state *ClientState) MarkLlmStart() {
 	state.Statistic.LlmStartTs = time.Now().UnixMilli()
+	state.Statistic.LlmFirstTokenTs = 0
+	state.Statistic.LlmEndTs = 0
 }
 
 // MarkLlmFirstToken 记录 LLM 首次返回 token 时间
 func (state *ClientState) MarkLlmFirstToken() {
-	if state.Statistic.LlmFirstTokenTs == 0 {
-		state.Statistic.LlmFirstTokenTs = time.Now().UnixMilli()
-	}
+	state.Statistic.LlmFirstTokenTs = time.Now().UnixMilli()
 }
 
 // MarkLlmEnd 记录 LLM 结束时间

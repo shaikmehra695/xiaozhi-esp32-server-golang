@@ -147,6 +147,7 @@ type MetricStage string
 
 const (
 	MetricTurnStart     MetricStage = "turn_start"
+	MetricTurnEnd       MetricStage = "turn_end"
 	MetricAsrFirstText  MetricStage = "asr_first_text"
 	MetricAsrFinalText  MetricStage = "asr_final_text"
 	MetricLlmStart      MetricStage = "llm_start"

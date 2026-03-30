@@ -794,9 +794,11 @@ func (s *ChatSession) HandleNotActivated() {
 	defer s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
 
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
-	_ = s.ttsManager.handleTextResponse(s.clientState.AfterAsrSessionCtx.Get(sessionCtx), llm_common.LLMResponseStruct{
+	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
+	err = s.ttsManager.handleTextResponse(ctx, llm_common.LLMResponseStruct{
 		Text: fmt.Sprintf("请在后台添加设备，激活码: %s", code),
 	}, false)
+	s.ttsManager.RequestTurnEnd(ctx, err)
 
 }
 
@@ -808,7 +810,8 @@ func (s *ChatSession) HandleWelcome() {
 	s.clientState.IsWelcomeSpeaking = true
 	s.clientState.IsWelcomePlaying = true
 	s.ttsManager.EnqueueTtsStart(s.clientState.Ctx)
-	s.ttsManager.handleTts(ctx, s.ttsManager.currentAudioGeneration(), llm_common.LLMResponseStruct{Text: greetingText}, nil, nil)
+	err := s.ttsManager.handleTts(ctx, s.ttsManager.currentAudioGeneration(), s.ttsManager.currentTtsMetricCycle(), llm_common.LLMResponseStruct{Text: greetingText}, nil, nil)
+	s.ttsManager.RequestTurnEnd(ctx, err)
 	s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
 }
 
@@ -906,11 +909,18 @@ func (s *ChatSession) getOrCreateOpenClawStream(correlationID string) (chan llm_
 			if !s.clientState.IsRealTime() {
 				s.ttsManager.EnqueueTtsStop(ctx)
 			}
+			s.ttsManager.RequestTurnEnd(ctx, err)
 			s.finishOpenClawWarmup(correlationID, false)
 		}
 	}
 	log.Infof("OpenClaw stream created: device=%s correlation_id=%s warmup_attached=%v", s.clientState.DeviceID, correlationID, hasWarmup)
 	if err := s.llmManager.HandleLLMResponseChannelAsyncWithOptions(ctx, nil, streamChan, options); err != nil {
+		if hasWarmup && !s.clientState.IsRealTime() {
+			s.ttsManager.EnqueueTtsStop(ctx)
+		}
+		if hasWarmup {
+			s.ttsManager.RequestTurnEnd(ctx, err)
+		}
 		s.openClawStreamMu.Lock()
 		delete(s.openClawStreams, correlationID)
 		s.openClawStreamMu.Unlock()
@@ -1306,6 +1316,7 @@ func (s *ChatSession) DoExitChat() {
 		log.Errorf("发送再见语失败: %v", err)
 	}
 
+	s.ttsManager.RequestTurnEnd(ctx, err)
 	s.ttsManager.EnqueueTtsStop(ctx)
 	// 关闭会话
 	s.Close()
@@ -1676,6 +1687,10 @@ func (s *ChatSession) emitMetricStage(ctx context.Context, stage chathooks.Metri
 
 func (s *ChatSession) TraceTurnStart(ctx context.Context, ts int64) {
 	s.emitMetricStage(ctx, chathooks.MetricTurnStart, ts, nil)
+}
+
+func (s *ChatSession) TraceTurnEnd(ctx context.Context, ts int64, err error) {
+	s.emitMetricStage(ctx, chathooks.MetricTurnEnd, ts, err)
 }
 
 func (s *ChatSession) TraceAsrFirstText(ctx context.Context, ts int64) {
