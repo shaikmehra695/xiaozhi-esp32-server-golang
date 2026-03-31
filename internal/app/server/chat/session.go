@@ -717,17 +717,20 @@ func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
 	if msg.Text != "" {
 		text := removePunctuation(msg.Text)
 
+		enableGreeting := viper.GetBool("enable_greeting")
 		// 唤醒词 + 启用 greeting -> 走欢迎模式
-		if isWakeupWord(text) && viper.GetBool("enable_greeting") {
+		if isWakeupWord(text) && enableGreeting {
 			if !s.clientState.IsWelcomeSpeaking {
 				s.HandleWelcome()
 			}
 			return nil
 		}
 
-		// 默认兜底走 AddAsrResultToQueue
-		if err := s.AddAsrResultToQueue(text, nil); err != nil {
-			log.Errorf("开始对话失败: %v", err)
+		if enableGreeting {
+			// 默认兜底走 AddAsrResultToQueue
+			if err := s.AddAsrResultToQueue(text, nil); err != nil {
+				log.Errorf("开始对话失败: %v", err)
+			}
 		}
 	}
 	return nil
