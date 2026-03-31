@@ -288,7 +288,8 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 					}
 				}
 
-				if clientHaveVoice {
+				if clientHaveVoice || haveVoice {
+					// 首次命中语音时也要立刻转发当前缓存帧，避免极短语音整段未送入 ASR。
 					if state.Asr.ShouldRestartOnVoice() {
 						log.Debugf("检测到新的语音输入，重启待恢复的ASR流")
 						if restartErr := a.RestartAsrRecognition(ctx); restartErr != nil {
