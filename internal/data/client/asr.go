@@ -71,7 +71,7 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, b
 			case result, ok := <-a.AsrResultChannel:
 				if !ok {
 					log.Debugf("asr result channel closed")
-					return emptyResult, true, nil
+					return emptyResult, false, nil
 				}
 				log.Debugf("asr result: %s, ok: %+v, isFinal: %+v, emptyReason: %s, error: %+v", result.Text, ok, result.IsFinal, result.EmptyReason, result.Error)
 				if result.Error != nil {
