@@ -1119,14 +1119,14 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 	}
 
 	// realtime 模式首次启动：跳过欢迎语判断和 Destroy，直接进入监听
-	if s.clientState.IsRealTime() && !s.clientState.RealtimeModeInitialized {
-		s.clientState.RealtimeModeInitialized = true
+	if msg.Mode == "realtime" {
 
-		// 更新拾音模式
-		if msg.Mode != "" {
-			s.clientState.ListenMode = msg.Mode
-			log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
+		if !s.clientState.IsWelcomePlaying {
+			s.StopSpeaking(false)
 		}
+
+		s.clientState.ListenMode = msg.Mode
+		log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
 
 		startSeq := s.beginListenStart()
 		go func() {
@@ -1148,10 +1148,8 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 	}
 
 	// 处理拾音模式
-	if msg.Mode != "" {
-		s.clientState.ListenMode = msg.Mode
-		log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
-	}
+	s.clientState.ListenMode = msg.Mode
+	log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
 	//if s.clientState.ListenMode == "manual" {
 	s.StopSpeaking(false)
 	//}
