@@ -31,9 +31,6 @@ type Asr struct {
 	// 聊天历史音频缓存：持续累积发送到ASR的音频数据
 	HistoryAudioBuffer []float32
 
-	// 等待下一次检测到真实语音时再重启ASR，避免空转时持续重连上游
-	PendingRestartOnVoice bool
-
 	// 当前这轮ASR是否已经收到首个非空文本
 	ReceivedTextInTurn bool
 }
@@ -102,18 +99,6 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, b
 			}
 		}
 	}
-}
-
-func (a *Asr) SetPendingRestartOnVoice(v bool) {
-	a.lock.Lock()
-	defer a.lock.Unlock()
-	a.PendingRestartOnVoice = v
-}
-
-func (a *Asr) ShouldRestartOnVoice() bool {
-	a.lock.RLock()
-	defer a.lock.RUnlock()
-	return a.PendingRestartOnVoice
 }
 
 func (a *Asr) MarkTextReceived() {

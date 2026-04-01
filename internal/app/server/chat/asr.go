@@ -288,14 +288,8 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 					}
 				}
 
-				if clientHaveVoice {
-					if state.Asr.ShouldRestartOnVoice() {
-						log.Debugf("检测到新的语音输入，重启待恢复的ASR流")
-						if restartErr := a.RestartAsrRecognition(ctx); restartErr != nil {
-							log.Errorf("检测到语音后重启ASR识别失败: %v", restartErr)
-							continue
-						}
-					}
+				if clientHaveVoice || haveVoice {
+					// 首次命中语音时也要立刻转发当前缓存帧，避免极短语音整段未送入 ASR。
 
 					//vad识别成功, 往asr音频通道里发送数据
 					//log.Infof("vad识别成功, 往asr音频通道里发送数据, len: %d", len(pcmData))
@@ -373,7 +367,6 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context, onClose func()) {
 							state.Vad.GetVoiceDuration(),
 							state.Vad.GetVoiceDurationInSession(),
 							state.Asr.GetHistoryAudioLen(),
-							state.Asr.ShouldRestartOnVoice(),
 						)
 						// 在 OnVoiceSilence 之前重置标志位，以便下次可以再次触发
 						hasTriggeredCancel = false
@@ -463,7 +456,6 @@ func (a *ASRManager) RestartAsrRecognition(ctx context.Context) error {
 	}
 
 	state.AsrResultChannel = asrResultChannel
-	state.Asr.SetPendingRestartOnVoice(false)
 	// 重置统计时间，用于计算本轮对话的整体耗时
 	state.MarkTurnStart()
 	if a.session != nil {
@@ -531,11 +523,6 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 			default:
 			}
 
-			if state.Asr.ShouldRestartOnVoice() {
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
 			result, isRetry, err := state.RetireAsrResult(ctx)
 			if err != nil {
 				log.Errorf("处理asr结果失败: %v", err)
@@ -593,12 +580,10 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					}
 
 					log.Warnf("ASR可恢复错误发生时当前状态不允许立即重启: reason=%s, status=%s, realtime=%v", result.RetryReason, state.Status, state.IsRealTime())
-					state.Asr.SetPendingRestartOnVoice(true)
 					state.Asr.CancelWithReason("ASRManager.StartAsrRecognitionLoop: recoverable error but restart not allowed yet")
 					continue
 				case asr_types.RetryReasonDoubaoWaitingNextPacketTimeout:
 					log.Warnf("doubao ASR 会话空闲超时，挂起当前流并等待下一次语音时重建")
-					state.Asr.SetPendingRestartOnVoice(true)
 					state.Asr.CancelWithReason("ASRManager.StartAsrRecognitionLoop: doubao waiting next packet timeout")
 					continue
 				}
@@ -712,10 +697,9 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				continue
 			} else {
 				log.Debugf(
-					"ASR空结果详情: status=%s, emptyReason=%s, pending_restart=%v, client_voice_stop=%v, history_audio_samples=%d, voice_duration=%dms, voice_duration_in_session=%dms, idle_duration=%dms, realtime=%v",
+					"ASR空结果详情: status=%s, emptyReason=%s, client_voice_stop=%v, history_audio_samples=%d, voice_duration=%dms, voice_duration_in_session=%dms, idle_duration=%dms, realtime=%v",
 					state.Status,
 					result.EmptyReason,
-					state.Asr.ShouldRestartOnVoice(),
 					state.GetClientVoiceStop(),
 					state.Asr.GetHistoryAudioLen(),
 					state.Vad.GetVoiceDuration(),
@@ -730,7 +714,6 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 
 					if result.EmptyReason == asr_types.EmptyReasonNoServerResponse ||
 						result.EmptyReason == asr_types.EmptyReasonProviderEmptyFinal {
-						state.Asr.SetPendingRestartOnVoice(true)
 						state.Asr.CancelWithReason("ASRManager.StartAsrRecognitionLoop: empty final result from provider")
 						continue
 					}
