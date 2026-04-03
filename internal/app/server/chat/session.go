@@ -320,7 +320,7 @@ func (s *ChatSession) loadFromManager() ([]*schema.Message, error) {
 	// 创建 HistoryClient
 	historyCfg := history.HistoryClientConfig{
 		BaseURL:   util.GetBackendURL(),
-		AuthToken: viper.GetString("manager.history_auth_token"),
+		AuthToken: util.GetManagerAuthToken(),
 		Timeout:   viper.GetDuration("manager.history_timeout"),
 		Enabled:   true,
 	}
