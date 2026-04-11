@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	data_client "xiaozhi-esp32-server-golang/internal/data/client"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
 	"xiaozhi-esp32-server-golang/internal/domain/mcp"
+	"xiaozhi-esp32-server-golang/internal/domain/play_music"
 	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
 
@@ -68,6 +71,10 @@ func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema
 			}
 			l.AddLlmMessage(ctx, msg)
 		}
+	}
+
+	if l.clientState.GetMemoryMode() == data_client.MemoryModeNone {
+		ctx = appendToolRoundMessagesToContext(ctx, messageList)
 	}
 
 	executor.WaitMedia()
@@ -265,7 +272,6 @@ func (e *toolCallExecutor) executeToolCall(order int, toolCall schema.ToolCall) 
 
 func (l *LLMManager) handleResourceLink(ctx context.Context, resourceLink mcp_go.ResourceLink, toolCall tool.InvokableTool, wg *sync.WaitGroup) error {
 	wg.Add(1)
-	defer wg.Done()
 	//从resourceLink中获取资源
 	client := toolCall.(*mcp.McpTool).GetClient()
 
@@ -318,97 +324,130 @@ func (l *LLMManager) handleResourceLink(ctx context.Context, resourceLink mcp_go
 			readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			resourceResult, err := client.ReadResource(readCtx, mcp_go.ReadResourceRequest{
 				Params: mcp_go.ReadResourceParams{
-					URI:    resourceLink.URI,
-					Offset: start,
-					Limit:  page,
+					URI:       resourceLink.URI,
+					Arguments: map[string]any{"url": resourceLink.Description, "start": start, "end": start + page},
 				},
 			})
 			cancel()
 
 			if err != nil {
-				log.Errorf("读取资源失败 (offset=%d, page=%d): %v", start, pageCount, err)
-				return err
+				log.Errorf("读取资源失败 (第 %d 页), resourceUri: %s, resourceResult: %+v, err: %v", pageCount, resourceLink.Description, resourceResult, err)
+
+				// 如果是超时错误，尝试重试
+				if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline") {
+					log.Warnf("资源读取超时，尝试重试...")
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				return fmt.Errorf("读取资源失败: %v", err)
 			}
 
-			if resourceResult == nil || len(resourceResult.Contents) == 0 {
-				log.Infof("资源读取完成，总页数: %d，总字节数: %d", pageCount-1, totalRead)
-				break
+			if len(resourceResult.Contents) == 0 {
+				log.Infof("资源读取完成，总共读取 %d 字节，共 %d 页", totalRead, pageCount-1)
+				return nil
 			}
 
-			pageReadBytes := 0
 			hasData := false
 
-			for i, content := range resourceResult.Contents {
+			for _, content := range resourceResult.Contents {
 				if audioContent, ok := content.(mcp_go.BlobResourceContents); ok {
-					if audioContent.Blob == "" {
+					if len(audioContent.Blob) == 0 {
+						log.Debugf("音频数据为空，跳过")
 						continue
 					}
+					log.Debugf("第 %d 页 resourceResult len: %d", pageCount, len(audioContent.Blob))
+					rawAudioData, err := base64.StdEncoding.DecodeString(audioContent.Blob)
+					if err != nil {
+						log.Errorf("解码音频数据失败: %v", err)
+						return fmt.Errorf("解码音频数据失败: %v", err)
+					}
 
-					if audioContent.Blob == McpReadResourceStreamDoneFlag {
-						log.Infof("收到流结束标记，总页数: %d，总字节数: %d", pageCount, totalRead)
+					if string(rawAudioData) == McpReadResourceStreamDoneFlag {
+						log.Debugf("资源读取完成")
 						return nil
 					}
 
-					audioData := []byte(audioContent.Blob)
-					dataLen := len(audioData)
-					if dataLen > 0 {
+					select {
+					case <-ctx.Done():
+						log.Debugf("资源读取被取消")
+						return nil
+					case streamChan <- rawAudioData:
+						totalRead += len(rawAudioData)
 						hasData = true
-						pageReadBytes += dataLen
-						totalRead += dataLen
+						log.Debugf("成功发送第 %d 页数据，长度: %d, 累计: %d", pageCount, len(rawAudioData), totalRead)
+					}
 
-						select {
-						case streamChan <- audioData:
-							log.Debugf("第%d页第%d块: 读取%d字节，总计%d字节", pageCount, i+1, dataLen, totalRead)
-						case <-ctx.Done():
-							log.Infof("上下文取消，停止发送音频数据")
-							return nil
-						}
+					if len(rawAudioData) < page {
+						log.Debugf("资源读取完成")
+						return nil
 					}
 				}
 			}
 
+			// 如果这一页没有数据，说明已经读取完毕
 			if !hasData {
-				log.Infof("第%d页无有效音频数据，读取结束", pageCount)
-				break
+				log.Infof("资源读取完成，总共读取 %d 字节，共 %d 页", totalRead, pageCount)
+				return nil
 			}
 
-			start += pageReadBytes
-			log.Infof("第%d页读取完成: %d字节，下一页offset: %d", pageCount, pageReadBytes, start)
-
-			if pageReadBytes < page {
-				log.Infof("第%d页数据不足一页(%d < %d)，读取完成，总字节数: %d", pageCount, pageReadBytes, page, totalRead)
-				break
-			}
+			start += page
 		}
-
-		return nil
 	}()
 
-	musicName := strings.TrimSpace(resourceLink.Name)
-	if musicName == "" {
-		musicName = "tool_resource"
-	}
-	err := l.clientState.SendAudioToClientAsync(ctx, pipeReader, musicName, audioFormat, 0)
+	// 使用music_player播放音乐
+	audioChan, err := play_music.PlayMusicFromPipe(ctx, pipeReader, l.clientState.OutputAudioFormat.SampleRate, l.clientState.OutputAudioFormat.FrameDuration, audioFormat)
 	if err != nil {
-		log.Errorf("发送音频到客户端失败: %v", err)
-		return err
+		wg.Done()
+		log.Errorf("播放音乐失败: %v", err)
+		return fmt.Errorf("播放音乐失败: %v", err)
 	}
+
+	playText := fmt.Sprintf("正在播放音乐: %s", resourceLink.Name)
+	l.serverTransport.SendSentenceStart(playText)
+
 	go func() {
-		<-ctx.Done()
-		log.Debugf("关闭tool pipe reader")
-		pipeReader.Close()
+		defer wg.Done()
+		defer func() {
+			l.serverTransport.SendSentenceEnd(playText)
+			log.Infof("音乐播放完成: %s", resourceLink.Name)
+		}()
+
+		l.ttsManager.SendTTSAudio(ctx, audioChan, true)
 	}()
+
 	return nil
 }
 
 func (l *LLMManager) handleAudioContent(ctx context.Context, realMusicName string, audioContent mcp_go.AudioContent, wg *sync.WaitGroup) error {
 	wg.Add(1)
-	defer wg.Done()
-	audioBytes := audioContent.Data
-	_, err := l.clientState.SendAudioToClient(ctx, audioBytes, realMusicName, util.GetAudioFormatByMimeType(audioContent.MIMEType), 0)
+	rawAudioData, err := base64.StdEncoding.DecodeString(audioContent.Data)
 	if err != nil {
-		return err
+		wg.Done()
+		log.Errorf("解码音频数据失败: %v", err)
+		return fmt.Errorf("解码音频数据失败: %v", err)
 	}
+	audioFormat := util.GetAudioFormatByMimeType(audioContent.MIMEType)
+	// 使用music_player播放音乐
+	audioChan, err := play_music.PlayMusicFromAudioData(ctx, rawAudioData, l.clientState.OutputAudioFormat.SampleRate, l.clientState.OutputAudioFormat.FrameDuration, audioFormat)
+	if err != nil {
+		wg.Done()
+		log.Errorf("播放音乐失败: %v", err)
+		return fmt.Errorf("播放音乐失败: %v", err)
+	}
+
+	playText := fmt.Sprintf("正在播放音乐: %s", realMusicName)
+	l.serverTransport.SendSentenceStart(playText)
+
+	go func() {
+		defer wg.Done()
+		defer func() {
+			l.serverTransport.SendSentenceEnd(playText)
+			log.Infof("音乐播放完成: %s", realMusicName)
+		}()
+		l.ttsManager.SendTTSAudio(ctx, audioChan, true)
+	}()
+
 	return nil
 }
 
