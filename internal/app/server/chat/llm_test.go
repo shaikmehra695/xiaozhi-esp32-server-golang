@@ -2,7 +2,9 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	data_client "xiaozhi-esp32-server-golang/internal/data/client"
 	config_types "xiaozhi-esp32-server-golang/internal/domain/config/types"
@@ -133,6 +135,99 @@ func TestGetMessagesIgnoresToolRoundMessagesOutsideNoneMode(t *testing.T) {
 	}
 	if messages[1].Content != historyUser.Content {
 		t.Fatalf("expected short memory mode to keep dialogue history, got %q", messages[1].Content)
+	}
+}
+
+func TestTTSTurnTrackerWaitBlocksUntilAllDone(t *testing.T) {
+	tracker := newTTSTurnTracker()
+	done1 := tracker.Add()
+	done2 := tracker.Add()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- tracker.Wait(ctx)
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("wait returned too early: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	done1(nil)
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("wait returned before final TTS item completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	done2(nil)
+
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("wait returned unexpected error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait did not return after all TTS items completed")
+	}
+}
+
+func TestTTSTurnTrackerWaitHonorsContextCancellation(t *testing.T) {
+	tracker := newTTSTurnTracker()
+	_ = tracker.Add()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := tracker.Wait(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}
+
+func TestWaitForTTSTurnDrainIfRootSkipsNestedContexts(t *testing.T) {
+	ctx := ensureTTSTurnTrackerInContext(context.Background())
+	tracker := ttsTurnTrackerFromContext(ctx)
+	if tracker == nil {
+		t.Fatal("expected tracker to be stored in context")
+	}
+
+	done := tracker.Add()
+	defer done(nil)
+
+	nestedCtx := context.WithValue(ctx, "nest", 2)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	if err := waitForTTSTurnDrainIfRoot(nestedCtx); err != nil {
+		t.Fatalf("expected nested context wait to be skipped, got %v", err)
+	}
+
+	rootWaitDone := make(chan error, 1)
+	go func() {
+		rootWaitDone <- waitForTTSTurnDrainIfRoot(context.WithValue(ctx, "nest", 1))
+	}()
+
+	select {
+	case err := <-rootWaitDone:
+		t.Fatalf("root wait returned before TTS item completion: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	done(nil)
+
+	select {
+	case err := <-rootWaitDone:
+		if err != nil {
+			t.Fatalf("root wait returned unexpected error: %v", err)
+		}
+	case <-waitCtx.Done():
+		t.Fatal("root wait did not finish after TTS item completion")
 	}
 }
 

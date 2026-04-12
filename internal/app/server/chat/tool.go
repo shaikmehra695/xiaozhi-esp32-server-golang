@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -14,8 +13,6 @@ import (
 	data_client "xiaozhi-esp32-server-golang/internal/data/client"
 	"xiaozhi-esp32-server-golang/internal/domain/eventbus"
 	"xiaozhi-esp32-server-golang/internal/domain/mcp"
-	"xiaozhi-esp32-server-golang/internal/domain/play_music"
-	"xiaozhi-esp32-server-golang/internal/util"
 	log "xiaozhi-esp32-server-golang/logger"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -23,10 +20,15 @@ import (
 	mcp_go "github.com/mark3labs/mcp-go/mcp"
 )
 
+type toolCallResponseSummary struct {
+	invokeToolSuccess bool
+	hasMediaOutput    bool
+}
+
 // handleToolCallResponse 处理工具调用响应
-func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema.Message, tools []schema.ToolCall, executor *toolCallExecutor) (bool, error) {
+func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema.Message, tools []schema.ToolCall, executor *toolCallExecutor) (toolCallResponseSummary, error) {
 	if len(tools) == 0 {
-		return false, nil
+		return toolCallResponseSummary{}, nil
 	}
 
 	log.Infof("处理 %d 个工具调用", len(tools))
@@ -46,6 +48,7 @@ func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema
 	invokeToolSuccess := false
 	findExitTool := false
 	shouldStopLLMProcessing := false
+	hasMediaOutput := false
 
 	results := executor.Wait()
 	for _, result := range results {
@@ -57,6 +60,9 @@ func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema
 		}
 		if result.shouldStopLLMProcessing {
 			shouldStopLLMProcessing = true
+		}
+		if result.hasMediaOutput {
+			hasMediaOutput = true
 		}
 		messageList = append(messageList, result.message)
 	}
@@ -89,7 +95,10 @@ func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema
 			Timestamp:   time.Now(),
 		})
 
-		return invokeToolSuccess, nil
+		return toolCallResponseSummary{
+			invokeToolSuccess: invokeToolSuccess,
+			hasMediaOutput:    hasMediaOutput,
+		}, nil
 	}
 
 	// 如果工具调用成功且没有被标记为停止处理，则继续LLM调用
@@ -97,7 +106,10 @@ func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema
 		l.DoLLmRequest(ctx, nil, l.einoTools, true, nil)
 	}
 
-	return invokeToolSuccess, nil
+	return toolCallResponseSummary{
+		invokeToolSuccess: invokeToolSuccess,
+		hasMediaOutput:    hasMediaOutput,
+	}, nil
 }
 
 type toolCallExecutionResult struct {
@@ -106,6 +118,7 @@ type toolCallExecutionResult struct {
 	invokeToolSuccess       bool
 	findExitTool            bool
 	shouldStopLLMProcessing bool
+	hasMediaOutput          bool
 }
 
 type toolCallExecutor struct {
@@ -225,6 +238,11 @@ func (e *toolCallExecutor) executeToolCall(order int, toolCall schema.ToolCall) 
 		if mcpResp.GetType() == MCPResponseTypeAction && mcpResp.GetAction() == "exit_conversation" {
 			execResult.findExitTool = true
 		}
+		if actionResp, ok := mcpResp.(*MCPActionResponse); ok {
+			if actionResp.FinalAction || actionResp.NoFurtherResponse || actionResp.SilenceLLM {
+				execResult.shouldStopLLMProcessing = true
+			}
+		}
 		contentList = mcpResp.GetContent()
 	} else if toolCallResult, ok := e.manager.handleToolResult(fcResult); ok {
 		if toolCallResult.IsError {
@@ -239,11 +257,12 @@ func (e *toolCallExecutor) executeToolCall(order int, toolCall schema.ToolCall) 
 			if audioContent, ok := content.(mcp_go.AudioContent); ok {
 				log.Debugf("调用工具 %s 返回音频资源长度: %d", toolName, len(audioContent.Data))
 				mcpContent = "执行成功"
-				if err := e.manager.handleAudioContent(e.ctx, mcpContent, audioContent, &e.mediaWg); err != nil {
+				if err := e.manager.handleAudioContent(e.ctx, toolName, audioContent, &e.mediaWg); err != nil {
 					log.Errorf("mcp播放音频资源失败: %v", err)
 					mcpContent = "执行失败"
 				}
 				execResult.shouldStopLLMProcessing = true
+				execResult.hasMediaOutput = true
 				break
 			}
 			if resourceLink, ok := content.(mcp_go.ResourceLink); ok {
@@ -254,6 +273,7 @@ func (e *toolCallExecutor) executeToolCall(order int, toolCall schema.ToolCall) 
 					mcpContent = "执行失败"
 				}
 				execResult.shouldStopLLMProcessing = true
+				execResult.hasMediaOutput = true
 				break
 			}
 			if textContent, ok := content.(mcp_go.TextContent); ok {
@@ -272,148 +292,27 @@ func (e *toolCallExecutor) executeToolCall(order int, toolCall schema.ToolCall) 
 
 func (l *LLMManager) handleResourceLink(ctx context.Context, resourceLink mcp_go.ResourceLink, toolCall tool.InvokableTool, wg *sync.WaitGroup) error {
 	wg.Add(1)
-	//从resourceLink中获取资源
-	client := toolCall.(*mcp.McpTool).GetClient()
 
-	var pipeReader *io.PipeReader
-	var pipeWriter *io.PipeWriter
-	pipeReader, pipeWriter = io.Pipe()
-
-	audioFormat := util.GetAudioFormatByMimeType(resourceLink.MIMEType)
-
-	streamChan := make(chan []byte, 0) // 增加缓冲区大小
-	go func() error {
-		defer func() {
-			close(streamChan)
-		}()
-
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case audioData, ok := <-streamChan:
-					if !ok {
-						pipeWriter.Close()
-						return
-					}
-					if _, err := pipeWriter.Write(audioData); err != nil {
-						log.Errorf("写入pipe失败: %v", err)
-						return
-					}
-				}
-			}
-		}()
-
-		start := 0
-		page := McpReadResourcePageSize
-		totalRead := 0
-		pageCount := 0
-
-		log.Infof("开始读取资源: %s, 分页大小: %d", resourceLink.URI, page)
-
-		for {
-			select {
-			case <-ctx.Done():
-				log.Infof("上下文取消，停止读取资源")
-				return nil
-			default:
-			}
-
-			pageCount++
-			readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			resourceResult, err := client.ReadResource(readCtx, mcp_go.ReadResourceRequest{
-				Params: mcp_go.ReadResourceParams{
-					URI:       resourceLink.URI,
-					Arguments: map[string]any{"url": resourceLink.Description, "start": start, "end": start + page},
-				},
-			})
-			cancel()
-
-			if err != nil {
-				log.Errorf("读取资源失败 (第 %d 页), resourceUri: %s, resourceResult: %+v, err: %v", pageCount, resourceLink.Description, resourceResult, err)
-
-				// 如果是超时错误，尝试重试
-				if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline") {
-					log.Warnf("资源读取超时，尝试重试...")
-					time.Sleep(1 * time.Second)
-					continue
-				}
-
-				return fmt.Errorf("读取资源失败: %v", err)
-			}
-
-			if len(resourceResult.Contents) == 0 {
-				log.Infof("资源读取完成，总共读取 %d 字节，共 %d 页", totalRead, pageCount-1)
-				return nil
-			}
-
-			hasData := false
-
-			for _, content := range resourceResult.Contents {
-				if audioContent, ok := content.(mcp_go.BlobResourceContents); ok {
-					if len(audioContent.Blob) == 0 {
-						log.Debugf("音频数据为空，跳过")
-						continue
-					}
-					log.Debugf("第 %d 页 resourceResult len: %d", pageCount, len(audioContent.Blob))
-					rawAudioData, err := base64.StdEncoding.DecodeString(audioContent.Blob)
-					if err != nil {
-						log.Errorf("解码音频数据失败: %v", err)
-						return fmt.Errorf("解码音频数据失败: %v", err)
-					}
-
-					if string(rawAudioData) == McpReadResourceStreamDoneFlag {
-						log.Debugf("资源读取完成")
-						return nil
-					}
-
-					select {
-					case <-ctx.Done():
-						log.Debugf("资源读取被取消")
-						return nil
-					case streamChan <- rawAudioData:
-						totalRead += len(rawAudioData)
-						hasData = true
-						log.Debugf("成功发送第 %d 页数据，长度: %d, 累计: %d", pageCount, len(rawAudioData), totalRead)
-					}
-
-					if len(rawAudioData) < page {
-						log.Debugf("资源读取完成")
-						return nil
-					}
-				}
-			}
-
-			// 如果这一页没有数据，说明已经读取完毕
-			if !hasData {
-				log.Infof("资源读取完成，总共读取 %d 字节，共 %d 页", totalRead, pageCount)
-				return nil
-			}
-
-			start += page
-		}
-	}()
-
-	// 使用music_player播放音乐
-	audioChan, err := play_music.PlayMusicFromPipe(ctx, pipeReader, l.clientState.OutputAudioFormat.SampleRate, l.clientState.OutputAudioFormat.FrameDuration, audioFormat)
+	source, err := buildMediaSourceFromResourceLink(resourceLink, toolCall)
 	if err != nil {
 		wg.Done()
-		log.Errorf("播放音乐失败: %v", err)
-		return fmt.Errorf("播放音乐失败: %v", err)
+		return err
 	}
 
-	playText := fmt.Sprintf("正在播放音乐: %s", resourceLink.Name)
-	l.serverTransport.SendSentenceStart(playText)
+	if l.session == nil || l.session.mediaPlayer == nil {
+		wg.Done()
+		return fmt.Errorf("session media player 未初始化")
+	}
+
+	handle, err := l.session.mediaPlayer.PlaySourceWithHandle(ctx, source)
+	if err != nil {
+		wg.Done()
+		return err
+	}
 
 	go func() {
 		defer wg.Done()
-		defer func() {
-			l.serverTransport.SendSentenceEnd(playText)
-			log.Infof("音乐播放完成: %s", resourceLink.Name)
-		}()
-
-		l.ttsManager.SendTTSAudio(ctx, audioChan, true)
+		_ = handle.Wait(ctx)
 	}()
 
 	return nil
@@ -421,34 +320,109 @@ func (l *LLMManager) handleResourceLink(ctx context.Context, resourceLink mcp_go
 
 func (l *LLMManager) handleAudioContent(ctx context.Context, realMusicName string, audioContent mcp_go.AudioContent, wg *sync.WaitGroup) error {
 	wg.Add(1)
-	rawAudioData, err := base64.StdEncoding.DecodeString(audioContent.Data)
+
+	source, err := buildMediaSourceFromAudioContent(realMusicName, audioContent)
 	if err != nil {
 		wg.Done()
 		log.Errorf("解码音频数据失败: %v", err)
-		return fmt.Errorf("解码音频数据失败: %v", err)
-	}
-	audioFormat := util.GetAudioFormatByMimeType(audioContent.MIMEType)
-	// 使用music_player播放音乐
-	audioChan, err := play_music.PlayMusicFromAudioData(ctx, rawAudioData, l.clientState.OutputAudioFormat.SampleRate, l.clientState.OutputAudioFormat.FrameDuration, audioFormat)
-	if err != nil {
-		wg.Done()
-		log.Errorf("播放音乐失败: %v", err)
-		return fmt.Errorf("播放音乐失败: %v", err)
+		return err
 	}
 
-	playText := fmt.Sprintf("正在播放音乐: %s", realMusicName)
-	l.serverTransport.SendSentenceStart(playText)
+	if l.session == nil || l.session.mediaPlayer == nil {
+		wg.Done()
+		return fmt.Errorf("session media player 未初始化")
+	}
+
+	handle, err := l.session.mediaPlayer.PlaySourceWithHandle(ctx, source)
+	if err != nil {
+		wg.Done()
+		return err
+	}
 
 	go func() {
 		defer wg.Done()
-		defer func() {
-			l.serverTransport.SendSentenceEnd(playText)
-			log.Infof("音乐播放完成: %s", realMusicName)
-		}()
-		l.ttsManager.SendTTSAudio(ctx, audioChan, true)
+		_ = handle.Wait(ctx)
 	}()
 
 	return nil
+}
+
+func buildMediaSourceFromAudioContent(title string, audioContent mcp_go.AudioContent) (MediaSourceDescriptor, error) {
+	rawAudioData, err := base64.StdEncoding.DecodeString(audioContent.Data)
+	if err != nil {
+		return MediaSourceDescriptor{}, fmt.Errorf("解码音频数据失败: %v", err)
+	}
+
+	title = strings.TrimSpace(title)
+	if title == "" || title == "执行成功" {
+		title = "工具音频"
+	}
+
+	return MediaSourceDescriptor{
+		Title:      title,
+		MIMEType:   audioContent.MIMEType,
+		SourceType: MediaSourceTypeInlineAudio,
+		Meta: map[string]string{
+			"mime_type": audioContent.MIMEType,
+			"source":    string(MediaSourceTypeInlineAudio),
+		},
+		Inline: &InlineAudioSource{
+			Data: rawAudioData,
+		},
+	}, nil
+}
+
+func buildMediaSourceFromResourceLink(resourceLink mcp_go.ResourceLink, toolCall tool.InvokableTool) (MediaSourceDescriptor, error) {
+	mcpTool, ok := toolCall.(*mcp.McpTool)
+	if !ok || mcpTool == nil {
+		return MediaSourceDescriptor{}, fmt.Errorf("resource link 播放仅支持 MCP 远程工具")
+	}
+
+	serverName := mcpTool.GetServerName()
+	endpointSnapshot := mcp.GetServerEndpointSnapshotByName(serverName)
+	directAudioURL := strings.TrimSpace(resourceLink.Description)
+	readArgs := make(map[string]any)
+	if directAudioURL != "" {
+		readArgs["url"] = directAudioURL
+	}
+
+	title := strings.TrimSpace(resourceLink.Name)
+	if title == "" {
+		title = strings.TrimSpace(resourceLink.Description)
+	}
+	if title == "" {
+		title = strings.TrimSpace(resourceLink.URI)
+	}
+
+	toolName := ""
+	if info, err := mcpTool.Info(context.Background()); err == nil && info != nil {
+		toolName = info.Name
+	}
+
+	return MediaSourceDescriptor{
+		Title:      title,
+		MIMEType:   resourceLink.MIMEType,
+		SourceType: MediaSourceTypeMCPResource,
+		Meta: map[string]string{
+			"source":       string(MediaSourceTypeMCPResource),
+			"server_name":  serverName,
+			"endpoint":     endpointSnapshot,
+			"resource_uri": resourceLink.URI,
+			"audio_url":    directAudioURL,
+			"tool_name":    toolName,
+		},
+		MCP: &MCPMediaSource{
+			ServerName:       serverName,
+			EndpointSnapshot: endpointSnapshot,
+			ToolName:         toolName,
+			ResourceURI:      resourceLink.URI,
+			DirectAudioURL:   directAudioURL,
+			Description:      resourceLink.Description,
+			ReadArgs:         readArgs,
+			PageSize:         McpReadResourcePageSize,
+			Client:           mcpTool.GetClient(),
+		},
+	}, nil
 }
 
 func (l *LLMManager) handleLocalToolResult(toolResult string) (MCPResponse, bool) {

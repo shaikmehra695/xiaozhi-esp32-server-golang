@@ -38,6 +38,7 @@ const (
 	ttsStopDelayDuration time.Duration = 200 * time.Millisecond
 	fullTextKey          contextKey    = iota
 	toolRoundMessagesKey
+	ttsTurnTrackerKey
 )
 
 const (
@@ -63,10 +64,91 @@ type LLMResponseChannelItem struct {
 	onEndFunc    func(err error, args ...any)
 }
 
+type llmHandleResult struct {
+	ok                      bool
+	suppressProtocolTtsStop bool
+}
+
+func llmHandleResultFromArgs(args []any) llmHandleResult {
+	if len(args) == 0 {
+		return llmHandleResult{}
+	}
+	result, ok := args[0].(llmHandleResult)
+	if !ok {
+		return llmHandleResult{}
+	}
+	return result
+}
+
 type llmResponseChannelOptions struct {
 	disableTTSCommands bool
 	onStartFunc        func(args ...any)
 	onEndFunc          func(err error, args ...any)
+}
+
+type ttsTurnTracker struct {
+	mu      sync.Mutex
+	pending int
+	doneCh  chan struct{}
+}
+
+func newTTSTurnTracker() *ttsTurnTracker {
+	doneCh := make(chan struct{})
+	close(doneCh)
+	return &ttsTurnTracker{doneCh: doneCh}
+}
+
+func (t *ttsTurnTracker) Add() func(error) {
+	if t == nil {
+		return func(error) {}
+	}
+
+	t.mu.Lock()
+	if t.pending == 0 {
+		t.doneCh = make(chan struct{})
+	}
+	t.pending++
+	t.mu.Unlock()
+
+	var once sync.Once
+	return func(error) {
+		once.Do(func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			if t.pending == 0 {
+				return
+			}
+			t.pending--
+			if t.pending == 0 {
+				close(t.doneCh)
+			}
+		})
+	}
+}
+
+func (t *ttsTurnTracker) Wait(ctx context.Context) error {
+	if t == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	t.mu.Lock()
+	pending := t.pending
+	doneCh := t.doneCh
+	t.mu.Unlock()
+
+	if pending == 0 {
+		return nil
+	}
+
+	select {
+	case <-doneCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type LLMManager struct {
@@ -362,10 +444,13 @@ func (l *LLMManager) processLLMResponseQueue(ctx context.Context) {
 		}
 
 		// 调用 handleLLMResponse，它会从 context 中获取 fullText 和 toolCalls 并填充
-		_, err = l.handleLLMResponse(item.ctx, item.userMessage, item.responseChan)
+		result, err := l.handleLLMResponse(item.ctx, item.userMessage, item.responseChan)
+		if waitErr := waitForTTSTurnDrainIfRoot(item.ctx); err == nil && waitErr != nil {
+			err = waitErr
+		}
 
 		if item.onEndFunc != nil {
-			item.onEndFunc(err)
+			item.onEndFunc(err, result)
 		}
 	}
 }
@@ -441,6 +526,8 @@ func (l *LLMManager) HandleLLMResponseChannelAsyncWithOptions(ctx context.Contex
 }
 
 func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMessage *schema.Message, responseChan chan llm_common.LLMResponseStruct, options llmResponseChannelOptions) error {
+	ctx = ensureTTSTurnTrackerInContext(ctx)
+
 	needSendTtsCmd := true
 	val := ctx.Value("nest")
 	nest := 0
@@ -482,14 +569,17 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 			l.ttsManager.EnqueueTtsStart(ctx)
 		}
 		onEndFunc = func(err error, args ...any) {
+			handleResult := llmHandleResultFromArgs(args)
 			l.clientState.MarkLlmEnd()
 			if l.session != nil {
 				l.session.TraceLlmEnd(ctx, time.Now().UnixMilli(), err)
 			}
 			strFullText := fullText.String()
 
-			// 非 realtime 模式下，由 runSenderLoop 统一发送 TtsStop
-			if !l.clientState.IsRealTime() {
+			if handleResult.suppressProtocolTtsStop {
+				l.ttsManager.FinishTtsWithoutProtocolStop(ctx, err)
+			} else if !l.clientState.IsRealTime() {
+				// 非 realtime 模式下，由 runSenderLoop 统一发送 TtsStop
 				l.ttsManager.EnqueueTtsStop(ctx)
 			}
 			l.ttsManager.RequestTurnEnd(ctx, err)
@@ -550,6 +640,8 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 }
 
 func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessage *schema.Message, llmResponseChannel chan llm_common.LLMResponseStruct, einoTools []*schema.ToolInfo) (bool, error) {
+	ctx = ensureTTSTurnTrackerInContext(ctx)
+
 	needSendTtsCmd := true
 	val := ctx.Value("nest")
 	nest := 0
@@ -583,7 +675,10 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 		l.ttsManager.EnqueueTtsStart(ctx)
 	}
 
-	ok, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
+	result, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
+	if waitErr := waitForTTSTurnDrainIfRoot(ctx); err == nil && waitErr != nil {
+		err = waitErr
+	}
 	l.clientState.MarkLlmEnd()
 	if l.session != nil {
 		l.session.TraceLlmEnd(ctx, time.Now().UnixMilli(), err)
@@ -591,7 +686,9 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 	strFullText := fullText.String()
 
 	if needSendTtsCmd {
-		if !l.clientState.IsRealTime() {
+		if result.suppressProtocolTtsStop {
+			l.ttsManager.FinishTtsWithoutProtocolStop(ctx, err)
+		} else if !l.clientState.IsRealTime() {
 			l.ttsManager.EnqueueTtsStop(ctx)
 		}
 		l.ttsManager.RequestTurnEnd(ctx, err)
@@ -614,7 +711,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 			messageID, ok := l.GetLastMessageID(string(schema.Assistant))
 			if !ok {
 				log.Warnf("TTS 完成时未找到 MessageID，跳过第二阶段音频更新")
-				return ok, err
+				return result.ok, err
 			}
 
 			// 发布事件：第二阶段（更新音频）
@@ -636,11 +733,11 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 		log.Debugf("工具调用后的LLM响应（nest=%d），音频数据将累积到缓存中", nest)
 	}
 
-	return ok, err
+	return result.ok, err
 }
 
 // handleLLMResponse 处理LLM响应
-func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.Message, llmResponseChannel chan llm_common.LLMResponseStruct) (bool, error) {
+func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.Message, llmResponseChannel chan llm_common.LLMResponseStruct) (llmHandleResult, error) {
 	log.Debugf("handleLLMResponse start")
 	defer log.Debugf("handleLLMResponse end")
 
@@ -654,8 +751,14 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 	if l.clientState.GetMemoryMode() == MemoryModeNone && userMessage != nil {
 		toolExecCtx = appendToolRoundMessagesToContext(toolExecCtx, []*schema.Message{userMessage})
 	}
+	ttsTracker := ttsTurnTrackerFromContext(ctx)
+	var onTTSItemEnqueued func() func(error)
+	if ttsTracker != nil {
+		onTTSItemEnqueued = ttsTracker.Add
+	}
 	toolExecutor := newToolCallExecutor(l, toolExecCtx)
 	assistantSaved := false
+	result := llmHandleResult{}
 
 	saveInterruptedAssistant := func() {
 		if assistantSaved {
@@ -685,7 +788,7 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 	case <-ctx.Done():
 		saveInterruptedAssistant()
 		log.Debugf("handleLLMResponse ctx done, return")
-		return false, nil
+		return result, nil
 	default:
 	}
 
@@ -695,7 +798,7 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 			// 上下文已取消，优先处理取消逻辑
 			saveInterruptedAssistant()
 			log.Infof("%s 上下文已取消，停止处理LLM响应, context done, exit", state.DeviceID)
-			return false, nil
+			return result, nil
 		default:
 			// 非阻塞检查，如果ctx没有Done，继续处理LLM响应
 			select {
@@ -703,7 +806,8 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 				if !ok {
 					// 通道已关闭，退出协程
 					log.Infof("LLM 响应通道已关闭，退出协程")
-					return true, nil
+					result.ok = true
+					return result, nil
 				}
 
 				log.Debugf("LLM 响应: %+v", llmResponse)
@@ -717,8 +821,9 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 				hasText := strings.TrimSpace(llmResponse.Text) != ""
 				if hasText || llmResponse.IsStart || llmResponse.IsEnd {
 					// 双流式收尾依赖空文本的 IsEnd 信号，不能只在有文本时才传给 TTS。
-					if err := l.ttsManager.handleTextResponse(ctx, llmResponse, true); err != nil {
-						return true, err
+					if err := l.ttsManager.handleTextResponseWithHooks(ctx, llmResponse, false, onTTSItemEnqueued); err != nil {
+						result.ok = true
+						return result, err
 					}
 				}
 				if hasText {
@@ -759,26 +864,30 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 						}
 					}
 					if len(toolCalls) > 0 {
-						invokeToolSuccess, err := l.handleToolCallResponse(toolExecCtx, schema.AssistantMessage(fullText.String(), toolCalls), toolCalls, toolExecutor)
+						toolSummary, err := l.handleToolCallResponse(toolExecCtx, schema.AssistantMessage(fullText.String(), toolCalls), toolCalls, toolExecutor)
 						if err != nil {
 							log.Errorf("处理工具调用响应失败: %v", err)
-							return true, fmt.Errorf("处理工具调用响应失败: %v", err)
+							result.ok = true
+							return result, fmt.Errorf("处理工具调用响应失败: %v", err)
 						}
-						if !invokeToolSuccess && strings.TrimSpace(llmResponse.Text) != "" {
+						result.suppressProtocolTtsStop = toolSummary.hasMediaOutput
+						if !toolSummary.invokeToolSuccess && strings.TrimSpace(llmResponse.Text) != "" {
 							if err := l.ttsManager.handleTextResponse(ctx, llmResponse, false); err != nil {
-								return true, err
+								result.ok = true
+								return result, err
 							}
 							fullText.WriteString(llmResponse.Text)
 						}
 					}
 
-					return true, nil
+					result.ok = true
+					return result, nil
 				}
 			case <-ctx.Done():
 				// 上下文已取消，退出协程
 				saveInterruptedAssistant()
 				log.Infof("%s 上下文已取消，停止处理LLM响应, context done, exit", state.DeviceID)
-				return false, nil
+				return result, nil
 			}
 		}
 	}
@@ -1122,6 +1231,42 @@ func toolRoundMessagesFromContext(ctx context.Context) []*schema.Message {
 	}
 
 	return cloneMessagesForRequest(messages)
+}
+
+func ttsTurnTrackerFromContext(ctx context.Context) *ttsTurnTracker {
+	if ctx == nil {
+		return nil
+	}
+
+	tracker, ok := ctx.Value(ttsTurnTrackerKey).(*ttsTurnTracker)
+	if !ok {
+		return nil
+	}
+
+	return tracker
+}
+
+func ensureTTSTurnTrackerInContext(ctx context.Context) context.Context {
+	if ttsTurnTrackerFromContext(ctx) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ttsTurnTrackerKey, newTTSTurnTracker())
+}
+
+func waitForTTSTurnDrainIfRoot(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	if nest, ok := ctx.Value("nest").(int); ok && nest > 1 {
+		return nil
+	}
+
+	tracker := ttsTurnTrackerFromContext(ctx)
+	if tracker == nil {
+		return nil
+	}
+
+	return tracker.Wait(ctx)
 }
 
 func appendToolRoundMessagesToContext(ctx context.Context, messages []*schema.Message) context.Context {
