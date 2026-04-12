@@ -22,6 +22,8 @@ import (
 	log "xiaozhi-esp32-server-golang/logger"
 
 	"github.com/cloudwego/eino/schema"
+	mcp_go "github.com/mark3labs/mcp-go/mcp"
+	"github.com/spf13/viper"
 )
 
 const (
@@ -1041,6 +1043,14 @@ func (l *LLMManager) GetMessages(ctx context.Context, userMessage *schema.Messag
 
 	// 构建 system prompt
 	systemPrompt := l.clientState.SystemPrompt
+	globalSystemPrompt := strings.TrimSpace(viper.GetString("chat.global_system_prompt"))
+	if globalSystemPrompt != "" {
+		if systemPrompt != "" {
+			systemPrompt = globalSystemPrompt + "\n\n" + systemPrompt
+		} else {
+			systemPrompt = globalSystemPrompt
+		}
+	}
 
 	// 添加当前时间和日期信息
 	now := time.Now()
