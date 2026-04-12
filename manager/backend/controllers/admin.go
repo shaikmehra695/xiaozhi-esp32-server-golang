@@ -3534,6 +3534,7 @@ func (ac *AdminController) GetChatSettings(c *gin.Context) {
 			"max_idle_duration":         30000,
 			"chat_max_silence_duration": 400,
 			"realtime_mode":             4,
+			"global_system_prompt":      "",
 		},
 	}
 
@@ -3560,6 +3561,9 @@ func (ac *AdminController) GetChatSettings(c *gin.Context) {
 			if realtimeMode, ok := chatData["realtime_mode"].(float64); ok && int(realtimeMode) >= 1 && int(realtimeMode) <= 4 {
 				response["chat"].(gin.H)["realtime_mode"] = int(realtimeMode)
 			}
+			if globalPrompt, ok := chatData["global_system_prompt"].(string); ok {
+				response["chat"].(gin.H)["global_system_prompt"] = strings.TrimSpace(globalPrompt)
+			}
 		}
 	}
 
@@ -3573,9 +3577,10 @@ func (ac *AdminController) UpdateChatSettings(c *gin.Context) {
 			Enable bool `json:"enable"`
 		} `json:"auth"`
 		Chat struct {
-			MaxIdleDuration        int64 `json:"max_idle_duration"`
-			ChatMaxSilenceDuration int64 `json:"chat_max_silence_duration"`
-			RealtimeMode           int   `json:"realtime_mode"`
+			MaxIdleDuration        int64  `json:"max_idle_duration"`
+			ChatMaxSilenceDuration int64  `json:"chat_max_silence_duration"`
+			RealtimeMode           int    `json:"realtime_mode"`
+			GlobalSystemPrompt     string `json:"global_system_prompt"`
 		} `json:"chat"`
 	}
 
@@ -3596,6 +3601,11 @@ func (ac *AdminController) UpdateChatSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "chat.realtime_mode 必须在 1-4 之间"})
 		return
 	}
+	req.Chat.GlobalSystemPrompt = strings.TrimSpace(req.Chat.GlobalSystemPrompt)
+	if len(req.Chat.GlobalSystemPrompt) > 8000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chat.global_system_prompt 长度不能超过 8000 个字符"})
+		return
+	}
 
 	authJSON, err := json.Marshal(map[string]interface{}{
 		"enable": req.Auth.Enable,
@@ -3608,6 +3618,7 @@ func (ac *AdminController) UpdateChatSettings(c *gin.Context) {
 		"max_idle_duration":         req.Chat.MaxIdleDuration,
 		"chat_max_silence_duration": req.Chat.ChatMaxSilenceDuration,
 		"realtime_mode":             req.Chat.RealtimeMode,
+		"global_system_prompt":      req.Chat.GlobalSystemPrompt,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "chat 配置序列化失败"})
@@ -3684,6 +3695,7 @@ func (ac *AdminController) UpdateChatSettings(c *gin.Context) {
 				"max_idle_duration":         req.Chat.MaxIdleDuration,
 				"chat_max_silence_duration": req.Chat.ChatMaxSilenceDuration,
 				"realtime_mode":             req.Chat.RealtimeMode,
+				"global_system_prompt":      req.Chat.GlobalSystemPrompt,
 			},
 		},
 	})

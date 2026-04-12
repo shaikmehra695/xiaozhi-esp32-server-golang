@@ -38,6 +38,19 @@
             <el-option :value="4" label="4 - asr出结果打断" />
           </el-select>
         </el-form-item>
+        <el-form-item label="全局System Prompt描述" prop="chat.global_system_prompt">
+          <el-input
+            v-model="form.chat.global_system_prompt"
+            type="textarea"
+            :rows="6"
+            maxlength="8000"
+            show-word-limit
+            placeholder="该内容会在系统提示词最前面拼接，建议填写平台级约束与身份设定。"
+          />
+          <div class="form-help">
+            生效顺序：全局System Prompt描述 → 角色/设备提示词 → 时间/记忆等运行时信息。
+          </div>
+        </el-form-item>
       </el-form>
     </el-card>
   </div>
@@ -59,7 +72,8 @@ const form = reactive({
   chat: {
     max_idle_duration: 30000,
     chat_max_silence_duration: 400,
-    realtime_mode: 4
+    realtime_mode: 4,
+    global_system_prompt: ''
   }
 })
 
@@ -72,6 +86,9 @@ const rules = {
   ],
   'chat.realtime_mode': [
     { required: true, message: '请选择实时打断模式', trigger: 'change' }
+  ],
+  'chat.global_system_prompt': [
+    { max: 8000, message: '全局System Prompt描述不能超过8000个字符', trigger: 'blur' }
   ]
 }
 
@@ -84,6 +101,7 @@ const loadSettings = async () => {
     form.chat.max_idle_duration = Number(data.chat?.max_idle_duration ?? 30000)
     form.chat.chat_max_silence_duration = Number(data.chat?.chat_max_silence_duration ?? 400)
     form.chat.realtime_mode = Number(data.chat?.realtime_mode ?? 4)
+    form.chat.global_system_prompt = String(data.chat?.global_system_prompt ?? '')
   } catch (error) {
     ElMessage.error('加载聊天设置失败')
     console.error(error)
@@ -106,7 +124,8 @@ const saveSettings = async () => {
       chat: {
         max_idle_duration: Number(form.chat.max_idle_duration),
         chat_max_silence_duration: Number(form.chat.chat_max_silence_duration),
-        realtime_mode: Number(form.chat.realtime_mode)
+        realtime_mode: Number(form.chat.realtime_mode),
+        global_system_prompt: String(form.chat.global_system_prompt || '')
       }
     })
     ElMessage.success('聊天设置保存成功')
