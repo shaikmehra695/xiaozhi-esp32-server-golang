@@ -194,7 +194,14 @@ func (c *ChatManager) LocalMcpSearchKnowledge(ctx context.Context, query string,
 }
 
 func (c *ChatManager) LocalMcpControlMusicPlayback(ctx context.Context, params *MusicPlaybackControlParams) (*MusicPlaybackControlResult, error) {
-	if c == nil || c.session == nil || c.session.mediaPlayer == nil {
+	if c == nil {
+		return nil, fmt.Errorf("chat manager 不可用")
+	}
+	return controlMusicPlayback(ctx, c.session, params)
+}
+
+func controlMusicPlayback(ctx context.Context, session *ChatSession, params *MusicPlaybackControlParams) (*MusicPlaybackControlResult, error) {
+	if session == nil || session.mediaPlayer == nil {
 		return nil, fmt.Errorf("媒体播放器不可用")
 	}
 	if params == nil {
@@ -213,41 +220,41 @@ func (c *ChatManager) LocalMcpControlMusicPlayback(ctx context.Context, params *
 
 	switch action {
 	case "resume":
-		if err := c.session.mediaPlayer.Play(ctx); err != nil {
+		if err := session.mediaPlayer.Play(ctx); err != nil {
 			return nil, err
 		}
 	case "pause":
-		if err := c.session.mediaPlayer.Pause(); err != nil {
+		if err := session.mediaPlayer.Pause(); err != nil {
 			return nil, err
 		}
 	case "stop":
-		if err := c.session.mediaPlayer.Stop(ctx); err != nil {
+		if err := session.mediaPlayer.Stop(ctx); err != nil {
 			return nil, err
 		}
 	case "prev":
-		if err := c.session.mediaPlayer.Prev(ctx); err != nil {
+		if err := session.mediaPlayer.Prev(ctx); err != nil {
 			return nil, err
 		}
 	case "next":
-		if err := c.session.mediaPlayer.Next(ctx); err != nil {
+		if err := session.mediaPlayer.Next(ctx); err != nil {
 			return nil, err
 		}
 	case "play_playlist":
-		if err := c.session.mediaPlayer.PlayAgentPlaylist(ctx); err != nil {
+		if err := session.mediaPlayer.PlayAgentPlaylist(ctx); err != nil {
 			return nil, err
 		}
 	case "enqueue_current":
-		appendResult, err := c.session.mediaPlayer.AppendCurrentToPlaylist()
+		appendResult, err := session.mediaPlayer.AppendCurrentToPlaylist()
 		if err != nil {
 			return nil, err
 		}
 		result.AddedTitle = appendResult.AddedTitle
-		if _, err := c.session.mediaPlayer.ResumeIfInterruptedPause(); err != nil {
+		if _, err := session.mediaPlayer.ResumeIfInterruptedPause(); err != nil {
 			log.Warnf("enqueue_current 自动恢复播放失败: %v", err)
 		}
 	}
 
-	state := c.session.mediaPlayer.GetState()
+	state := session.mediaPlayer.GetState()
 	result.Status = state.Status.String()
 	result.CurrentTitle = state.CurrentTitle
 	result.CurrentIndex = state.CurrentIndex

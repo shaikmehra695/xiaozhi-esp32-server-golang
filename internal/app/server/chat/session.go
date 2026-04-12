@@ -213,6 +213,10 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 		clientState.MarkAsrFirstText()
 		s.TraceAsrFirstText(clientState.Ctx, time.Now().UnixMilli())
 		if clientState.IsRealTime() && viper.GetInt("chat.realtime_mode") == 4 {
+			if s.isRealtimeMcpAudioGateActive() {
+				log.Debugf("设备 %s realtime媒体播放门控激活，跳过ASR首字打断: text=%s", clientState.DeviceID, text)
+				return
+			}
 			clientState.AfterAsrSessionCtx.CancelWithReason("ChatSession.OnAsrFirstTextCallback: realtime_mode=4")
 			s.InterruptAndClearTTSQueue()
 		}
@@ -1421,6 +1425,11 @@ func (s *ChatSession) actionDoChat(ctx context.Context, text string, speakerResu
 	deviceID := strings.TrimSpace(s.clientState.DeviceID)
 	openclawSessionID := strings.TrimSpace(s.clientState.SessionID)
 	trimmedText := strings.TrimSpace(text)
+
+	handledByRealtimeGate, gateErr := s.tryHandleRealtimeMcpAudioASR(ctx, trimmedText)
+	if handledByRealtimeGate {
+		return gateErr
+	}
 
 	openclawManager := openclaw.GetManager()
 	if s.clientState.DeviceConfig.OpenClaw.Allowed {
