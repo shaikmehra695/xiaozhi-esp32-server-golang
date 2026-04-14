@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -12,12 +14,38 @@ type McpClientPool struct {
 }
 
 var mcpClientPool *McpClientPool
+var currentDeviceTransportResolver func(deviceID string) string
+var currentDeviceTransportResolverMu sync.RWMutex
 
 func init() {
 	mcpClientPool = &McpClientPool{
 		device2McpClient: cmap.New[*DeviceMcpSession](),
 	}
 	go mcpClientPool.checkOffline()
+}
+
+func RegisterCurrentDeviceTransportResolver(resolver func(deviceID string) string) {
+	currentDeviceTransportResolverMu.Lock()
+	defer currentDeviceTransportResolverMu.Unlock()
+	currentDeviceTransportResolver = resolver
+}
+
+func ResolveCurrentDeviceTransport(deviceID string) (string, bool) {
+	currentDeviceTransportResolverMu.RLock()
+	resolver := currentDeviceTransportResolver
+	currentDeviceTransportResolverMu.RUnlock()
+	if resolver == nil {
+		return "", false
+	}
+	transportType := strings.TrimSpace(resolver(deviceID))
+	if transportType == "" {
+		return "", false
+	}
+	transportType = normalizeDeviceTransportType(transportType)
+	if transportType == "unknown" {
+		return "", false
+	}
+	return transportType, true
 }
 
 func (p *McpClientPool) GetMcpClient(deviceID string) *DeviceMcpSession {

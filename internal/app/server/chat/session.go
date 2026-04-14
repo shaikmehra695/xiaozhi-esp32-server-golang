@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -15,8 +14,6 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/spf13/viper"
 
-	"xiaozhi-esp32-server-golang/internal/app/server/auth"
-	types_conn "xiaozhi-esp32-server-golang/internal/app/server/types"
 	. "xiaozhi-esp32-server-golang/internal/data/client"
 	"xiaozhi-esp32-server-golang/internal/data/history"
 	. "xiaozhi-esp32-server-golang/internal/data/msg"
@@ -42,6 +39,12 @@ type AsrResponseChannelItem struct {
 	speakerResult *speaker.IdentifyResult
 }
 
+const (
+	chatSessionCloseReasonManagerShutdown = "manager_shutdown"
+	chatSessionCloseReasonExplicitExit    = "explicit_exit"
+	chatSessionCloseReasonFatalError      = "fatal_error"
+)
+
 type ChatSession struct {
 	clientState     *ClientState
 	asrManager      *ASRManager
@@ -62,9 +65,6 @@ type ChatSession struct {
 	speakerResultReady     chan struct{} // 仅用于通知就绪，不传数据
 	turnSpeakerInterrupted atomic.Bool
 
-	// hello 幂等控制：MQTT-UDP 短时离线重连会重复发送 hello，避免重复初始化造成资源泄漏。
-	helloMu        sync.Mutex
-	helloInited    bool
 	vadLoopStarted bool
 	listenStartSeq atomic.Uint64
 
@@ -74,7 +74,6 @@ type ChatSession struct {
 
 	// Close 保护，防止多次关闭
 	closeOnce sync.Once
-	closed    bool
 
 	// stopSpeaking 保护，防止与 AddAsrResultToQueue/HandleWelcome 并发冲突
 	stopSpeakingMu sync.Mutex
@@ -85,12 +84,17 @@ type ChatSession struct {
 	openClawWarmupMu sync.Mutex
 	openClawWarmup   *openClawWarmupTask
 
-	mcpTransport *McpTransport
-
-	hookHub *chathooks.Hub
+	hookHub      *chathooks.Hub
+	closeHandler func(reason string)
 }
 
 type ChatSessionOption func(*ChatSession)
+
+func WithChatSessionCloseHandler(handler func(reason string)) ChatSessionOption {
+	return func(s *ChatSession) {
+		s.closeHandler = handler
+	}
+}
 
 func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, hookHub *chathooks.Hub, transformRegistry *streamtransform.Registry, opts ...ChatSessionOption) *ChatSession {
 	s := &ChatSession{
@@ -99,11 +103,7 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 		chatTextQueue:      util.NewQueue[AsrResponseChannelItem](10),
 		speakerResultReady: make(chan struct{}, 1), // 缓冲为1，避免阻塞
 		openClawStreams:    make(map[string]chan llm_common.LLMResponseStruct),
-		mcpTransport: &McpTransport{
-			Client:          clientState,
-			ServerTransport: serverTransport,
-		},
-		hookHub: hookHub,
+		hookHub:            hookHub,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -234,6 +234,10 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 func (s *ChatSession) Start(pctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(pctx)
 
+	if s.clientState.InputAudioFormat.SampleRate <= 0 || s.clientState.InputAudioFormat.Channels <= 0 {
+		return fmt.Errorf("输入音频格式未初始化，请先完成 hello 握手")
+	}
+
 	err := s.InitAsrLlmTts()
 	if err != nil {
 		log.Errorf("初始化ASR/LLM/TTS失败: %v", err)
@@ -248,8 +252,13 @@ func (s *ChatSession) Start(pctx context.Context) error {
 		}
 	}()
 
-	go s.CmdMessageLoop(s.ctx)   //处理信令消息
-	go s.AudioMessageLoop(s.ctx) //处理音频数据
+	if !s.vadLoopStarted {
+		s.asrManager.ProcessVadAudio(s.ctx, func() {
+			s.CloseWithReason(chatSessionCloseReasonFatalError)
+		})
+		s.vadLoopStarted = true
+	}
+
 	go s.processChatText(s.ctx)  //处理 asr后 的对话消息
 	go s.llmManager.Start(s.ctx) //处理 llm后 的一系列返回消息
 	go s.ttsManager.Start(s.ctx) //处理 tts的 消息队列
@@ -419,102 +428,6 @@ func (c *ChatSession) InitAsrLlmTts() error {
 	return nil
 }
 
-func (c *ChatSession) CmdMessageLoop(ctx context.Context) {
-	recvFailCount := 0
-	for {
-		select {
-		case <-ctx.Done():
-			log.Infof("设备 %s recvCmd context cancel", c.clientState.DeviceID)
-			return
-		default:
-		}
-
-		if recvFailCount > 3 {
-			log.Errorf("recv cmd timeout: %v", recvFailCount)
-			return
-		}
-
-		message, err := c.serverTransport.RecvCmd(ctx, 120)
-		if err != nil {
-			log.Errorf("recv cmd error: %v", err)
-			recvFailCount = recvFailCount + 1
-			continue
-		}
-		if message == nil {
-			continue
-		}
-		recvFailCount = 0
-		log.Infof("收到文本消息: %s", string(message))
-		if err := c.HandleTextMessage(message); err != nil {
-			log.Errorf("处理文本消息失败: %v, 消息内容: %s", err, string(message))
-			continue
-		}
-	}
-}
-
-func (c *ChatSession) AudioMessageLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Debugf("设备 %s recvCmd context cancel", c.clientState.DeviceID)
-			return
-		default:
-		}
-		message, err := c.serverTransport.RecvAudio(ctx, 600)
-		if err != nil {
-			log.Errorf("recv audio error: %v", err)
-			return
-		}
-		if message == nil {
-			continue
-		}
-		log.Debugf("收到音频数据，大小: %d 字节", len(message))
-		isAuth := viper.GetBool("auth.enable")
-		if isAuth {
-			if !c.clientState.IsActivated {
-				log.Debugf("设备 %s 未激活, 跳过音频数据", c.clientState.DeviceID)
-				continue
-			}
-		}
-		if c.clientState.GetClientVoiceStop() {
-			log.Debug("客户端停止说话, 跳过音频数据")
-			continue
-		}
-
-		if ok := c.HandleAudioMessage(message); !ok {
-			log.Errorf("音频缓冲区已满: %v", err)
-		}
-	}
-}
-
-// handleTextMessage 处理文本消息
-func (c *ChatSession) HandleTextMessage(message []byte) error {
-	var clientMsg ClientMessage
-	if err := json.Unmarshal(message, &clientMsg); err != nil {
-		log.Errorf("解析消息失败: %v", err)
-		return fmt.Errorf("解析消息失败: %v", err)
-	}
-
-	// 处理不同类型的消息
-	switch clientMsg.Type {
-	case MessageTypeHello:
-		return c.HandleHelloMessage(&clientMsg)
-	case MessageTypeListen:
-		return c.HandleListenMessage(&clientMsg)
-	case MessageTypeAbort:
-		return c.HandleAbortMessage(&clientMsg)
-	case MessageTypeIot:
-		return c.HandleIoTMessage(&clientMsg)
-	case MessageTypeMcp:
-		return c.HandleMcpMessage(&clientMsg)
-	case MessageTypeGoodBye:
-		return c.HandleGoodByeMessage(&clientMsg)
-	default:
-		// 未知消息类型，直接回显
-		return fmt.Errorf("未知消息类型: %s", clientMsg.Type)
-	}
-}
-
 // HandleAudioMessage 处理音频消息
 func (c *ChatSession) HandleAudioMessage(data []byte) bool {
 	select {
@@ -524,162 +437,6 @@ func (c *ChatSession) HandleAudioMessage(data []byte) bool {
 		log.Warnf("音频缓冲区已满, 丢弃音频数据")
 	}
 	return false
-}
-
-// handleHelloMessage 处理 hello 消息
-func (s *ChatSession) HandleHelloMessage(msg *ClientMessage) error {
-	if msg.Transport == types_conn.TransportTypeWebsocket {
-		return s.HandleWebsocketHelloMessage(msg)
-	} else if msg.Transport == types_conn.TransportTypeMqttUdp {
-		return s.HandleMqttHelloMessage(msg)
-	}
-	return fmt.Errorf("不支持的传输类型: %s", msg.Transport)
-}
-
-func (s *ChatSession) HandleMqttHelloMessage(msg *ClientMessage) error {
-	if err := s.HandleCommonHelloMessage(msg); err != nil {
-		return err
-	}
-
-	clientState := s.clientState
-
-	udpExternalHost := viper.GetString("udp.external_host")
-	udpExternalPort := viper.GetInt("udp.external_port")
-
-	aesKey, err := s.serverTransport.GetData("aes_key")
-	if err != nil {
-		return fmt.Errorf("获取aes_key失败: %v", err)
-	}
-	fullNonce, err := s.serverTransport.GetData("full_nonce")
-	if err != nil {
-		return fmt.Errorf("获取full_nonce失败: %v", err)
-	}
-
-	strAesKey, ok := aesKey.(string)
-	if !ok {
-		return fmt.Errorf("aes_key不是字符串")
-	}
-	strFullNonce, ok := fullNonce.(string)
-	if !ok {
-		return fmt.Errorf("full_nonce不是字符串")
-	}
-
-	udpConfig := &UdpConfig{
-		Server: udpExternalHost,
-		Port:   udpExternalPort,
-		Key:    strAesKey,
-		Nonce:  strFullNonce,
-	}
-
-	// 发送响应
-	return s.serverTransport.SendHello("udp", &clientState.OutputAudioFormat, udpConfig)
-}
-
-func (s *ChatSession) HandleCommonHelloMessage(msg *ClientMessage) error {
-	if msg.AudioParams == nil {
-		return fmt.Errorf("hello消息缺少audio_params")
-	}
-
-	clientState := s.clientState
-
-	s.helloMu.Lock()
-	defer s.helloMu.Unlock()
-
-	// hello 到来时允许更新部分运行时参数（重复 hello 场景也生效）
-	clientState.InputAudioFormat = *msg.AudioParams
-
-	isDuplicateHello := s.helloInited
-	if isDuplicateHello {
-		prevAgentID := clientState.AgentID
-		// 仅在重复 hello 场景尝试刷新设备维度配置；失败时降级处理，不阻断 hello
-		if err := s.refreshDeviceConfigOnHello(); err != nil {
-			log.Warnf("设备 %s duplicate hello 刷新配置失败，降级继续: %v", clientState.DeviceID, err)
-		}
-		s.resetOpenClawModeOnHello(prevAgentID, clientState.AgentID)
-		if isMcp, ok := msg.Features["mcp"]; ok && isMcp {
-			go initMcp(s.clientState.DeviceID, s.mcpTransport)
-		}
-		log.Infof("设备 %s 收到重复hello，跳过重复初始化", clientState.DeviceID)
-		return nil
-	}
-
-	// 首次 hello 初始化
-	s.resetOpenClawModeOnHello(clientState.AgentID)
-	session, err := auth.A().CreateSession(msg.DeviceID)
-	if err != nil {
-		return fmt.Errorf("创建会话失败: %v", err)
-	}
-
-	// 更新客户端状态
-	clientState.SessionID = session.ID
-
-	if !s.vadLoopStarted {
-		s.asrManager.ProcessVadAudio(clientState.Ctx, s.Close)
-		s.vadLoopStarted = true
-	}
-
-	if isMcp, ok := msg.Features["mcp"]; ok && isMcp {
-		go initMcp(s.clientState.DeviceID, s.mcpTransport)
-	}
-
-	s.helloInited = true
-	return nil
-}
-
-func (s *ChatSession) resetOpenClawModeOnHello(agentIDs ...string) {
-	deviceID := strings.TrimSpace(s.clientState.DeviceID)
-	if deviceID == "" {
-		return
-	}
-
-	openclawManager := openclaw.GetManager()
-	seen := make(map[string]struct{}, len(agentIDs))
-	for _, agentID := range agentIDs {
-		agentID = strings.TrimSpace(agentID)
-		if agentID == "" {
-			continue
-		}
-		if _, exists := seen[agentID]; exists {
-			continue
-		}
-		seen[agentID] = struct{}{}
-		if openclawManager.ExitMode(agentID, deviceID) {
-			log.Infof("设备 %s 在 hello 后重置OpenClaw模式: agent=%s", deviceID, agentID)
-		}
-	}
-}
-
-func (s *ChatSession) refreshDeviceConfigOnHello() error {
-	configProvider, err := user_config.GetProvider(viper.GetString("config_provider.type"))
-	if err != nil {
-		return fmt.Errorf("获取配置提供者失败: %w", err)
-	}
-
-	deviceConfig, err := configProvider.GetUserConfig(s.clientState.Ctx, s.clientState.DeviceID)
-	if err != nil {
-		return fmt.Errorf("获取设备配置失败: %w", err)
-	}
-	deviceConfig.MemoryMode = NormalizeMemoryMode(deviceConfig.MemoryMode)
-
-	prevAgentID := s.clientState.AgentID
-	s.clientState.AgentID = deviceConfig.AgentId
-	s.clientState.DeviceConfig = deviceConfig
-	s.clientState.SystemPrompt = deviceConfig.SystemPrompt
-	// 角色可能已切换，清空声纹临时TTS配置，避免旧配置污染
-	s.clientState.SpeakerTTSConfig = nil
-	applyOutputAudioFormatForTTS(s.clientState)
-
-	log.Infof("设备 %s hello 刷新配置成功，agent: %s -> %s", s.clientState.DeviceID, prevAgentID, deviceConfig.AgentId)
-	return nil
-}
-
-func (s *ChatSession) HandleWebsocketHelloMessage(msg *ClientMessage) error {
-	err := s.HandleCommonHelloMessage(msg)
-	if err != nil {
-		return err
-	}
-
-	return s.serverTransport.SendHello("websocket", &s.clientState.OutputAudioFormat, nil)
 }
 
 // handleListenMessage 处理监听消息
@@ -1032,38 +789,6 @@ func (s *ChatSession) HandleAbortMessage(msg *ClientMessage) error {
 	return nil
 }
 
-// handleIoTMessage 处理物联网消息
-func (s *ChatSession) HandleIoTMessage(msg *ClientMessage) error {
-	// 获取客户端状态
-	//sessionID := clientState.SessionID
-
-	// 验证设备ID
-	/*
-		if _, err := s.authManager.GetSession(msg.DeviceID); err != nil {
-			return fmt.Errorf("会话验证失败: %v", err)
-		}*/
-
-	// 发送 IoT 响应
-	err := s.serverTransport.SendIot(msg)
-	if err != nil {
-		return fmt.Errorf("发送响应失败: %v", err)
-	}
-
-	// 记录日志
-	log.Infof("设备 %s 物联网指令: %s", msg.DeviceID, msg.Text)
-	return nil
-}
-
-func (s *ChatSession) HandleMcpMessage(msg *ClientMessage) error {
-	return mcp.HandleDeviceIotMcpMessage(s.clientState.DeviceID, s.mcpTransport.GetMcpTransportType(), msg.PayLoad)
-}
-
-// 释放udp资源
-func (s *ChatSession) HandleGoodByeMessage(msg *ClientMessage) error {
-	s.serverTransport.transport.CloseAudioChannel()
-	return nil
-}
-
 func (s *ChatSession) CheckDeviceActivated() (bool, error) {
 	if viper.GetBool("auth.enable") {
 		if !s.clientState.IsActivated {
@@ -1224,7 +949,7 @@ func (s *ChatSession) OnListenStart(startSeq uint64) error {
 		if s.isCurrentListenStart(startSeq) {
 			s.clientState.SetListenPhase(ListenPhaseIdle)
 		}
-		s.Close()
+		s.CloseWithReason(chatSessionCloseReasonFatalError)
 		return err
 	}
 
@@ -1255,7 +980,7 @@ func (s *ChatSession) OnListenStart(startSeq uint64) error {
 	// 定义错误处理回调
 	onError := func(err error) {
 		log.Errorf("ASR识别循环错误: %v", err)
-		s.Close()
+		s.CloseWithReason(chatSessionCloseReasonFatalError)
 	}
 
 	// 启动ASR识别结果处理循环（资源管理在 ASRManager 内部）
@@ -1354,10 +1079,14 @@ func (s *ChatSession) DoExitChat() {
 	s.ttsManager.RequestTurnEnd(ctx, err)
 	s.ttsManager.EnqueueTtsStop(ctx)
 	// 关闭会话
-	s.Close()
+	s.CloseWithReason(chatSessionCloseReasonExplicitExit)
 }
 
 func (s *ChatSession) Close() {
+	s.CloseWithReason(chatSessionCloseReasonManagerShutdown)
+}
+
+func (s *ChatSession) CloseWithReason(reason string) {
 	s.closeOnce.Do(func() {
 		// 清理ASR资源（资源管理在 ASRManager 内部）
 		if s.asrManager != nil {
@@ -1387,17 +1116,8 @@ func (s *ChatSession) Close() {
 		// 这里不要再次 Suspend 媒体，否则会把 resumeOnAttach 清掉。
 		s.stopSpeakingWithLock(true, true, false)
 
-		// 关闭服务端传输
-		if s.serverTransport != nil {
-			s.serverTransport.Close()
-		}
-
 		if s.speakerManager != nil {
 			s.speakerManager.Close()
-		}
-
-		if s.hookHub != nil {
-			s.hookHub.Close()
 		}
 
 		if s.clientState != nil {
@@ -1405,6 +1125,10 @@ func (s *ChatSession) Close() {
 		}
 
 		log.Debugf("ChatSession.Close() 会话资源清理完成, 设备 %s", deviceID)
+
+		if s.closeHandler != nil {
+			s.closeHandler(reason)
+		}
 	})
 }
 
@@ -1543,7 +1267,12 @@ func (s *ChatSession) actionDoChat(ctx context.Context, text string, speakerResu
 	}
 
 	// 获取全局MCP工具列表
-	mcpTools, err := mcp.GetToolsByDeviceId(clientState.DeviceID, clientState.AgentID, clientState.DeviceConfig.MCPServiceNames)
+	mcpTools, err := mcp.GetToolsByDeviceIdWithTransport(
+		clientState.DeviceID,
+		clientState.AgentID,
+		s.serverTransport.GetTransportType(),
+		clientState.DeviceConfig.MCPServiceNames,
+	)
 	if err != nil {
 		log.Errorf("获取设备 %s 的工具失败: %v", clientState.DeviceID, err)
 		mcpTools = make(map[string]tool.InvokableTool)

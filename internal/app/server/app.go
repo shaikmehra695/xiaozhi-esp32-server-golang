@@ -41,6 +41,13 @@ func NewApp() *App {
 	app := &App{
 		chatManagers: cmap.New[*chat.ChatManager](),
 	}
+	mcp.RegisterCurrentDeviceTransportResolver(func(deviceID string) string {
+		chatManager, exists := app.GetChatManager(deviceID)
+		if !exists || chatManager == nil {
+			return ""
+		}
+		return chatManager.GetTransportType()
+	})
 	app.wsServer = app.newWebSocketServer()
 	app.mqttUdpAdapter, err = app.newMqttUdpAdapter()
 	if err != nil {

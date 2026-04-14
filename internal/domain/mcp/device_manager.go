@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,18 @@ type DeviceMcpSession struct {
 	iotMux                sync.RWMutex
 }
 
+func normalizeDeviceTransportType(transportType string) string {
+	transportType = strings.TrimSpace(transportType)
+	if transportType == "" {
+		return "unknown"
+	}
+	return transportType
+}
+
+func buildIotServerName(deviceID, transportType string) string {
+	return fmt.Sprintf("iot_over_mcp_%s_%s", deviceID, normalizeDeviceTransportType(transportType))
+}
+
 func (dcs *DeviceMcpSession) AddWsEndPointMcp(mcpClient *McpClientInstance) {
 	dcs.wsEndPointMcp.Store(mcpClient.serverName, mcpClient)
 
@@ -34,13 +47,10 @@ func (dcs *DeviceMcpSession) AddWsEndPointMcp(mcpClient *McpClientInstance) {
 	mcpClient.refreshTools()
 }
 
-// todo
 func (dcs *DeviceMcpSession) SetIotOverMcp(transportType string, mcpClient *McpClientInstance) {
 	dcs.iotMux.Lock()
 	defer dcs.iotMux.Unlock()
-	if transportType == "" {
-		transportType = "unknown"
-	}
+	transportType = normalizeDeviceTransportType(transportType)
 	// 同 device + transportType 保持单实例
 	if old := dcs.iotOverMcpByTransport[transportType]; old != nil && old != mcpClient {
 		old.connected = false
@@ -50,8 +60,6 @@ func (dcs *DeviceMcpSession) SetIotOverMcp(transportType string, mcpClient *McpC
 
 	// 设置关闭回调
 	mcpClient.SetOnCloseHandler(dcs.handleMcpClientClose)
-
-	mcpClient.refreshTools()
 }
 
 func (dcs *DeviceMcpSession) RemoveWsEndPointMcp(mcpClient *McpClientInstance) {
@@ -69,12 +77,23 @@ func (dcs *DeviceMcpSession) handleMcpClientClose(instance *McpClientInstance, r
 
 	// 从会话中移除已关闭的客户端
 	dcs.RemoveWsEndPointMcp(instance)
+	dcs.removeIotOverMcpByInstance(instance)
 
 	// 如果所有WebSocket端点都关闭了，可以考虑清理整个会话
 	/*if len(dcs.wsEndPointMcp) == 0 && dcs.iotOverMcp == nil {
 		logger.Infof("设备 %s 的所有MCP连接已关闭，清理会话", dcs.deviceID)
 		dcs.cancel()
 	}*/
+}
+
+func (dcs *DeviceMcpSession) removeIotOverMcpByInstance(instance *McpClientInstance) {
+	dcs.iotMux.Lock()
+	defer dcs.iotMux.Unlock()
+	for transportType, iotClient := range dcs.iotOverMcpByTransport {
+		if iotClient == instance {
+			delete(dcs.iotOverMcpByTransport, transportType)
+		}
+	}
 }
 
 // McpClientInstance 代表一个具体的MCP客户端连接
@@ -141,7 +160,7 @@ func NewWsEndPointMcpClient(ctx context.Context, deviceID string, conn *websocke
 	return wsEndPointMcp
 }
 
-func NewIotOverMcpClient(deviceID string, conn ConnInterface) *McpClientInstance {
+func NewIotOverMcpClient(deviceID string, transportType string, conn ConnInterface) *McpClientInstance {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	wsTransport, err := NewIotOverMcpTransport(conn)
@@ -152,7 +171,7 @@ func NewIotOverMcpClient(deviceID string, conn ConnInterface) *McpClientInstance
 	mcpClient := client.NewClient(wsTransport)
 
 	iotOverMcp := &McpClientInstance{
-		serverName: fmt.Sprintf("iot_over_mcp_%s", deviceID),
+		serverName: buildIotServerName(deviceID, transportType),
 		mcpClient:  mcpClient,
 		tools:      make(map[string]tool.InvokableTool),
 		Ctx:        ctx,
@@ -166,14 +185,26 @@ func NewIotOverMcpClient(deviceID string, conn ConnInterface) *McpClientInstance
 	// 设置transport的关闭回调
 	wsTransport.SetOnCloseHandler(iotOverMcp.handleTransportClose)
 
-	iotOverMcp.sendInitlize(ctx)
-	iotOverMcp.mcpClient.Start(ctx)
-
 	return iotOverMcp
+}
+
+func (dc *McpClientInstance) startIotOverMcp() error {
+	if err := dc.sendInitlize(dc.Ctx); err != nil {
+		return err
+	}
+	dc.mcpClient.Start(dc.Ctx)
+	return dc.refreshTools()
 }
 
 // refreshToolsCommon 通用的工具列表刷新逻辑
 func (dc *McpClientInstance) refreshTools() error {
+	if dc == nil || dc.mcpClient == nil {
+		return fmt.Errorf("mcp client未初始化")
+	}
+	if dc.serverInfo == nil {
+		return fmt.Errorf("client not initialized")
+	}
+
 	tools, err := dc.mcpClient.ListTools(dc.Ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		logger.Errorf("刷新工具列表失败: %v", err)
@@ -193,17 +224,21 @@ func (dc *McpClientInstance) GetServerName() string {
 	return dc.serverName
 }
 
+func (dc *McpClientInstance) IsInitialized() bool {
+	return dc != nil && dc.serverInfo != nil
+}
+
 func (dc *DeviceMcpSession) refreshToolsAndPing() {
 	// 只在初始化时获取一次工具列表
 	findTools := func(mcpInstance *McpClientInstance) {
-		if mcpInstance == nil {
+		if mcpInstance == nil || !mcpInstance.IsInitialized() {
 			return
 		}
 		mcpInstance.refreshTools()
 	}
 
 	ping := func(mcpInstance *McpClientInstance) {
-		if mcpInstance == nil {
+		if mcpInstance == nil || !mcpInstance.IsInitialized() {
 			return
 		}
 		err := mcpInstance.mcpClient.Ping(mcpInstance.Ctx)
@@ -388,6 +423,103 @@ func (dc *DeviceMcpSession) GetWsEndpointMcpTools() map[string]tool.InvokableToo
 		return true
 	})
 	return tools
+}
+
+// GetPreferredIotTransportType 返回当前设备最适合用于设备维度 MCP 查询/调用的 transport。
+// 优先选择仍处于 connected 状态且最近有心跳的 transport；如果都不活跃，则退回最近一次存在的 transport。
+func (dc *DeviceMcpSession) GetPreferredIotTransportType() string {
+	dc.iotMux.RLock()
+	defer dc.iotMux.RUnlock()
+
+	preferredTransport := ""
+	var preferredClient *McpClientInstance
+	isSupportedTransport := func(transportType string) bool {
+		switch normalizeDeviceTransportType(transportType) {
+		case "websocket", "udp", "mqtt_udp":
+			return true
+		default:
+			return false
+		}
+	}
+
+	selectPreferred := func(connectedOnly bool) string {
+		preferredTransport = ""
+		preferredClient = nil
+		for transportType, iotClient := range dc.iotOverMcpByTransport {
+			transportType = normalizeDeviceTransportType(transportType)
+			if iotClient == nil {
+				continue
+			}
+			if !isSupportedTransport(transportType) {
+				continue
+			}
+			if connectedOnly && !iotClient.IsConnected() {
+				continue
+			}
+			if preferredClient == nil {
+				preferredTransport = transportType
+				preferredClient = iotClient
+				continue
+			}
+			if iotClient.lastPing.After(preferredClient.lastPing) {
+				preferredTransport = transportType
+				preferredClient = iotClient
+				continue
+			}
+			if iotClient.lastPing.Equal(preferredClient.lastPing) && transportType < preferredTransport {
+				preferredTransport = transportType
+				preferredClient = iotClient
+			}
+		}
+		return preferredTransport
+	}
+
+	if transportType := selectPreferred(true); transportType != "" {
+		return transportType
+	}
+	return selectPreferred(false)
+}
+
+func (dc *DeviceMcpSession) GetIotToolsByTransport(transportType string) map[string]tool.InvokableTool {
+	transportType = strings.TrimSpace(transportType)
+	tools := make(map[string]tool.InvokableTool)
+	if transportType == "" {
+		return tools
+	}
+
+	dc.iotMux.RLock()
+	iotClient := dc.iotOverMcpByTransport[transportType]
+	dc.iotMux.RUnlock()
+	if iotClient == nil {
+		return tools
+	}
+
+	iotClient.toolsMux.RLock()
+	for k, v := range iotClient.tools {
+		tools[k] = v
+	}
+	iotClient.toolsMux.RUnlock()
+
+	return tools
+}
+
+func (dc *DeviceMcpSession) GetIotToolByTransportAndName(transportType, toolName string) (tool.InvokableTool, bool) {
+	transportType = strings.TrimSpace(transportType)
+	if transportType == "" {
+		return nil, false
+	}
+
+	dc.iotMux.RLock()
+	iotClient := dc.iotOverMcpByTransport[transportType]
+	dc.iotMux.RUnlock()
+	if iotClient == nil {
+		return nil, false
+	}
+
+	iotClient.toolsMux.RLock()
+	defer iotClient.toolsMux.RUnlock()
+	invokable, ok := iotClient.tools[toolName]
+	return invokable, ok
 }
 
 func (dc *DeviceMcpSession) GetToolByName(toolName string) (tool tool.InvokableTool, ok bool) {

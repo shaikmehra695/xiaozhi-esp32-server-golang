@@ -32,6 +32,7 @@ type Interface interface {
 type ConnInterface interface {
 	SendMcpMsg(payload []byte) error
 	RecvMcpMsg(ctx context.Context, timeOut int) ([]byte, error)
+	HandleMcpMessage(payload []byte) error
 	GetMcpTransportType() string
 }
 

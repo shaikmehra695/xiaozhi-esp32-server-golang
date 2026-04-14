@@ -62,6 +62,10 @@ func filterGlobalToolsBySelectedServices(globalTools map[string]tool.InvokableTo
 }
 
 func GetToolByName(deviceId string, agentId string, toolName string, selectedMCPServiceNames string) (tool.InvokableTool, bool) {
+	return GetToolByNameWithTransport(deviceId, agentId, "", toolName, selectedMCPServiceNames)
+}
+
+func GetToolByNameWithTransport(deviceId string, agentId string, transportType string, toolName string, selectedMCPServiceNames string) (tool.InvokableTool, bool) {
 	// 优先从本地管理器获取
 	localManager := GetLocalMCPManager()
 	tool, ok := localManager.GetToolByName(toolName)
@@ -71,6 +75,7 @@ func GetToolByName(deviceId string, agentId string, toolName string, selectedMCP
 
 	// 其次从全局管理器获取
 	selected := parseSelectedMCPServiceNames(selectedMCPServiceNames)
+	globalManager := GetGlobalMCPManager()
 	if len(selected) == 0 {
 		tool, ok = globalManager.GetToolByName(toolName)
 		if ok {
@@ -92,19 +97,26 @@ func GetToolByName(deviceId string, agentId string, toolName string, selectedMCP
 		}
 	}
 
-	// 最后从设备MCP客户端池获取
-	tool, ok = mcpClientPool.GetToolByDeviceId(deviceId, toolName)
-	if ok {
-		return tool, true
-	}
-	// 兼容 AgentID 上报的 MCP 工具
-	if agentId != "" && agentId != deviceId {
-		tool, ok = mcpClientPool.GetToolByDeviceId(agentId, toolName)
-		if ok {
-			return tool, true
+	// 最后从设备MCP客户端池获取，优先当前 transport 上报的工具
+	if transportType = strings.TrimSpace(transportType); transportType != "" {
+		deviceClient := mcpClientPool.GetMcpClient(deviceId)
+		if deviceClient != nil {
+			tool, ok = deviceClient.GetIotToolByTransportAndName(transportType, toolName)
+			if ok {
+				return tool, true
+			}
 		}
+		if agentId != "" && agentId != deviceId {
+			return mcpClientPool.GetToolByDeviceId(agentId, toolName)
+		}
+		return nil, false
 	}
-	return nil, false
+
+	tool, ok = mcpClientPool.GetToolByDeviceId(deviceId, toolName)
+	if !ok && agentId != "" && agentId != deviceId {
+		tool, ok = mcpClientPool.GetToolByDeviceId(agentId, toolName)
+	}
+	return tool, ok
 }
 
 func GetDeviceMcpClient(deviceId string) *DeviceMcpSession {
@@ -138,18 +150,33 @@ func EnsureDeviceIotOverMcp(deviceId string, conn ConnInterface) error {
 		AddDeviceMcpClient(deviceId, mcpClientSession)
 	}
 
-	mcpClientSession.iotMux.RLock()
+	transportType = normalizeDeviceTransportType(transportType)
+
+	mcpClientSession.iotMux.Lock()
 	existing := mcpClientSession.iotOverMcpByTransport[transportType]
-	mcpClientSession.iotMux.RUnlock()
 	if existing != nil && existing.IsConnected() && existing.conn == conn {
+		mcpClientSession.iotMux.Unlock()
 		return nil
 	}
 
-	iotOverMcpClient := NewIotOverMcpClient(deviceId, conn)
+	iotOverMcpClient := NewIotOverMcpClient(deviceId, transportType, conn)
 	if iotOverMcpClient == nil {
+		mcpClientSession.iotMux.Unlock()
 		return fmt.Errorf("创建IotOverMcp客户端失败")
 	}
-	mcpClientSession.SetIotOverMcp(transportType, iotOverMcpClient)
+	if old := mcpClientSession.iotOverMcpByTransport[transportType]; old != nil && old != iotOverMcpClient {
+		old.connected = false
+		old.cancel()
+	}
+	mcpClientSession.iotOverMcpByTransport[transportType] = iotOverMcpClient
+	iotOverMcpClient.SetOnCloseHandler(mcpClientSession.handleMcpClientClose)
+	mcpClientSession.iotMux.Unlock()
+
+	if err := iotOverMcpClient.startIotOverMcp(); err != nil {
+		CloseDeviceIotOverMcp(deviceId, conn)
+		return fmt.Errorf("初始化IotOverMcp客户端失败: %w", err)
+	}
+
 	return nil
 }
 
@@ -164,19 +191,12 @@ func HandleDeviceIotMcpMessage(deviceId string, transportType string, payload []
 	}
 
 	mcpClientSession.iotMux.RLock()
-	iotClient := mcpClientSession.iotOverMcpByTransport[transportType]
+	iotClient := mcpClientSession.iotOverMcpByTransport[normalizeDeviceTransportType(transportType)]
 	mcpClientSession.iotMux.RUnlock()
 	if iotClient == nil || iotClient.conn == nil {
 		return nil
 	}
-
-	inbound, ok := iotClient.conn.(interface {
-		HandleMcpMessage(payload []byte) error
-	})
-	if !ok {
-		return fmt.Errorf("transport 不支持HandleMcpMessage")
-	}
-	return inbound.HandleMcpMessage(payload)
+	return iotClient.conn.HandleMcpMessage(payload)
 }
 
 func CloseDeviceIotOverMcp(deviceId string, conn ConnInterface) {
@@ -184,14 +204,14 @@ func CloseDeviceIotOverMcp(deviceId string, conn ConnInterface) {
 	if mcpClientSession == nil {
 		return
 	}
+	if conn == nil {
+		return
+	}
 
 	mcpClientSession.iotMux.Lock()
 	defer mcpClientSession.iotMux.Unlock()
 
-	transportType := strings.TrimSpace(conn.GetMcpTransportType())
-	if transportType == "" {
-		return
-	}
+	transportType := normalizeDeviceTransportType(conn.GetMcpTransportType())
 	iotClient := mcpClientSession.iotOverMcpByTransport[transportType]
 	if iotClient == nil {
 		return
@@ -206,6 +226,10 @@ func CloseDeviceIotOverMcp(deviceId string, conn ConnInterface) {
 }
 
 func GetToolsByDeviceId(deviceId string, agentId string, selectedMCPServiceNames string) (map[string]tool.InvokableTool, error) {
+	return GetToolsByDeviceIdWithTransport(deviceId, agentId, "", selectedMCPServiceNames)
+}
+
+func GetToolsByDeviceIdWithTransport(deviceId string, agentId string, transportType string, selectedMCPServiceNames string) (map[string]tool.InvokableTool, error) {
 	retTools := make(map[string]tool.InvokableTool)
 
 	// 优先从本地管理器获取
@@ -217,7 +241,7 @@ func GetToolsByDeviceId(deviceId string, agentId string, selectedMCPServiceNames
 	log.Infof("从本地管理器获取到 %d 个工具", len(localTools))
 
 	// 其次从全局管理器获取
-	globalTools := globalManager.GetAllTools()
+	globalTools := GetGlobalMCPManager().GetAllTools()
 	filteredGlobalTools := filterGlobalToolsBySelectedServices(globalTools, selectedMCPServiceNames)
 	for toolName, tool := range filteredGlobalTools {
 		// 本地工具优先，如果已存在同名工具则不覆盖
@@ -227,19 +251,41 @@ func GetToolsByDeviceId(deviceId string, agentId string, selectedMCPServiceNames
 	}
 	log.Infof("从全局管理器获取到 %d 个工具（过滤后）", len(filteredGlobalTools))
 
-	// 最后从MCP客户端池获取
-	deviceTools, err := mcpClientPool.GetAllToolsByDeviceIdAndAgentId(deviceId, agentId)
-	if err != nil {
-		log.Errorf("获取设备 %s 的工具失败: %v", deviceId, err)
-		return retTools, nil
-	}
-	for toolName, tool := range deviceTools {
-		// 本地工具和全局工具优先，如果已存在同名工具则不覆盖
-		if _, exists := retTools[toolName]; !exists {
-			retTools[toolName] = tool
+	if transportType = strings.TrimSpace(transportType); transportType != "" && deviceId != "" {
+		deviceClient := mcpClientPool.GetMcpClient(deviceId)
+		if deviceClient != nil {
+			for toolName, tool := range deviceClient.GetIotToolsByTransport(transportType) {
+				if _, exists := retTools[toolName]; !exists {
+					retTools[toolName] = tool
+				}
+			}
 		}
 	}
-	log.Infof("从设备 %s 获取到 %d 个工具", deviceId, len(deviceTools))
+
+	if transportType == "" {
+		deviceTools, err := mcpClientPool.GetAllToolsByDeviceIdAndAgentId(deviceId, agentId)
+		if err != nil {
+			log.Errorf("获取设备 %s 的工具失败: %v", deviceId, err)
+			return retTools, nil
+		}
+		for toolName, tool := range deviceTools {
+			if _, exists := retTools[toolName]; !exists {
+				retTools[toolName] = tool
+			}
+		}
+		log.Infof("从设备 %s 获取到 %d 个工具", deviceId, len(deviceTools))
+	} else if agentId != "" && agentId != deviceId {
+		agentTools, err := mcpClientPool.GetWsEndpointMcpTools(agentId)
+		if err != nil {
+			log.Errorf("获取智能体 %s 的工具失败: %v", agentId, err)
+			return retTools, nil
+		}
+		for toolName, tool := range agentTools {
+			if _, exists := retTools[toolName]; !exists {
+				retTools[toolName] = tool
+			}
+		}
+	}
 	log.Infof("设备 %s 总共获取到 %d 个工具", deviceId, len(retTools))
 
 	return retTools, nil
@@ -249,7 +295,8 @@ func GetWsEndpointMcpTools(agentId string) (map[string]tool.InvokableTool, error
 	return mcpClientPool.GetWsEndpointMcpTools(agentId)
 }
 
-// GetReportedToolsByDeviceID 仅获取设备上报的MCP工具
+// GetReportedToolsByDeviceID 获取设备通过 Iot over MCP 上报的工具。
+// 控制台设备维度仅返回 websocket / mqtt_udp(udp) transport 下的工具，不混入 ws endpoint 等其它类型。
 func GetReportedToolsByDeviceID(deviceId string) (map[string]tool.InvokableTool, error) {
 	retTools := make(map[string]tool.InvokableTool)
 	if deviceId == "" {
@@ -261,7 +308,12 @@ func GetReportedToolsByDeviceID(deviceId string) (map[string]tool.InvokableTool,
 		return retTools, nil
 	}
 
-	for toolName, invokable := range client.GetTools() {
+	transportType, resolved := ResolveCurrentDeviceTransport(deviceId)
+	if !resolved || transportType == "" {
+		return retTools, nil
+	}
+
+	for toolName, invokable := range client.GetIotToolsByTransport(transportType) {
 		retTools[toolName] = invokable
 	}
 
@@ -280,13 +332,21 @@ func GetReportedToolsByAgentID(agentId string) (map[string]tool.InvokableTool, e
 
 // GetReportedToolByDeviceIDAndName 仅在设备上报工具中查找
 func GetReportedToolByDeviceIDAndName(deviceId, toolName string) (tool.InvokableTool, bool) {
-	reportedTools, err := GetReportedToolsByDeviceID(deviceId)
-	if err != nil {
-		log.Errorf("获取设备上报MCP工具失败: device=%s err=%v", deviceId, err)
+	if deviceId == "" {
 		return nil, false
 	}
 
-	invokable, ok := reportedTools[toolName]
+	client := mcpClientPool.GetMcpClient(deviceId)
+	if client == nil {
+		return nil, false
+	}
+
+	transportType, resolved := ResolveCurrentDeviceTransport(deviceId)
+	if !resolved || transportType == "" {
+		return nil, false
+	}
+
+	invokable, ok := client.GetIotToolByTransportAndName(transportType, toolName)
 	return invokable, ok
 }
 

@@ -51,6 +51,13 @@ func (c *McpTransport) RecvMcpMsg(ctx context.Context, timeOut int) ([]byte, err
 	return c.ServerTransport.RecvMcpMsg(ctx, timeOut)
 }
 
+func (c *McpTransport) HandleMcpMessage(payload []byte) error {
+	if c == nil || c.ServerTransport == nil {
+		return nil
+	}
+	return c.ServerTransport.HandleMcpMessage(payload)
+}
+
 func (c *McpTransport) GetMcpTransportType() string {
 	if c == nil || c.ServerTransport == nil {
 		return ""
@@ -61,9 +68,6 @@ func (c *McpTransport) GetMcpTransportType() string {
 func initMcp(deviceID string, mcpTransport *McpTransport) {
 	if err := mcp.EnsureDeviceIotOverMcp(deviceID, mcpTransport); err != nil {
 		log.Errorf("确保IotOverMcp客户端失败: %v", err)
-		if mcpTransport != nil && mcpTransport.ServerTransport != nil {
-			mcpTransport.ServerTransport.transport.Close()
-		}
 		return
 	}
 }
