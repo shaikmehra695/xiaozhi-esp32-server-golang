@@ -134,12 +134,24 @@ func isRealtimeMcpAudioExitCommand(text string) bool {
 	return false
 }
 
+func isRealtimeMcpAudioSourceType(sourceType MediaSourceType) bool {
+	return sourceType == MediaSourceTypeMCPResource || sourceType == MediaSourceTypeInlineAudio
+}
+
 func isRealtimeMcpAudioPlaybackState(state MediaPlayerState) bool {
-	if state.CurrentSourceType != MediaSourceTypeMCPResource && state.CurrentSourceType != MediaSourceTypeInlineAudio {
+	if !isRealtimeMcpAudioSourceType(state.CurrentSourceType) {
 		return false
 	}
 
-	return state.Status == play_music.StatusPlaying || state.Status == play_music.StatusPaused
+	return state.Status == play_music.StatusPlaying
+}
+
+func (s *ChatSession) hasRealtimeMcpAudioControlContext() bool {
+	if s == nil || s.clientState == nil || !s.clientState.IsRealTime() || s.mediaPlayer == nil {
+		return false
+	}
+
+	return s.mediaPlayer.HasRealtimeMcpAudioControlContext()
 }
 
 func (s *ChatSession) isRealtimeMcpAudioGateActive() bool {
@@ -147,12 +159,11 @@ func (s *ChatSession) isRealtimeMcpAudioGateActive() bool {
 		return false
 	}
 
-	state := s.mediaPlayer.GetState()
-	return isRealtimeMcpAudioPlaybackState(state)
+	return s.mediaPlayer.ShouldGateRealtimeMcpAudioASR()
 }
 
 func (s *ChatSession) tryHandleRealtimeMcpAudioASR(ctx context.Context, text string) (bool, error) {
-	if !s.isRealtimeMcpAudioGateActive() {
+	if !s.hasRealtimeMcpAudioControlContext() {
 		return false, nil
 	}
 
@@ -177,6 +188,10 @@ func (s *ChatSession) tryHandleRealtimeMcpAudioASR(ctx context.Context, text str
 		}
 		log.Infof("设备 %s realtime媒体播放门控执行控制动作: action=%s, text=%s", s.clientState.DeviceID, action, text)
 		return true, nil
+	}
+
+	if !s.isRealtimeMcpAudioGateActive() {
+		return false, nil
 	}
 
 	log.Debugf("设备 %s realtime媒体播放门控忽略ASR文本: %s", s.clientState.DeviceID, text)

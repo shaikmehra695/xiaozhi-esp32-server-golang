@@ -610,6 +610,22 @@ func (p *SessionMediaPlayer) GetState() MediaPlayerState {
 	return runtime.GetState()
 }
 
+func (p *SessionMediaPlayer) HasRealtimeMcpAudioControlContext() bool {
+	runtime, err := p.runtimeOrErr()
+	if err != nil {
+		return false
+	}
+	return runtime.hasRealtimeMcpAudioControlContext()
+}
+
+func (p *SessionMediaPlayer) ShouldGateRealtimeMcpAudioASR() bool {
+	runtime, err := p.runtimeOrErr()
+	if err != nil {
+		return false
+	}
+	return runtime.shouldGateRealtimeMcpAudioASR()
+}
+
 func (p *SessionMediaPlayer) AppendCurrentToPlaylist() (*PlaylistAppendResult, error) {
 	runtime, err := p.runtimeOrErr()
 	if err != nil {
@@ -839,7 +855,7 @@ func (r *deviceMediaRuntime) RecoverPlayback(ctx context.Context, cfg mediaPlayb
 		return fmt.Errorf("媒体播放器未初始化")
 	}
 
-	if trigger == mediaRecoveryTriggerAttach && !r.consumeResumeOnAttach() {
+	if trigger == mediaRecoveryTriggerAttach && !r.shouldResumeOnAttach() {
 		return nil
 	}
 
@@ -854,6 +870,9 @@ func (r *deviceMediaRuntime) RecoverPlayback(ctx context.Context, cfg mediaPlayb
 	if active != nil {
 		if active.isPaused() {
 			return r.recoverActivePlayback(trigger)
+		}
+		if trigger == mediaRecoveryTriggerAttach {
+			r.clearResumeOnAttach()
 		}
 		log.Infof("设备 %s 跳过媒体恢复, trigger=%s, 原因=already_playing", r.deviceID, trigger)
 		return nil
@@ -929,19 +948,25 @@ func (r *deviceMediaRuntime) ResumeIfInterruptedPause() (bool, error) {
 	return true, nil
 }
 
-func (r *deviceMediaRuntime) consumeResumeOnAttach() bool {
+func (r *deviceMediaRuntime) shouldResumeOnAttach() bool {
 	if r == nil {
 		return false
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
-	if !r.resumeOnAttach {
-		return false
+	return r.resumeOnAttach
+}
+
+func (r *deviceMediaRuntime) clearResumeOnAttach() {
+	if r == nil {
+		return
 	}
+
+	r.mu.Lock()
 	r.resumeOnAttach = false
-	return true
+	r.mu.Unlock()
 }
 
 func (r *deviceMediaRuntime) Stop(ctx context.Context) error {
@@ -999,6 +1024,44 @@ func (r *deviceMediaRuntime) GetState() MediaPlayerState {
 
 	state.Playlist = cloneMediaPlaylistItems(state.Playlist)
 	return state
+}
+
+func (r *deviceMediaRuntime) hasRealtimeMcpAudioControlContext() bool {
+	canControl, _ := r.realtimeMcpAudioGateStatus()
+	return canControl
+}
+
+func (r *deviceMediaRuntime) shouldGateRealtimeMcpAudioASR() bool {
+	_, shouldGate := r.realtimeMcpAudioGateStatus()
+	return shouldGate
+}
+
+func (r *deviceMediaRuntime) realtimeMcpAudioGateStatus() (bool, bool) {
+	if r == nil {
+		return false, false
+	}
+
+	r.mu.RLock()
+	sourceType := r.state.CurrentSourceType
+	if sourceType == "" && r.currentSource != nil {
+		sourceType = r.currentSource.SourceType
+	}
+	status := r.state.Status
+	active := r.active
+	attachment := r.attachment
+	resumeOnAttach := r.resumeOnAttach
+	r.mu.RUnlock()
+
+	if !isRealtimeMcpAudioSourceType(sourceType) {
+		return false, false
+	}
+
+	canControl := active != nil || resumeOnAttach || status == play_music.StatusPaused
+	if active == nil || attachment == nil || status != play_music.StatusPlaying {
+		return canControl, false
+	}
+
+	return true, !active.isPaused()
 }
 
 func (r *deviceMediaRuntime) AppendCurrentToAgentPlaylist(agentID string) (*PlaylistAppendResult, error) {
