@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 	"xiaozhi-esp32-server-golang/internal/app/server/types"
 
@@ -38,7 +39,9 @@ type MqttUdpConn struct {
 
 	onCloseCbList []func(deviceId string)
 
-	lastActiveTs int64 //上下行 信令和音频数据 都会更新
+	lastActiveTs    int64 //上下行 信令和音频数据 都会更新
+	retainedUntilTs int64
+	brokerOnline    atomic.Bool
 }
 
 // NewMqttUdpConn 创建一个新的 MqttUdpConn 实例
@@ -58,13 +61,15 @@ func NewMqttUdpConn(deviceID string, pubTopic string, mqttClient mqtt.Client, ud
 		recvCmdChan: make(chan []byte, 100),
 
 		data: sync.Map{},
+
+		lastActiveTs: time.Now().Unix(),
 	}
 }
 
 // SendCmd 通过 MQTT-UDP 发送命令（需对接实际发送逻辑）
 func (c *MqttUdpConn) SendCmd(msg []byte) error {
 	//log.Debugf("mqtt udp conn send cmd, topic: %s, msg: %s", c.PubTopic, string(msg))
-	c.lastActiveTs = time.Now().Unix()
+	atomic.StoreInt64(&c.lastActiveTs, time.Now().Unix())
 	c.RLock()
 	client := c.MqttClient
 	c.RUnlock()
@@ -82,7 +87,7 @@ func (c *MqttUdpConn) SendCmd(msg []byte) error {
 func (c *MqttUdpConn) PushMsgToRecvCmd(msg []byte) error {
 	select {
 	case c.recvCmdChan <- msg:
-		c.lastActiveTs = time.Now().Unix()
+		atomic.StoreInt64(&c.lastActiveTs, time.Now().Unix())
 		return nil
 	default:
 		return errors.New("recvCmdChan is full")
@@ -155,7 +160,7 @@ func (c *MqttUdpConn) RecvAudio(ctx context.Context, timeout int) ([]byte, error
 		return nil, ctx.Err()
 	case audio, ok := <-udpSession.RecvChannel:
 		if ok {
-			c.lastActiveTs = time.Now().Unix()
+			atomic.StoreInt64(&c.lastActiveTs, time.Now().Unix())
 			return audio, nil
 		}
 		return nil, nil
@@ -231,11 +236,21 @@ func (c *MqttUdpConn) GetData(key string) (interface{}, error) {
 }
 
 func (c *MqttUdpConn) IsActive() bool {
-	return time.Now().Unix()-c.lastActiveTs < MaxIdleDuration
+	now := time.Now().Unix()
+	if c.brokerOnline.Load() {
+		return true
+	}
+	retainedUntil := atomic.LoadInt64(&c.retainedUntilTs)
+	if retainedUntil > now {
+		return true
+	}
+	return now-atomic.LoadInt64(&c.lastActiveTs) < MaxIdleDuration
 }
 
 // 销毁
 func (c *MqttUdpConn) Destroy() {
+	c.brokerOnline.Store(false)
+	atomic.StoreInt64(&c.retainedUntilTs, 0)
 	c.cancel()
 	for _, cb := range c.onCloseCbList {
 		cb(c.DeviceId)
@@ -245,4 +260,19 @@ func (c *MqttUdpConn) Destroy() {
 func (c *MqttUdpConn) CloseAudioChannel() error {
 	c.ReleaseUdpSession()
 	return nil
+}
+
+func (c *MqttUdpConn) MarkBrokerOnline() {
+	c.brokerOnline.Store(true)
+	atomic.StoreInt64(&c.retainedUntilTs, 0)
+	atomic.StoreInt64(&c.lastActiveTs, time.Now().Unix())
+}
+
+func (c *MqttUdpConn) MarkBrokerOffline(gracePeriod time.Duration) {
+	c.brokerOnline.Store(false)
+	atomic.StoreInt64(&c.retainedUntilTs, time.Now().Add(gracePeriod).Unix())
+}
+
+func (c *MqttUdpConn) IsBrokerOnline() bool {
+	return c.brokerOnline.Load()
 }

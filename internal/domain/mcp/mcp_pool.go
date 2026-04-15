@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -9,9 +11,12 @@ import (
 
 type McpClientPool struct {
 	device2McpClient cmap.ConcurrentMap[string, *DeviceMcpSession]
+	createMu         sync.Mutex
 }
 
 var mcpClientPool *McpClientPool
+var currentDeviceTransportResolver func(deviceID string) string
+var currentDeviceTransportResolverMu sync.RWMutex
 
 func init() {
 	mcpClientPool = &McpClientPool{
@@ -20,11 +25,55 @@ func init() {
 	go mcpClientPool.checkOffline()
 }
 
+func RegisterCurrentDeviceTransportResolver(resolver func(deviceID string) string) {
+	currentDeviceTransportResolverMu.Lock()
+	defer currentDeviceTransportResolverMu.Unlock()
+	currentDeviceTransportResolver = resolver
+}
+
+func ResolveCurrentDeviceTransport(deviceID string) (string, bool) {
+	currentDeviceTransportResolverMu.RLock()
+	resolver := currentDeviceTransportResolver
+	currentDeviceTransportResolverMu.RUnlock()
+	if resolver == nil {
+		return "", false
+	}
+	transportType := strings.TrimSpace(resolver(deviceID))
+	if transportType == "" {
+		return "", false
+	}
+	transportType = normalizeDeviceTransportType(transportType)
+	if transportType == "unknown" {
+		return "", false
+	}
+	return transportType, true
+}
+
 func (p *McpClientPool) GetMcpClient(deviceID string) *DeviceMcpSession {
 	client, ok := p.device2McpClient.Get(deviceID)
 	if !ok {
 		return nil
 	}
+	return client
+}
+
+func (p *McpClientPool) GetOrCreateMcpClient(deviceID string) *DeviceMcpSession {
+	if deviceID = strings.TrimSpace(deviceID); deviceID == "" {
+		return nil
+	}
+	if client := p.GetMcpClient(deviceID); client != nil {
+		return client
+	}
+
+	p.createMu.Lock()
+	defer p.createMu.Unlock()
+
+	if client := p.GetMcpClient(deviceID); client != nil {
+		return client
+	}
+
+	client := NewDeviceMCPSession(deviceID)
+	p.device2McpClient.Set(deviceID, client)
 	return client
 }
 
@@ -91,16 +140,19 @@ func (p *McpClientPool) checkOffline() {
 			return true //continue
 		})
 
-		// 检查IoT over MCP连接
+		// 检查IoT over MCP连接（按 transportType）
 		hasActiveIotConnection := false
-		if client.iotOverMcp != nil {
-			if time.Since(client.iotOverMcp.lastPing) > 2*time.Minute {
-				client.iotOverMcp.connected = false
-				client.iotOverMcp.cancel()
+		client.iotMux.Lock()
+		for transportType, iotClient := range client.iotOverMcpByTransport {
+			if time.Since(iotClient.lastPing) > 2*time.Minute {
+				iotClient.connected = false
+				iotClient.cancel()
+				delete(client.iotOverMcpByTransport, transportType)
 			} else {
 				hasActiveIotConnection = true
 			}
 		}
+		client.iotMux.Unlock()
 
 		// 如果没有任何活跃连接，移除客户端
 		if !hasActiveWsConnections && !hasActiveIotConnection {

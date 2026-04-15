@@ -41,6 +41,13 @@ func NewApp() *App {
 	app := &App{
 		chatManagers: cmap.New[*chat.ChatManager](),
 	}
+	mcp.RegisterCurrentDeviceTransportResolver(func(deviceID string) string {
+		chatManager, exists := app.GetChatManager(deviceID)
+		if !exists || chatManager == nil {
+			return ""
+		}
+		return chatManager.GetTransportType()
+	})
 	app.wsServer = app.newWebSocketServer()
 	app.mqttUdpAdapter, err = app.newMqttUdpAdapter()
 	if err != nil {
@@ -136,7 +143,21 @@ func (app *App) newMqttUdpAdapter() (*mqtt_udp.MqttUdpAdapter, error) {
 		mqttConfig,
 		mqtt_udp.WithUdpServer(udpServer),
 		mqtt_udp.WithOnNewConnection(app.OnNewConnection),
+		mqtt_udp.WithOnDeviceOnline(app.DeviceOnline),
+		mqtt_udp.WithOnDeviceOffline(app.DeviceOffline),
+		mqtt_udp.WithOnTransportReady(app.onMqttTransportReady),
+		mqtt_udp.WithOfflineGracePeriod(app.mqttOfflineGracePeriod()),
 	), nil
+}
+
+func (app *App) mqttOfflineGracePeriod() time.Duration {
+	if duration := viper.GetDuration("mqtt.transport_offline_grace_period"); duration > 0 {
+		return duration
+	}
+	if seconds := viper.GetInt("mqtt.transport_offline_grace_period_seconds"); seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return 2 * time.Minute
 }
 
 func (app *App) newUdpServer() (*mqtt_udp.UdpServer, error) {
@@ -285,6 +306,8 @@ func (app *App) ReloadMCP() error {
 // 所有协议新连接都走这里
 func (a *App) OnNewConnection(transport types.IConn) {
 	deviceID := transport.GetDeviceID()
+	transportType := transport.GetTransportType()
+	notifyLifecycleOnManager := transportType != types.TransportTypeMqttUdp
 
 	// 检查是否已存在该设备的ChatManager
 	if existingManager, exists := a.chatManagers.Get(deviceID); exists {
@@ -304,7 +327,9 @@ func (a *App) OnNewConnection(transport types.IConn) {
 	// 存储ChatManager
 	a.chatManagers.Set(deviceID, chatManager)
 
-	a.DeviceOnline(deviceID)
+	if notifyLifecycleOnManager {
+		a.DeviceOnline(deviceID)
+	}
 
 	log.Infof("设备 %s 的ChatManager已创建并存储", deviceID)
 
@@ -318,7 +343,9 @@ func (a *App) OnNewConnection(transport types.IConn) {
 			if storedManager, exists := a.chatManagers.Get(deviceID); exists && storedManager == chatManager {
 				a.chatManagers.Remove(deviceID)
 				log.Infof("设备 %s 的ChatManager已从映射中移除", deviceID)
-				a.DeviceOffline(deviceID)
+				if notifyLifecycleOnManager {
+					a.DeviceOffline(deviceID)
+				}
 			}
 		}()
 
@@ -326,6 +353,14 @@ func (a *App) OnNewConnection(transport types.IConn) {
 			log.Errorf("ChatManager启动失败: %v", err)
 		}
 	}()
+}
+
+func (a *App) onMqttTransportReady(deviceID string) {
+	chatManager, exists := a.GetChatManager(deviceID)
+	if !exists || chatManager == nil {
+		return
+	}
+	chatManager.WarmupMcp()
 }
 
 // OnOpenClawResponse OpenClaw实时响应下发回调

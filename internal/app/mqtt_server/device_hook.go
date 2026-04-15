@@ -16,7 +16,8 @@ import (
 // 普通用户禁止随意订阅，只允许发布指定 topic，连接时自动订阅 /p2p/device_sub/{mac}
 type DeviceHook struct {
 	mqttServer.HookBase
-	server *mqttServer.Server
+	server           *mqttServer.Server
+	publishLifecycle func(event client.MqttLifecycleEvent) error
 }
 
 func (h *DeviceHook) ID() string {
@@ -82,6 +83,7 @@ func (h *DeviceHook) OnDisconnect(cl *mqttServer.Client, err error, ok bool) {
 		log.Info("警告: 无法从客户端ID解析MAC地址:", cl.ID)
 		return
 	}
+	h.publishLifecycleEvent(cl.ID, client.MqttLifecycleStateOffline)
 	topic := deviceSubTopic(mac)
 
 	action := h.server.Topics.Unsubscribe(topic, cl.ID)
@@ -101,6 +103,7 @@ func (h *DeviceHook) OnSessionEstablished(cl *mqttServer.Client, pk packets.Pack
 		log.Info("警告: 无法从客户端ID解析MAC地址:", cl.ID)
 		return
 	}
+	h.publishLifecycleEvent(cl.ID, client.MqttLifecycleStateOnline)
 
 	topic := deviceSubTopic(mac)
 
@@ -134,6 +137,10 @@ func (h *DeviceHook) OnSubscribe(cl *mqttServer.Client, pk packets.Packet) packe
 
 // OnPublish 打印发布包
 func (h *DeviceHook) OnPublish(cl *mqttServer.Client, pk packets.Packet) (packets.Packet, error) {
+	if cl == nil {
+		return pk, nil
+	}
+
 	log.Info("=== 收到发布包 ===")
 	log.Infof("客户端ID: %s", cl.ID)
 	log.Infof("包类型: %v", pk.FixedHeader.Type)
@@ -171,6 +178,9 @@ func (h *DeviceHook) OnPublish(cl *mqttServer.Client, pk packets.Packet) (packet
 
 // 判断是否超级管理员
 func isAdminUser(cl *mqttServer.Client) bool {
+	if cl == nil {
+		return false
+	}
 	return string(cl.Properties.Username) == "admin"
 }
 
@@ -181,6 +191,34 @@ func parseMacFromClientId(clientId string) string {
 		return parts[1]
 	}
 	return ""
+}
+
+func deviceIDFromClientId(clientID string) string {
+	mac := parseMacFromClientId(clientID)
+	if mac == "" {
+		return ""
+	}
+	return strings.ReplaceAll(mac, "_", ":")
+}
+
+func (h *DeviceHook) publishLifecycleEvent(clientID string, state string) {
+	if h == nil || h.publishLifecycle == nil {
+		return
+	}
+	deviceID := deviceIDFromClientId(clientID)
+	if deviceID == "" {
+		return
+	}
+	event := client.MqttLifecycleEvent{
+		Type:     client.MqttLifecycleType,
+		DeviceID: deviceID,
+		State:    state,
+		ClientID: clientID,
+		Ts:       time.Now().UnixMilli(),
+	}
+	if err := h.publishLifecycle(event); err != nil {
+		log.Warnf("发布 MQTT 生命周期事件失败: device=%s state=%s err=%v", deviceID, state, err)
+	}
 }
 
 func deviceSubTopic(mac string) string {

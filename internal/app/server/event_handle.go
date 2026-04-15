@@ -250,17 +250,7 @@ func (h *ExitChatHandler) Process(ctx context.Context, data interface{}) error {
 		return nil
 	}
 
-	// 获取 ChatSession 并执行退出聊天逻辑
-	session := chatManager.GetSession()
-	if session == nil {
-		log.Warnf("ChatManager 的 Session 为空，设备: %s", clientState.DeviceID)
-		return nil
-	}
-
-	// 执行退出聊天逻辑（发送再见语并关闭会话）
-	session.DoExitChat()
-
-	return nil
+	return chatManager.ExitChat()
 }
 
 func (h *ExitChatHandler) GetRoutingKey(data interface{}) string {

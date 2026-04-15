@@ -11,8 +11,15 @@ const (
 	MDeviceMockSubTopicPrefix = "null"
 	MDeviceSubTopicPrefix     = "/p2p/device_sub/"
 	MDevicePubTopicPrefix     = "/p2p/device_public/"
+	MDeviceLifecycleTopic     = MDevicePubTopicPrefix + "_server/lifecycle"
 	MServerSubTopicPrefix     = "/p2p/device_public/#"
 	MServerPubTopicPrefix     = MDeviceSubTopicPrefix
+)
+
+const (
+	MqttLifecycleType         = "mqtt_lifecycle"
+	MqttLifecycleStateOnline  = "online"
+	MqttLifecycleStateOffline = "offline"
 )
 
 // 消息类型常量
@@ -52,6 +59,14 @@ type UdpConfig struct {
 	Port   int    `json:"port"`
 	Key    string `json:"key"`
 	Nonce  string `json:"nonce"`
+}
+
+type MqttLifecycleEvent struct {
+	Type     string `json:"type"`
+	DeviceID string `json:"device_id"`
+	State    string `json:"state"`
+	ClientID string `json:"client_id,omitempty"`
+	Ts       int64  `json:"ts"`
 }
 
 // ServerMessage 表示服务器消息

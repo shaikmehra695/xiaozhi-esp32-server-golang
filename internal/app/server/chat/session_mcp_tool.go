@@ -71,8 +71,7 @@ func getHTTPClient() *http.Client {
 
 // 关闭会话
 func (c *ChatManager) LocalMcpCloseChat() error {
-	//c.Close()
-	return nil
+	return c.ExitChat()
 }
 
 // 清空历史对话
@@ -197,7 +196,7 @@ func (c *ChatManager) LocalMcpControlMusicPlayback(ctx context.Context, params *
 	if c == nil {
 		return nil, fmt.Errorf("chat manager 不可用")
 	}
-	return controlMusicPlayback(ctx, c.session, params)
+	return controlMusicPlayback(ctx, c.GetSession(), params)
 }
 
 func controlMusicPlayback(ctx context.Context, session *ChatSession, params *MusicPlaybackControlParams) (*MusicPlaybackControlResult, error) {

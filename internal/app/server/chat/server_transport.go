@@ -245,6 +245,14 @@ func (s *ServerTransport) IsClosed() bool {
 }
 
 func (s *ServerTransport) Close() error {
+	return s.close(true)
+}
+
+func (s *ServerTransport) CloseWithoutTransport() error {
+	return s.close(false)
+}
+
+func (s *ServerTransport) close(closeUnderlyingTransport bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -254,12 +262,17 @@ func (s *ServerTransport) Close() error {
 
 	s.closed = true
 
-	if s.transport.GetTransportType() == types_conn.TransportTypeMqttUdp {
-		s.SendMqttGoodbye()
+	if closeUnderlyingTransport && s.transport.GetTransportType() == types_conn.TransportTypeMqttUdp {
+		if err := s.SendMqttGoodbye(); err != nil {
+			log.Warnf("发送 mqtt goodbye 失败: %v", err)
+		}
 	}
 
 	close(s.McpRecvMsgChan)
-	return s.transport.Close()
+	if closeUnderlyingTransport {
+		return s.transport.Close()
+	}
+	return nil
 }
 
 func (s *ServerTransport) RecvAudio(ctx context.Context, timeOut int) ([]byte, error) {

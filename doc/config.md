@@ -96,6 +96,13 @@ mqtt_server:
     pem: "config/server.pem"  # pem文件
     key: "config/server.key"  # key文件
 
+# 行为说明：
+# - 当 mqtt_server.enable=true 时，内置 mqtt_server 会在设备连上/断开后，通过
+#   /p2p/device_public/_server/lifecycle 发布生命周期消息。
+# - 主程序会根据该生命周期消息预创建或复用 MQTT transport、映射设备在线状态，
+#   并最佳努力预热设备侧 MCP。
+# - 这些行为不引入新的配置项；hello 仍负责 audio_params、UDP 信息等聊天级协商。
+
 # UDP服务器相关配置
 udp:
   external_host: "127.0.0.1"  # hello消息时，返回的udp服务器ip

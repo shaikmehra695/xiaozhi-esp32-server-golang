@@ -2,9 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/spf13/viper"
@@ -204,4 +208,672 @@ func TestFilterMCPToolsByAllowList(t *testing.T) {
 
 	unfiltered := filterMCPToolsByAllowList(tools, nil)
 	require.Len(t, unfiltered, 3)
+}
+
+type testIotConn struct {
+	transportType   string
+	deviceID        string
+	autoRespond     bool
+	sent            chan []byte
+	recv            chan []byte
+	onRequest       func(capturedJSONRPCRequest, []byte)
+	sendErrByMethod map[string]error
+}
+
+type capturedJSONRPCRequest struct {
+	Method string          `json:"method"`
+	ID     json.RawMessage `json:"id"`
+}
+
+func newTestIotConn(transportType string) *testIotConn {
+	return &testIotConn{
+		transportType:   transportType,
+		sent:            make(chan []byte, 8),
+		recv:            make(chan []byte, 8),
+		sendErrByMethod: make(map[string]error),
+	}
+}
+
+func (c *testIotConn) SendMcpMsg(payload []byte) error {
+	var request capturedJSONRPCRequest
+	if err := json.Unmarshal(payload, &request); err == nil {
+		if sendErr := c.sendErrByMethod[request.Method]; sendErr != nil {
+			return sendErr
+		}
+	}
+
+	c.sent <- append([]byte(nil), payload...)
+	if c.autoRespond {
+		if err := json.Unmarshal(payload, &request); err == nil {
+			if c.onRequest != nil {
+				c.onRequest(request, append([]byte(nil), payload...))
+			}
+			switch request.Method {
+			case string(mcp.MethodInitialize):
+				if c.deviceID != "" {
+					if session := GetDeviceMcpClient(c.deviceID); session != nil {
+						session.iotMux.RLock()
+						_, ok := session.iotOverMcpByTransport[normalizeDeviceTransportType(c.transportType)]
+						session.iotMux.RUnlock()
+						if ok {
+							c.recv <- buildJSONRPCSuccessResponsePayload(request.ID, mcp.InitializeResult{
+								ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+								Capabilities:    mcp.ServerCapabilities{},
+								ServerInfo: mcp.Implementation{
+									Name:    "test-mcp-server",
+									Version: "1.0.0",
+								},
+							})
+						}
+					}
+				}
+			case string(mcp.MethodToolsList):
+				c.recv <- buildJSONRPCSuccessResponsePayload(request.ID, mcp.ListToolsResult{
+					Tools: []mcp.Tool{
+						mcp.NewTool("demo_tool", mcp.WithDescription("demo")),
+					},
+				})
+			}
+		}
+	} else {
+		if err := json.Unmarshal(payload, &request); err == nil && c.onRequest != nil {
+			c.onRequest(request, append([]byte(nil), payload...))
+		}
+	}
+	return nil
+}
+
+func (c *testIotConn) RecvMcpMsg(ctx context.Context, timeout int) ([]byte, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case payload := <-c.recv:
+		return append([]byte(nil), payload...), nil
+	case <-time.After(time.Duration(timeout) * time.Millisecond):
+		return nil, fmt.Errorf("timeout")
+	}
+}
+
+func (c *testIotConn) GetMcpTransportType() string {
+	return c.transportType
+}
+
+func (c *testIotConn) HandleMcpMessage(payload []byte) error {
+	c.recv <- append([]byte(nil), payload...)
+	return nil
+}
+
+func buildJSONRPCSuccessResponsePayload(id json.RawMessage, result any) []byte {
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		panic(err)
+	}
+
+	payload, err := json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Result  json.RawMessage `json:"result"`
+	}{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  resultBytes,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return payload
+}
+
+func buildJSONRPCSuccessResponse(t *testing.T, id json.RawMessage, result any) []byte {
+	t.Helper()
+	return buildJSONRPCSuccessResponsePayload(id, result)
+}
+
+func TestEnsureDeviceIotOverMcp_RegistersTransportBeforeInitialize(t *testing.T) {
+	deviceID := fmt.Sprintf("test-device-%d", time.Now().UnixNano())
+	conn := newTestIotConn("websocket")
+	conn.deviceID = deviceID
+	conn.autoRespond = true
+
+	t.Cleanup(func() {
+		CloseDeviceIotOverMcp(deviceID, conn)
+		if session := GetDeviceMcpClient(deviceID); session != nil && session.cancel != nil {
+			session.cancel()
+		}
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	require.NoError(t, EnsureDeviceIotOverMcp(deviceID, conn))
+
+	session := GetDeviceMcpClient(deviceID)
+	require.NotNil(t, session)
+
+	tool, ok := session.GetIotToolByTransportAndName(conn.GetMcpTransportType(), "demo_tool")
+	require.True(t, ok)
+	require.NotNil(t, tool)
+}
+
+func TestEnsureDeviceIotOverMcp_DeduplicatesConcurrentInitialize(t *testing.T) {
+	deviceID := fmt.Sprintf("dedupe-device-%d", time.Now().UnixNano())
+	conn := newTestIotConn("websocket")
+	conn.deviceID = deviceID
+
+	var initializeRequests int32
+	initStarted := make(chan struct{})
+	releaseInit := make(chan struct{})
+	conn.onRequest = func(request capturedJSONRPCRequest, _ []byte) {
+		switch request.Method {
+		case string(mcp.MethodInitialize):
+			if atomic.AddInt32(&initializeRequests, 1) == 1 {
+				close(initStarted)
+				<-releaseInit
+			}
+			conn.recv <- buildJSONRPCSuccessResponsePayload(request.ID, mcp.InitializeResult{
+				ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+				Capabilities:    mcp.ServerCapabilities{},
+				ServerInfo: mcp.Implementation{
+					Name:    "test-mcp-server",
+					Version: "1.0.0",
+				},
+			})
+		case string(mcp.MethodToolsList):
+			conn.recv <- buildJSONRPCSuccessResponsePayload(request.ID, mcp.ListToolsResult{
+				Tools: []mcp.Tool{
+					mcp.NewTool("demo_tool", mcp.WithDescription("demo")),
+				},
+			})
+		}
+	}
+
+	t.Cleanup(func() {
+		select {
+		case <-releaseInit:
+		default:
+			close(releaseInit)
+		}
+		CloseDeviceIotOverMcp(deviceID, conn)
+		if session := GetDeviceMcpClient(deviceID); session != nil && session.cancel != nil {
+			session.cancel()
+		}
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	firstErrCh := make(chan error, 1)
+	go func() {
+		firstErrCh <- EnsureDeviceIotOverMcp(deviceID, conn)
+	}()
+
+	select {
+	case <-initStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected first initialize request to start")
+	}
+
+	secondErrCh := make(chan error, 1)
+	go func() {
+		secondErrCh <- EnsureDeviceIotOverMcp(deviceID, conn)
+	}()
+
+	select {
+	case err := <-secondErrCh:
+		require.NoError(t, err)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected duplicate ensure to return without waiting for initialize")
+	}
+
+	close(releaseInit)
+	require.NoError(t, <-firstErrCh)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&initializeRequests))
+}
+
+func TestHandleDeviceIotMcpMessage_RoutesPayloadToCurrentTransport(t *testing.T) {
+	deviceID := fmt.Sprintf("route-device-%d", time.Now().UnixNano())
+	conn := newTestIotConn("websocket")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+	session.iotOverMcpByTransport[normalizeDeviceTransportType(conn.transportType)] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, conn.transportType),
+		conn:       conn,
+		connected:  true,
+	}
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+
+	t.Cleanup(func() {
+		cancel()
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	payload := []byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`)
+	require.NoError(t, HandleDeviceIotMcpMessage(deviceID, conn.transportType, payload))
+
+	select {
+	case routed := <-conn.recv:
+		assert.Equal(t, payload, routed)
+	case <-time.After(time.Second):
+		t.Fatal("expected payload to be routed to current transport")
+	}
+}
+
+func TestShouldScheduleDeviceIotOverMcp_UsesTransportInitState(t *testing.T) {
+	deviceID := fmt.Sprintf("schedule-device-%d", time.Now().UnixNano())
+	conn := newTestIotConn("websocket")
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+
+	instance := &McpClientInstance{
+		serverName: buildIotServerName(deviceID, conn.transportType),
+		conn:       conn,
+		connected:  true,
+	}
+	instance.setInitState(mcpClientInitStateInitializing)
+	session.iotOverMcpByTransport[normalizeDeviceTransportType(conn.transportType)] = instance
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+
+	t.Cleanup(func() {
+		cancel()
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	assert.False(t, ShouldScheduleDeviceIotOverMcp(deviceID, conn))
+
+	instance.setInitState(mcpClientInitStateReady)
+	assert.False(t, ShouldScheduleDeviceIotOverMcp(deviceID, conn))
+
+	instance.setInitState(mcpClientInitStateIdle)
+	assert.True(t, ShouldScheduleDeviceIotOverMcp(deviceID, conn))
+
+	otherConn := newTestIotConn("websocket")
+	assert.True(t, ShouldScheduleDeviceIotOverMcp(deviceID, otherConn))
+}
+
+func TestHeartbeatRefreshToolsFailure_DestroysRuntime(t *testing.T) {
+	deviceID := fmt.Sprintf("heartbeat-refresh-fail-%d", time.Now().UnixNano())
+	conn := newTestIotConn("websocket")
+	conn.deviceID = deviceID
+	conn.autoRespond = true
+
+	t.Cleanup(func() {
+		if session := GetDeviceMcpClient(deviceID); session != nil && session.cancel != nil {
+			session.cancel()
+		}
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	require.NoError(t, EnsureDeviceIotOverMcp(deviceID, conn))
+
+	session := GetDeviceMcpClient(deviceID)
+	require.NotNil(t, session)
+
+	session.iotMux.RLock()
+	instance := session.iotOverMcpByTransport[normalizeDeviceTransportType(conn.transportType)]
+	session.iotMux.RUnlock()
+	require.NotNil(t, instance)
+
+	conn.sendErrByMethod[string(mcp.MethodToolsList)] = fmt.Errorf("list tools failed")
+	session.heartbeatMcpInstance(instance)
+
+	session = GetDeviceMcpClient(deviceID)
+	assert.Nil(t, session)
+}
+
+func TestGetToolByNameWithTransport_PrefersCurrentTransport(t *testing.T) {
+	deviceID := fmt.Sprintf("transport-device-%d", time.Now().UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+
+	wsTool := &McpTool{
+		info: &schema.ToolInfo{Name: "shared_tool"},
+	}
+	udpTool := &McpTool{
+		info: &schema.ToolInfo{Name: "shared_tool"},
+	}
+
+	session.iotOverMcpByTransport["websocket"] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, "websocket"),
+		tools: map[string]einotool.InvokableTool{
+			"shared_tool": wsTool,
+		},
+		connected: true,
+	}
+	session.iotOverMcpByTransport["mqtt_udp"] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, "mqtt_udp"),
+		tools: map[string]einotool.InvokableTool{
+			"shared_tool": udpTool,
+		},
+		connected: true,
+	}
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+
+	t.Cleanup(func() {
+		cancel()
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	invokable, ok := GetToolByNameWithTransport(deviceID, "", "websocket", "shared_tool", "")
+	require.True(t, ok)
+	assert.Same(t, wsTool, invokable)
+
+	invokable, ok = GetToolByNameWithTransport(deviceID, "", "mqtt_udp", "shared_tool", "")
+	require.True(t, ok)
+	assert.Same(t, udpTool, invokable)
+
+	tools, err := GetToolsByDeviceIdWithTransport(deviceID, "", "websocket", "")
+	require.NoError(t, err)
+	require.Contains(t, tools, "shared_tool")
+	assert.Same(t, wsTool, tools["shared_tool"])
+}
+
+func TestGetReportedToolsByDeviceID_RequiresCurrentOnlineTransport(t *testing.T) {
+	deviceID := fmt.Sprintf("reported-tools-no-resolver-%d", time.Now().UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+
+	wsTool := &McpTool{info: &schema.ToolInfo{Name: "shared_tool"}}
+	session.iotOverMcpByTransport["websocket"] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, "websocket"),
+		tools: map[string]einotool.InvokableTool{
+			"shared_tool": wsTool,
+		},
+		connected: true,
+		lastPing:  time.Unix(300, 0),
+	}
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+	RegisterCurrentDeviceTransportResolver(nil)
+
+	t.Cleanup(func() {
+		RegisterCurrentDeviceTransportResolver(nil)
+		cancel()
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	reportedTools, err := GetReportedToolsByDeviceID(deviceID)
+	require.NoError(t, err)
+	assert.Empty(t, reportedTools)
+
+	invokable, ok := GetReportedToolByDeviceIDAndName(deviceID, "shared_tool")
+	require.False(t, ok)
+	assert.Nil(t, invokable)
+}
+
+func TestGetReportedToolsByDeviceID_ReturnsEmptyWhenResolverReturnsEmpty(t *testing.T) {
+	deviceID := fmt.Sprintf("reported-tools-empty-resolver-%d", time.Now().UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+
+	udpTool := &McpTool{info: &schema.ToolInfo{Name: "shared_tool"}}
+	session.iotOverMcpByTransport["udp"] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, "udp"),
+		tools: map[string]einotool.InvokableTool{
+			"shared_tool": udpTool,
+		},
+		connected: true,
+		lastPing:  time.Unix(100, 0),
+	}
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+	RegisterCurrentDeviceTransportResolver(func(id string) string {
+		return ""
+	})
+
+	t.Cleanup(func() {
+		RegisterCurrentDeviceTransportResolver(nil)
+		cancel()
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	reportedTools, err := GetReportedToolsByDeviceID(deviceID)
+	require.NoError(t, err)
+	assert.Empty(t, reportedTools)
+
+	invokable, ok := GetReportedToolByDeviceIDAndName(deviceID, "shared_tool")
+	require.False(t, ok)
+	assert.Nil(t, invokable)
+}
+
+func TestGetReportedToolsByDeviceID_UsesResolvedCurrentTransport(t *testing.T) {
+	deviceID := fmt.Sprintf("reported-tools-current-transport-%d", time.Now().UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+
+	wsOnlyTool := &McpTool{info: &schema.ToolInfo{Name: "ws_only"}}
+	wsSharedTool := &McpTool{info: &schema.ToolInfo{Name: "shared_tool"}}
+	udpSharedTool := &McpTool{info: &schema.ToolInfo{Name: "shared_tool"}}
+	udpOnlyTool := &McpTool{info: &schema.ToolInfo{Name: "udp_only"}}
+
+	session.wsEndPointMcp.Store("ws-endpoint", &McpClientInstance{
+		serverName: "ws-endpoint",
+		tools: map[string]einotool.InvokableTool{
+			"ws_only":     wsOnlyTool,
+			"shared_tool": wsSharedTool,
+		},
+	})
+	session.iotOverMcpByTransport["websocket"] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, "websocket"),
+		tools: map[string]einotool.InvokableTool{
+			"shared_tool": wsSharedTool,
+		},
+		connected: true,
+		lastPing:  time.Unix(300, 0),
+	}
+	session.iotOverMcpByTransport["udp"] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, "udp"),
+		tools: map[string]einotool.InvokableTool{
+			"shared_tool": udpSharedTool,
+			"udp_only":    udpOnlyTool,
+		},
+		connected: true,
+		lastPing:  time.Unix(100, 0),
+	}
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+	RegisterCurrentDeviceTransportResolver(func(id string) string {
+		if id == deviceID {
+			return "udp"
+		}
+		return ""
+	})
+
+	t.Cleanup(func() {
+		RegisterCurrentDeviceTransportResolver(nil)
+		cancel()
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	reportedTools, err := GetReportedToolsByDeviceID(deviceID)
+	require.NoError(t, err)
+	require.Contains(t, reportedTools, "shared_tool")
+	assert.Same(t, udpSharedTool, reportedTools["shared_tool"])
+	require.Contains(t, reportedTools, "udp_only")
+	assert.Same(t, udpOnlyTool, reportedTools["udp_only"])
+	assert.NotContains(t, reportedTools, "ws_only")
+
+	invokable, ok := GetReportedToolByDeviceIDAndName(deviceID, "shared_tool")
+	require.True(t, ok)
+	assert.Same(t, udpSharedTool, invokable)
+
+	invokable, ok = GetReportedToolByDeviceIDAndName(deviceID, "ws_only")
+	require.False(t, ok)
+	assert.Nil(t, invokable)
+}
+
+func TestGetReportedToolsByDeviceID_IgnoresUnsupportedIotTransport(t *testing.T) {
+	deviceID := fmt.Sprintf("reported-tools-ignore-unsupported-%d", time.Now().UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+
+	serialTool := &McpTool{info: &schema.ToolInfo{Name: "serial_only"}}
+	udpTool := &McpTool{info: &schema.ToolInfo{Name: "udp_only"}}
+
+	session.iotOverMcpByTransport["serial"] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, "serial"),
+		tools: map[string]einotool.InvokableTool{
+			"serial_only": serialTool,
+		},
+		connected: true,
+		lastPing:  time.Unix(300, 0),
+	}
+	session.iotOverMcpByTransport["udp"] = &McpClientInstance{
+		serverName: buildIotServerName(deviceID, "udp"),
+		tools: map[string]einotool.InvokableTool{
+			"udp_only": udpTool,
+		},
+		connected: true,
+		lastPing:  time.Unix(100, 0),
+	}
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+	RegisterCurrentDeviceTransportResolver(func(id string) string {
+		if id == deviceID {
+			return "udp"
+		}
+		return ""
+	})
+
+	t.Cleanup(func() {
+		RegisterCurrentDeviceTransportResolver(nil)
+		cancel()
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	reportedTools, err := GetReportedToolsByDeviceID(deviceID)
+	require.NoError(t, err)
+	require.Contains(t, reportedTools, "udp_only")
+	assert.Same(t, udpTool, reportedTools["udp_only"])
+	assert.NotContains(t, reportedTools, "serial_only")
+
+	invokable, ok := GetReportedToolByDeviceIDAndName(deviceID, "serial_only")
+	require.False(t, ok)
+	assert.Nil(t, invokable)
+}
+
+func TestRawCallReportedToolByDeviceID_UsesResolvedTransport(t *testing.T) {
+	deviceID := fmt.Sprintf("raw-call-device-%d", time.Now().UnixNano())
+	conn := newTestIotConn("udp")
+	conn.onRequest = func(request capturedJSONRPCRequest, _ []byte) {
+		switch request.Method {
+		case string(mcp.MethodInitialize):
+			conn.recv <- buildJSONRPCSuccessResponsePayload(request.ID, mcp.InitializeResult{
+				ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+				Capabilities:    mcp.ServerCapabilities{},
+				ServerInfo: mcp.Implementation{
+					Name:    "test-mcp-server",
+					Version: "1.0.0",
+				},
+			})
+		case string(mcp.MethodToolsCall):
+			conn.recv <- buildJSONRPCSuccessResponsePayload(request.ID, *mcp.NewToolResultText("raw device call ok"))
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+	instance := NewIotOverMcpClient(deviceID, "udp", conn)
+	require.NotNil(t, instance)
+	require.NoError(t, instance.sendInitlize(context.Background()))
+	session.iotOverMcpByTransport["udp"] = instance
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+	RegisterCurrentDeviceTransportResolver(func(id string) string {
+		if id == deviceID {
+			return "udp"
+		}
+		return ""
+	})
+
+	t.Cleanup(func() {
+		RegisterCurrentDeviceTransportResolver(nil)
+		cancel()
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	_, ok := GetReportedToolByDeviceIDAndName(deviceID, "hidden_tool")
+	require.False(t, ok)
+
+	result, rawCalled, err := RawCallReportedToolByDeviceID(deviceID, "hidden_tool", map[string]interface{}{"mode": "debug"})
+	require.True(t, rawCalled)
+	require.NoError(t, err)
+	assert.Contains(t, result, "raw device call ok")
+}
+
+func TestRawCallReportedToolByAgentID_UsesWsEndpointRuntime(t *testing.T) {
+	agentID := fmt.Sprintf("raw-call-agent-%d", time.Now().UnixNano())
+	conn := newTestIotConn("websocket")
+	conn.onRequest = func(request capturedJSONRPCRequest, _ []byte) {
+		switch request.Method {
+		case string(mcp.MethodInitialize):
+			conn.recv <- buildJSONRPCSuccessResponsePayload(request.ID, mcp.InitializeResult{
+				ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+				Capabilities:    mcp.ServerCapabilities{},
+				ServerInfo: mcp.Implementation{
+					Name:    "test-mcp-server",
+					Version: "1.0.0",
+				},
+			})
+		case string(mcp.MethodToolsCall):
+			conn.recv <- buildJSONRPCSuccessResponsePayload(request.ID, *mcp.NewToolResultText("raw agent call ok"))
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              agentID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+	instance := NewIotOverMcpClient(agentID, "websocket", conn)
+	require.NotNil(t, instance)
+	require.NoError(t, instance.sendInitlize(context.Background()))
+	session.wsEndPointMcp.Store("ws-endpoint", instance)
+	require.NoError(t, AddDeviceMcpClient(agentID, session))
+
+	t.Cleanup(func() {
+		cancel()
+		_ = RemoveDeviceMcpClient(agentID)
+	})
+
+	_, ok := GetReportedToolByAgentIDAndName(agentID, "hidden_tool")
+	require.False(t, ok)
+
+	result, rawCalled, err := RawCallReportedToolByAgentID(agentID, "hidden_tool", map[string]interface{}{"mode": "debug"})
+	require.True(t, rawCalled)
+	require.NoError(t, err)
+	assert.Contains(t, result, "raw agent call ok")
 }

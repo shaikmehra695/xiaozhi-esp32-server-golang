@@ -1262,6 +1262,30 @@ func (c *WebSocketClient) handleMcpToolCallRequest(request *WebSocketRequest) {
 		invokable, ok = mcp.GetReportedToolByAgentIDAndName(agentID, toolName)
 	}
 	if !ok {
+		var (
+			result    string
+			rawCalled bool
+			err       error
+		)
+		if deviceID != "" {
+			result, rawCalled, err = mcp.RawCallReportedToolByDeviceID(deviceID, toolName, arguments)
+		} else {
+			result, rawCalled, err = mcp.RawCallReportedToolByAgentID(agentID, toolName, arguments)
+		}
+		if rawCalled {
+			if err != nil {
+				_ = c.SendResponse(request.ID, 500, nil, fmt.Sprintf("工具调用失败(raw call): %v", err))
+				return
+			}
+			log.Warnf("工具 %s 未出现在工具列表中，已通过 raw call 兜底: device=%s agent=%s", toolName, deviceID, agentID)
+			_ = c.SendResponse(request.ID, 200, map[string]interface{}{
+				"agent_id":  agentID,
+				"device_id": deviceID,
+				"tool_name": toolName,
+				"result":    result,
+			}, "")
+			return
+		}
 		_ = c.SendResponse(request.ID, 404, nil, fmt.Sprintf("工具不存在: %s", toolName))
 		return
 	}
