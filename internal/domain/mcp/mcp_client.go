@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -123,6 +124,10 @@ func GetDeviceMcpClient(deviceId string) *DeviceMcpSession {
 	return mcpClientPool.GetMcpClient(deviceId)
 }
 
+func GetOrCreateDeviceMcpClient(deviceId string) *DeviceMcpSession {
+	return mcpClientPool.GetOrCreateMcpClient(deviceId)
+}
+
 func AddDeviceMcpClient(deviceId string, mcpClient *DeviceMcpSession) error {
 	mcpClientPool.AddMcpClient(deviceId, mcpClient)
 	return nil
@@ -131,6 +136,22 @@ func AddDeviceMcpClient(deviceId string, mcpClient *DeviceMcpSession) error {
 func RemoveDeviceMcpClient(deviceId string) error {
 	mcpClientPool.RemoveMcpClient(deviceId)
 	return nil
+}
+
+func ShouldScheduleDeviceIotOverMcp(deviceId string, conn ConnInterface) bool {
+	if deviceId = strings.TrimSpace(deviceId); deviceId == "" || conn == nil {
+		return false
+	}
+	transportType := strings.TrimSpace(conn.GetMcpTransportType())
+	if transportType == "" {
+		return false
+	}
+
+	session := GetDeviceMcpClient(deviceId)
+	if session == nil {
+		return true
+	}
+	return session.ShouldScheduleIotInit(transportType, conn)
 }
 
 // EnsureDeviceIotOverMcp 确保设备侧 IotOverMcp 运行时与 transport 绑定。
@@ -144,19 +165,20 @@ func EnsureDeviceIotOverMcp(deviceId string, conn ConnInterface) error {
 		return fmt.Errorf("transportType 为空")
 	}
 
-	mcpClientSession := GetDeviceMcpClient(deviceId)
+	mcpClientSession := GetOrCreateDeviceMcpClient(deviceId)
 	if mcpClientSession == nil {
-		mcpClientSession = NewDeviceMCPSession(deviceId)
-		AddDeviceMcpClient(deviceId, mcpClientSession)
+		return fmt.Errorf("获取或创建设备MCP会话失败")
 	}
 
 	transportType = normalizeDeviceTransportType(transportType)
 
 	mcpClientSession.iotMux.Lock()
 	existing := mcpClientSession.iotOverMcpByTransport[transportType]
-	if existing != nil && existing.IsConnected() && existing.conn == conn {
-		mcpClientSession.iotMux.Unlock()
-		return nil
+	if existing != nil && existing.conn == conn {
+		if existing.IsInitializing() || existing.IsReady() {
+			mcpClientSession.iotMux.Unlock()
+			return nil
+		}
 	}
 
 	iotOverMcpClient := NewIotOverMcpClient(deviceId, transportType, conn)
@@ -173,9 +195,11 @@ func EnsureDeviceIotOverMcp(deviceId string, conn ConnInterface) error {
 	mcpClientSession.iotMux.Unlock()
 
 	if err := iotOverMcpClient.startIotOverMcp(); err != nil {
+		iotOverMcpClient.setInitState(mcpClientInitStateIdle)
 		CloseDeviceIotOverMcp(deviceId, conn)
 		return fmt.Errorf("初始化IotOverMcp客户端失败: %w", err)
 	}
+	iotOverMcpClient.setInitState(mcpClientInitStateReady)
 
 	return nil
 }
@@ -360,6 +384,37 @@ func GetReportedToolByAgentIDAndName(agentId, toolName string) (tool.InvokableTo
 
 	invokable, ok := reportedTools[toolName]
 	return invokable, ok
+}
+
+func RawCallReportedToolByDeviceID(deviceId, toolName string, arguments map[string]interface{}) (string, bool, error) {
+	if deviceId == "" {
+		return "", false, nil
+	}
+
+	client := mcpClientPool.GetMcpClient(deviceId)
+	if client == nil {
+		return "", false, nil
+	}
+
+	transportType, resolved := ResolveCurrentDeviceTransport(deviceId)
+	if !resolved || transportType == "" {
+		return "", false, nil
+	}
+
+	return client.RawCallIotToolByTransport(context.Background(), transportType, toolName, arguments)
+}
+
+func RawCallReportedToolByAgentID(agentId, toolName string, arguments map[string]interface{}) (string, bool, error) {
+	if agentId == "" {
+		return "", false, nil
+	}
+
+	client := mcpClientPool.GetMcpClient(agentId)
+	if client == nil {
+		return "", false, nil
+	}
+
+	return client.RawCallWsEndpointTool(context.Background(), toolName, arguments)
 }
 
 // GetReportedToolsByDeviceIdAndAgentId 兼容方法：明确分流设备/智能体查询，不再混用

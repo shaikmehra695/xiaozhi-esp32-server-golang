@@ -13,6 +13,7 @@ import (
 	"xiaozhi-esp32-server-golang/internal/app/server/types"
 	"xiaozhi-esp32-server-golang/internal/data/client"
 	. "xiaozhi-esp32-server-golang/internal/data/client"
+	msgdata "xiaozhi-esp32-server-golang/internal/data/msg"
 	. "xiaozhi-esp32-server-golang/logger"
 	log "xiaozhi-esp32-server-golang/logger"
 )
@@ -28,16 +29,31 @@ type MqttConfig struct {
 
 // MqttUdpAdapter MQTT-UDP适配器结构
 type MqttUdpAdapter struct {
-	client          mqtt.Client
-	udpServer       *UdpServer
-	mqttConfig      *MqttConfig
-	deviceId2Conn   *sync.Map
-	msgChan         chan mqtt.Message
-	onNewConnection types.OnNewConnection
-	stopCtx         context.Context
-	stopCancel      context.CancelFunc
+	client             mqtt.Client
+	udpServer          *UdpServer
+	mqttConfig         *MqttConfig
+	deviceId2Conn      *sync.Map
+	lifecycleStates    *sync.Map
+	msgChan            chan mqtt.Message
+	onNewConnection    types.OnNewConnection
+	onDeviceOnline     func(deviceID string)
+	onDeviceOffline    func(deviceID string)
+	onTransportReady   func(deviceID string)
+	offlineGracePeriod time.Duration
+	stopCtx            context.Context
+	stopCancel         context.CancelFunc
 	sync.RWMutex
 }
+
+type mqttDeviceLifecycleState struct {
+	mu             sync.Mutex
+	brokerOnline   bool
+	lastEventTs    int64
+	cleanupTimer   *time.Timer
+	cleanupVersion uint64
+}
+
+const defaultOfflineGracePeriod = 2 * time.Minute
 
 // MqttUdpAdapterOption 用于可选参数
 type MqttUdpAdapterOption func(*MqttUdpAdapter)
@@ -55,15 +71,41 @@ func WithOnNewConnection(onNewConnection types.OnNewConnection) MqttUdpAdapterOp
 	}
 }
 
+func WithOnDeviceOnline(onDeviceOnline func(deviceID string)) MqttUdpAdapterOption {
+	return func(s *MqttUdpAdapter) {
+		s.onDeviceOnline = onDeviceOnline
+	}
+}
+
+func WithOnDeviceOffline(onDeviceOffline func(deviceID string)) MqttUdpAdapterOption {
+	return func(s *MqttUdpAdapter) {
+		s.onDeviceOffline = onDeviceOffline
+	}
+}
+
+func WithOnTransportReady(onTransportReady func(deviceID string)) MqttUdpAdapterOption {
+	return func(s *MqttUdpAdapter) {
+		s.onTransportReady = onTransportReady
+	}
+}
+
+func WithOfflineGracePeriod(gracePeriod time.Duration) MqttUdpAdapterOption {
+	return func(s *MqttUdpAdapter) {
+		s.offlineGracePeriod = gracePeriod
+	}
+}
+
 // NewMqttUdpAdapter 创建新的MQTT-UDP适配器，config为必传，其它参数用Option
 func NewMqttUdpAdapter(config *MqttConfig, opts ...MqttUdpAdapterOption) *MqttUdpAdapter {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &MqttUdpAdapter{
-		mqttConfig:    config,
-		deviceId2Conn: &sync.Map{},
-		msgChan:       make(chan mqtt.Message, 10000),
-		stopCtx:       ctx,
-		stopCancel:    cancel,
+		mqttConfig:         config,
+		deviceId2Conn:      &sync.Map{},
+		lifecycleStates:    &sync.Map{},
+		msgChan:            make(chan mqtt.Message, 10000),
+		offlineGracePeriod: defaultOfflineGracePeriod,
+		stopCtx:            ctx,
+		stopCancel:         cancel,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -115,6 +157,24 @@ func (s *MqttUdpAdapter) clearDeviceSessions() {
 			conn.Destroy()
 		}
 		s.deviceId2Conn.Delete(key)
+		return true
+	})
+}
+
+func (s *MqttUdpAdapter) clearLifecycleStates() {
+	if s.lifecycleStates == nil {
+		return
+	}
+	s.lifecycleStates.Range(func(key, value interface{}) bool {
+		if state, ok := value.(*mqttDeviceLifecycleState); ok {
+			state.mu.Lock()
+			if state.cleanupTimer != nil {
+				state.cleanupTimer.Stop()
+				state.cleanupTimer = nil
+			}
+			state.mu.Unlock()
+		}
+		s.lifecycleStates.Delete(key)
 		return true
 	})
 }
@@ -229,9 +289,32 @@ func (s *MqttUdpAdapter) handleMessage(client mqtt.Client, msg mqtt.Message) {
 func (s *MqttUdpAdapter) handleDisconnect(deviceId string) {
 	Debugf("handleDisconnect, deviceId: %s", deviceId)
 
+	notifyOffline := false
+	if state := s.getLifecycleState(deviceId); state != nil {
+		shouldDeleteState := false
+		state.mu.Lock()
+		if state.brokerOnline {
+			state.brokerOnline = false
+			state.cleanupVersion++
+			if state.cleanupTimer != nil {
+				state.cleanupTimer.Stop()
+				state.cleanupTimer = nil
+			}
+			notifyOffline = true
+		}
+		shouldDeleteState = !state.brokerOnline && state.cleanupTimer == nil
+		state.mu.Unlock()
+		if shouldDeleteState {
+			s.lifecycleStates.Delete(deviceId)
+		}
+	}
+
 	conn := s.getDeviceSession(deviceId)
 	if conn == nil {
 		Debugf("handleDisconnect, deviceId: %s not found", deviceId)
+		if notifyOffline && s.onDeviceOffline != nil {
+			s.onDeviceOffline(deviceId)
+		}
 		return
 	}
 	udpServer := s.getUdpServer()
@@ -239,6 +322,9 @@ func (s *MqttUdpAdapter) handleDisconnect(deviceId string) {
 		udpServer.CloseSession(conn.UdpSession.ConnId)
 	}
 	s.deviceId2Conn.Delete(deviceId)
+	if notifyOffline && s.onDeviceOffline != nil {
+		s.onDeviceOffline(deviceId)
+	}
 }
 
 // Stop 停止适配器：取消 context、断开 MQTT、关闭 UDP、清理会话（供热更前调用）
@@ -257,6 +343,7 @@ func (s *MqttUdpAdapter) Stop() {
 		Debugf("MqttUdpAdapter Stop, close udpServer")
 		_ = udpServer.Close()
 	}
+	s.clearLifecycleStates()
 	s.clearDeviceSessions()
 }
 
@@ -272,6 +359,7 @@ func (s *MqttUdpAdapter) ReloadMqttClient(newConfig *MqttConfig) {
 	if oldClient != nil && oldClient.IsConnected() {
 		oldClient.Disconnect(250)
 	}
+	s.clearLifecycleStates()
 	s.clearDeviceSessions()
 	go s.connectAndRetry()
 }
@@ -282,10 +370,212 @@ func (s *MqttUdpAdapter) ReloadUdpServer(newUdpServer *UdpServer) {
 		return
 	}
 	oldUdp := s.getUdpServer()
+	s.clearLifecycleStates()
 	s.clearDeviceSessions()
 	s.setUdpServer(newUdpServer)
 	if oldUdp != nil {
 		_ = oldUdp.Close()
+	}
+}
+
+func (s *MqttUdpAdapter) getLifecycleState(deviceID string) *mqttDeviceLifecycleState {
+	if s.lifecycleStates == nil || deviceID == "" {
+		return nil
+	}
+	if state, ok := s.lifecycleStates.Load(deviceID); ok {
+		if lifecycleState, ok := state.(*mqttDeviceLifecycleState); ok {
+			return lifecycleState
+		}
+	}
+	return nil
+}
+
+func (s *MqttUdpAdapter) getOrCreateLifecycleState(deviceID string) *mqttDeviceLifecycleState {
+	if s.lifecycleStates == nil || deviceID == "" {
+		return nil
+	}
+	if state := s.getLifecycleState(deviceID); state != nil {
+		return state
+	}
+	newState := &mqttDeviceLifecycleState{}
+	actual, _ := s.lifecycleStates.LoadOrStore(deviceID, newState)
+	return actual.(*mqttDeviceLifecycleState)
+}
+
+func (s *MqttUdpAdapter) markDeviceOnline(deviceID string, eventTs int64) bool {
+	state := s.getOrCreateLifecycleState(deviceID)
+	if state == nil {
+		return false
+	}
+	if eventTs <= 0 {
+		eventTs = time.Now().UnixMilli()
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.lastEventTs > 0 && eventTs < state.lastEventTs {
+		return false
+	}
+
+	if eventTs > state.lastEventTs {
+		state.lastEventTs = eventTs
+	}
+
+	wasOnline := state.brokerOnline
+	state.brokerOnline = true
+	state.cleanupVersion++
+	if state.cleanupTimer != nil {
+		state.cleanupTimer.Stop()
+		state.cleanupTimer = nil
+	}
+	return !wasOnline
+}
+
+func (s *MqttUdpAdapter) markDeviceOffline(deviceID string, eventTs int64) (bool, uint64) {
+	state := s.getOrCreateLifecycleState(deviceID)
+	if state == nil {
+		return false, 0
+	}
+	if eventTs <= 0 {
+		eventTs = time.Now().UnixMilli()
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.lastEventTs > 0 && eventTs < state.lastEventTs {
+		return false, 0
+	}
+
+	if eventTs > state.lastEventTs {
+		state.lastEventTs = eventTs
+	}
+
+	wasOnline := state.brokerOnline
+	state.brokerOnline = false
+	state.cleanupVersion++
+	version := state.cleanupVersion
+	if state.cleanupTimer != nil {
+		state.cleanupTimer.Stop()
+	}
+	state.cleanupTimer = time.AfterFunc(s.offlineGracePeriod, func() {
+		s.cleanupOfflineTransport(deviceID, version)
+	})
+	return wasOnline, version
+}
+
+func (s *MqttUdpAdapter) cleanupOfflineTransport(deviceID string, version uint64) {
+	state := s.getLifecycleState(deviceID)
+	if state == nil {
+		return
+	}
+
+	state.mu.Lock()
+	if state.brokerOnline || state.cleanupVersion != version {
+		state.mu.Unlock()
+		return
+	}
+	state.cleanupTimer = nil
+	state.mu.Unlock()
+
+	conn := s.getDeviceSession(deviceID)
+	if conn == nil {
+		s.lifecycleStates.Delete(deviceID)
+		return
+	}
+	conn.Destroy()
+}
+
+func (s *MqttUdpAdapter) EnsureDeviceTransport(deviceId string) (*MqttUdpConn, error) {
+	deviceSession := s.getDeviceSession(deviceId)
+	if deviceSession != nil {
+		deviceSession.MarkBrokerOnline()
+		return deviceSession, nil
+	}
+
+	udpServer := s.getUdpServer()
+	if udpServer == nil {
+		return nil, fmt.Errorf("udpServer is nil, deviceId: %s", deviceId)
+	}
+	udpSession := udpServer.CreateSession(deviceId, "")
+	if udpSession == nil {
+		return nil, fmt.Errorf("创建 udpSession 失败, deviceId: %s", deviceId)
+	}
+
+	topicMacAddr := strings.ReplaceAll(deviceId, ":", "_")
+	publicTopic := fmt.Sprintf("%s%s", client.ServerPubTopicPrefix, topicMacAddr)
+
+	mqttClient := s.getClient()
+	if mqttClient == nil {
+		udpServer.CloseSession(udpSession.ConnId)
+		return nil, fmt.Errorf("mqtt client is nil, deviceId: %s", deviceId)
+	}
+
+	deviceSession = NewMqttUdpConn(deviceId, publicTopic, mqttClient, udpServer, udpSession)
+
+	strAesKey, strFullNonce := udpSession.GetAesKeyAndNonce()
+	deviceSession.SetData("aes_key", strAesKey)
+	deviceSession.SetData("full_nonce", strFullNonce)
+	deviceSession.MarkBrokerOnline()
+
+	s.SetDeviceSession(deviceId, deviceSession)
+	deviceSession.OnClose(s.handleDisconnect)
+
+	if s.onNewConnection != nil {
+		s.onNewConnection(deviceSession)
+	}
+	return deviceSession, nil
+}
+
+func (s *MqttUdpAdapter) promoteDeviceOnline(deviceID string, eventTs int64) (*MqttUdpConn, bool, error) {
+	notifyOnline := s.markDeviceOnline(deviceID, eventTs)
+	conn, err := s.EnsureDeviceTransport(deviceID)
+	if err != nil {
+		return nil, notifyOnline, err
+	}
+	if conn != nil {
+		conn.MarkBrokerOnline()
+	}
+	return conn, notifyOnline, nil
+}
+
+func (s *MqttUdpAdapter) handleLifecycleMessage(payload []byte) {
+	var lifecycleEvent msgdata.MqttLifecycleEvent
+	if err := json.Unmarshal(payload, &lifecycleEvent); err != nil {
+		Errorf("解析 MQTT 生命周期消息失败: %v", err)
+		return
+	}
+	deviceID := strings.TrimSpace(lifecycleEvent.DeviceID)
+	if deviceID == "" {
+		Errorf("MQTT 生命周期消息缺少 device_id: %s", string(payload))
+		return
+	}
+
+	switch strings.TrimSpace(lifecycleEvent.State) {
+	case msgdata.MqttLifecycleStateOnline:
+		_, notifyOnline, err := s.promoteDeviceOnline(deviceID, lifecycleEvent.Ts)
+		if err != nil {
+			Errorf("处理 MQTT 上线事件失败: device=%s err=%v", deviceID, err)
+			return
+		}
+		if notifyOnline && s.onDeviceOnline != nil {
+			s.onDeviceOnline(deviceID)
+		}
+		if notifyOnline && s.onTransportReady != nil {
+			s.onTransportReady(deviceID)
+		}
+	case msgdata.MqttLifecycleStateOffline:
+		conn := s.getDeviceSession(deviceID)
+		if conn != nil {
+			conn.MarkBrokerOffline(s.offlineGracePeriod)
+		}
+		notifyOffline, _ := s.markDeviceOffline(deviceID, lifecycleEvent.Ts)
+		if notifyOffline && s.onDeviceOffline != nil {
+			s.onDeviceOffline(deviceID)
+		}
+	default:
+		Warnf("忽略未知 MQTT 生命周期状态: device=%s state=%s", deviceID, lifecycleEvent.State)
 	}
 }
 
@@ -295,56 +585,36 @@ func (s *MqttUdpAdapter) processMessage() {
 		select {
 		case <-s.stopCtx.Done():
 			return
-		case msg := <-s.msgChan:
-			Debugf("mqtt handleMessage, topic: %s, payload: %s", msg.Topic(), string(msg.Payload()))
+		case mqttMsg := <-s.msgChan:
+			Debugf("mqtt handleMessage, topic: %s, payload: %s", mqttMsg.Topic(), string(mqttMsg.Payload()))
+			if mqttMsg.Topic() == msgdata.MDeviceLifecycleTopic {
+				s.handleLifecycleMessage(mqttMsg.Payload())
+				continue
+			}
 			var clientMsg ClientMessage
-			if err := json.Unmarshal(msg.Payload(), &clientMsg); err != nil {
+			if err := json.Unmarshal(mqttMsg.Payload(), &clientMsg); err != nil {
 				Errorf("解析JSON失败: %v", err)
 				continue
 			}
-			topicMacAddr, deviceId := s.getDeviceIdByTopic(msg.Topic())
+			_, deviceId := s.getDeviceIdByTopic(mqttMsg.Topic())
 			if deviceId == "" {
-				Errorf("mac_addr解析失败: %v", msg.Topic())
+				Errorf("mac_addr解析失败: %v", mqttMsg.Topic())
 				continue
 			}
 
-			deviceSession := s.getDeviceSession(deviceId)
-			if deviceSession == nil {
-				// 从UDP服务端获取会话信息
-				udpServer := s.getUdpServer()
-				if udpServer == nil {
-					Errorf("udpServer is nil, deviceId: %s", deviceId)
-					continue
-				}
-				udpSession := udpServer.CreateSession(deviceId, "")
-				if udpSession == nil {
-					Errorf("创建 udpSession 失败, deviceId: %s", deviceId)
-					continue
-				}
-
-				publicTopic := fmt.Sprintf("%s%s", client.ServerPubTopicPrefix, topicMacAddr)
-
-				mqttClient := s.getClient()
-				if mqttClient == nil {
-					Errorf("mqtt client is nil, deviceId: %s", deviceId)
-					continue
-				}
-				deviceSession = NewMqttUdpConn(deviceId, publicTopic, mqttClient, udpServer, udpSession)
-
-				strAesKey, strFullNonce := udpSession.GetAesKeyAndNonce()
-				deviceSession.SetData("aes_key", strAesKey)
-				deviceSession.SetData("full_nonce", strFullNonce)
-
-				//保存至deviceId2UdpSession
-				s.SetDeviceSession(deviceId, deviceSession)
-
-				deviceSession.OnClose(s.handleDisconnect)
-
-				s.onNewConnection(deviceSession)
+			deviceSession, notifyOnline, err := s.promoteDeviceOnline(deviceId, time.Now().UnixMilli())
+			if err != nil {
+				Errorf("确保 MQTT transport 在线失败: device=%s err=%v", deviceId, err)
+				continue
+			}
+			if notifyOnline && s.onDeviceOnline != nil {
+				s.onDeviceOnline(deviceId)
+			}
+			if notifyOnline && s.onTransportReady != nil {
+				s.onTransportReady(deviceId)
 			}
 
-			err := deviceSession.PushMsgToRecvCmd(msg.Payload())
-			if err != nil {
+			if err := deviceSession.PushMsgToRecvCmd(mqttMsg.Payload()); err != nil {
 				Errorf("InternalRecvCmd失败: %v", err)
 				continue
 			}

@@ -44,12 +44,25 @@ type ChatManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	helloMu     sync.Mutex
-	helloInited bool
+	helloMu      sync.Mutex
+	helloInited  bool
+	mcpInitState chatMcpInitState
 
 	// Close 保护，防止多次关闭
 	closeOnce      sync.Once
 	managerClosing atomic.Bool
+}
+
+type chatMcpInitState uint8
+
+const (
+	chatMcpInitStateIdle chatMcpInitState = iota
+	chatMcpInitStateInFlight
+	chatMcpInitStateReady
+)
+
+type brokerOnlineAwareTransport interface {
+	IsBrokerOnline() bool
 }
 
 type ChatManagerOption func(*ChatManager)
@@ -391,9 +404,7 @@ func (c *ChatManager) HandleHelloMessage(msg *ClientMessage) error {
 		if _, err := c.ensureSession(); err != nil {
 			return err
 		}
-		if isMcp, ok := msg.Features["mcp"]; ok && isMcp {
-			go initMcp(c.clientState.DeviceID, c.mcpTransport)
-		}
+		c.scheduleMcpInitOnHelloLocked(msg)
 		log.Infof("设备 %s 收到重复hello，跳过重复初始化", clientState.DeviceID)
 		return c.sendHelloResponse(msg)
 	}
@@ -409,11 +420,69 @@ func (c *ChatManager) HandleHelloMessage(msg *ClientMessage) error {
 	if _, err := c.ensureSession(); err != nil {
 		return err
 	}
-	if isMcp, ok := msg.Features["mcp"]; ok && isMcp {
-		go initMcp(c.clientState.DeviceID, c.mcpTransport)
-	}
+	c.scheduleMcpInitOnHelloLocked(msg)
 
 	return c.sendHelloResponse(msg)
+}
+
+func (c *ChatManager) scheduleMcpInitOnHelloLocked(msg *ClientMessage) {
+	if !c.hasMcpFeature(msg) {
+		return
+	}
+	c.scheduleMcpInitLocked()
+}
+
+func (c *ChatManager) scheduleMcpInitLocked() {
+	if c.mcpTransport == nil {
+		return
+	}
+	if c.mcpInitState == chatMcpInitStateInFlight || c.mcpInitState == chatMcpInitStateReady {
+		return
+	}
+	if !mcp.ShouldScheduleDeviceIotOverMcp(c.clientState.DeviceID, c.mcpTransport) {
+		return
+	}
+
+	c.mcpInitState = chatMcpInitStateInFlight
+	deviceID := c.clientState.DeviceID
+	transportType := strings.TrimSpace(c.mcpTransport.GetMcpTransportType())
+	go func() {
+		err := initMcp(deviceID, c.mcpTransport)
+		c.finishMcpInit(transportType, err)
+	}()
+}
+
+func (c *ChatManager) finishMcpInit(transportType string, err error) {
+	c.helloMu.Lock()
+	defer c.helloMu.Unlock()
+
+	if c.ctx.Err() != nil || c.managerClosing.Load() {
+		return
+	}
+	if c.mcpTransport == nil {
+		c.mcpInitState = chatMcpInitStateIdle
+		return
+	}
+	currentTransportType := strings.TrimSpace(c.mcpTransport.GetMcpTransportType())
+	if currentTransportType != strings.TrimSpace(transportType) {
+		return
+	}
+
+	if err != nil {
+		c.mcpInitState = chatMcpInitStateIdle
+		log.Warnf("设备 %s MCP 初始化失败，等待后续 hello 重试: %v", c.DeviceID, err)
+		return
+	}
+
+	c.mcpInitState = chatMcpInitStateReady
+}
+
+func (c *ChatManager) hasMcpFeature(msg *ClientMessage) bool {
+	if msg == nil || msg.Features == nil {
+		return false
+	}
+	isMcp, ok := msg.Features["mcp"]
+	return ok && isMcp
 }
 
 func (c *ChatManager) sendHelloResponse(msg *ClientMessage) error {
@@ -625,7 +694,16 @@ func (c *ChatManager) GetTransportType() string {
 	if c.serverTransport.IsClosed() {
 		return ""
 	}
+	if awareTransport, ok := c.transport.(brokerOnlineAwareTransport); ok && !awareTransport.IsBrokerOnline() {
+		return ""
+	}
 	return c.serverTransport.GetTransportType()
+}
+
+func (c *ChatManager) WarmupMcp() {
+	c.helloMu.Lock()
+	defer c.helloMu.Unlock()
+	c.scheduleMcpInitLocked()
 }
 
 func (c *ChatManager) GetSession() *ChatSession {

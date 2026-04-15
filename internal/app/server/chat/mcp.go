@@ -65,9 +65,10 @@ func (c *McpTransport) GetMcpTransportType() string {
 	return c.ServerTransport.GetTransportType()
 }
 
-func initMcp(deviceID string, mcpTransport *McpTransport) {
+func initMcp(deviceID string, mcpTransport *McpTransport) error {
 	if err := mcp.EnsureDeviceIotOverMcp(deviceID, mcpTransport); err != nil {
 		log.Errorf("确保IotOverMcp客户端失败: %v", err)
-		return
+		return err
 	}
+	return nil
 }

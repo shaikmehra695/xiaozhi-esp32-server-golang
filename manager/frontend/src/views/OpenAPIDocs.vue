@@ -168,7 +168,7 @@ X-API-Token: &lt;api-token&gt;</code></pre>
       <section id="mcp" class="vp-section">
         <h2>6. MCP 工具接口</h2>
 
-        <h3>6.1 获取工具列表</h3>
+        <h3>6.1 获取智能体工具列表</h3>
         <div class="api-line"><span class="method get">GET</span><code>/api/open/v1/agents/:id/mcp-tools</code></div>
         <h4>Path 参数</h4>
         <table><thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
@@ -177,7 +177,7 @@ X-API-Token: &lt;api-token&gt;</code></pre>
         <h4>出参示例</h4>
         <pre><code>{"data":{"tools":[{"name":"tool_a","description":"..."}]}}</code></pre>
 
-        <h3>6.2 调用工具</h3>
+        <h3>6.2 调用智能体工具</h3>
         <div class="api-line"><span class="method post">POST</span><code>/api/open/v1/agents/:id/mcp-call</code></div>
         <h4>Path 参数</h4>
         <table><thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
@@ -190,6 +190,39 @@ X-API-Token: &lt;api-token&gt;</code></pre>
         </tbody></table>
         <h4>出参示例</h4>
         <pre><code>{"data":{"result":"ok"}}</code></pre>
+
+        <h3>6.3 获取设备工具列表</h3>
+        <div class="api-line"><span class="method get">GET</span><code>/api/open/v1/devices/:id/mcp-tools</code></div>
+        <h4>Path 参数</h4>
+        <table><thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
+          <tr><td>id</td><td>number</td><td>是</td><td>设备 ID</td></tr>
+        </tbody></table>
+        <h4>说明</h4>
+        <ul>
+          <li>仅返回当前在线 transport 对应的设备侧 IoT over MCP 工具。</li>
+          <li>不会混入其它 transport 的历史工具，也不会混入智能体 ws-endpoint 工具。</li>
+        </ul>
+        <h4>出参示例</h4>
+        <pre><code>{"data":{"tools":[{"name":"device_tool","description":"..."}]}}</code></pre>
+
+        <h3>6.4 调用设备工具</h3>
+        <div class="api-line"><span class="method post">POST</span><code>/api/open/v1/devices/:id/mcp-call</code></div>
+        <h4>Path 参数</h4>
+        <table><thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
+          <tr><td>id</td><td>number</td><td>是</td><td>设备 ID</td></tr>
+        </tbody></table>
+        <h4>Body 参数</h4>
+        <table><thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
+          <tr><td>tool_name</td><td>string</td><td>是</td><td>工具名称</td></tr>
+          <tr><td>arguments</td><td>object</td><td>否</td><td>工具参数对象</td></tr>
+        </tbody></table>
+        <h4>说明</h4>
+        <ul>
+          <li>优先按当前设备工具列表匹配调用。</li>
+          <li>当工具暂未出现在列表中，但当前 runtime 仍可用时，服务端会自动尝试 raw call 兜底。</li>
+        </ul>
+        <h4>出参示例</h4>
+        <pre><code>{"data":{"device_id":"bedroom","tool_name":"device_tool","result":"ok"}}</code></pre>
       </section>
     </main>
   </div>

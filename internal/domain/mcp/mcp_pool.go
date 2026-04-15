@@ -11,6 +11,7 @@ import (
 
 type McpClientPool struct {
 	device2McpClient cmap.ConcurrentMap[string, *DeviceMcpSession]
+	createMu         sync.Mutex
 }
 
 var mcpClientPool *McpClientPool
@@ -53,6 +54,26 @@ func (p *McpClientPool) GetMcpClient(deviceID string) *DeviceMcpSession {
 	if !ok {
 		return nil
 	}
+	return client
+}
+
+func (p *McpClientPool) GetOrCreateMcpClient(deviceID string) *DeviceMcpSession {
+	if deviceID = strings.TrimSpace(deviceID); deviceID == "" {
+		return nil
+	}
+	if client := p.GetMcpClient(deviceID); client != nil {
+		return client
+	}
+
+	p.createMu.Lock()
+	defer p.createMu.Unlock()
+
+	if client := p.GetMcpClient(deviceID); client != nil {
+		return client
+	}
+
+	client := NewDeviceMCPSession(deviceID)
+	p.device2McpClient.Set(deviceID, client)
 	return client
 }
 
