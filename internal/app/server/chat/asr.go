@@ -792,6 +792,26 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					return
 				}
 
+				if a.session != nil {
+					handledByRealtimeGate, gateErr := a.session.tryHandleRealtimeMcpAudioASR(ctx, text)
+					if gateErr != nil {
+						log.Warnf("realtime媒体播放快速控制失败: device=%s text=%q err=%v", state.DeviceID, text, gateErr)
+					}
+					if handledByRealtimeGate {
+						if !state.IsRealTime() {
+							return
+						}
+						if restartErr := a.RestartAsrRecognition(ctx); restartErr != nil {
+							log.Errorf("realtime媒体控制后重启ASR识别失败: %v", restartErr)
+							if onError != nil {
+								onError(restartErr)
+							}
+							return
+						}
+						continue
+					}
+				}
+
 				// 添加到队列（迁移到 ASRManager 中处理）
 				if err := a.addAsrResultToQueue(text, speakerResult); err != nil {
 					log.Errorf("开始对话失败: %v", err)
