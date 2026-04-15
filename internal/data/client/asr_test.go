@@ -143,3 +143,41 @@ func TestRetireAsrResult_Funasr2PassOnlineMarkedFinalStillWaitsForOfflineFinal(t
 		t.Fatalf("unexpected first text callbacks: %v", firstTexts)
 	}
 }
+
+func TestRetireAsrResult_FunasrOfflineReturnsFirstNonEmptyTextAsFinal(t *testing.T) {
+	var firstText string
+	var firstIsFinal bool
+	a := &Asr{
+		AsrType:          "funasr",
+		Mode:             "offline",
+		AsrResultChannel: make(chan asr_types.StreamingResult, 2),
+		ClientState: &ClientState{
+			OnAsrFirstTextCallback: func(text string, isFinal bool) {
+				firstText = text
+				firstIsFinal = isFinal
+			},
+		},
+	}
+	a.AsrResultChannel <- asr_types.StreamingResult{Text: "好的，再见", IsFinal: false, Mode: "2pass-offline"}
+	a.AsrResultChannel <- asr_types.StreamingResult{Text: "", IsFinal: true, Mode: "", EmptyReason: asr_types.EmptyReasonProviderEmptyFinal}
+
+	result, shouldContinue, err := a.RetireAsrResult(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !shouldContinue {
+		t.Fatalf("expected shouldContinue to be true")
+	}
+	if result.Text != "好的，再见" {
+		t.Fatalf("expected final text %q, got %q", "好的，再见", result.Text)
+	}
+	if !result.IsFinal {
+		t.Fatalf("expected result to be final")
+	}
+	if result.EmptyReason != "" {
+		t.Fatalf("expected empty reason to be cleared, got %q", result.EmptyReason)
+	}
+	if firstText != "好的，再见" || !firstIsFinal {
+		t.Fatalf("unexpected first text callback: text=%q, isFinal=%v", firstText, firstIsFinal)
+	}
+}

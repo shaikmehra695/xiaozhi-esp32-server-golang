@@ -69,6 +69,7 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, b
 			// 避免 ctx 取消时概率性选中 channel，导致使用已取消 context 的结果
 			select {
 			case result, ok := <-a.AsrResultChannel:
+
 				log.Debugf("asr result: %s, ok: %+v, isFinal: %+v, emptyReason: %s, error: %+v", result.Text, ok, result.IsFinal, result.EmptyReason, result.Error)
 				if result.Error != nil {
 					if result.RetryReason != "" {
@@ -76,6 +77,13 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, b
 						return result, true, nil
 					}
 					return emptyResult, false, result.Error
+				}
+
+				if strings.EqualFold(a.AsrType, "funasr") &&
+					strings.EqualFold(strings.TrimSpace(a.Mode), "offline") &&
+					strings.TrimSpace(result.Text) != "" {
+					result.IsFinal = true
+					result.EmptyReason = asr_types.EmptyReasonNone
 				}
 
 				// 检测首次返回字符（文本不为空且未发送过）
@@ -97,7 +105,6 @@ func (a *Asr) RetireAsrResult(ctx context.Context) (asr_types.StreamingResult, b
 				if result.IsFinal {
 					return result, true, nil
 				}
-
 				if !ok {
 					log.Debugf("asr result channel closed")
 					return emptyResult, true, nil
