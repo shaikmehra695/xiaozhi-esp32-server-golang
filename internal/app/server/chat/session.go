@@ -39,7 +39,10 @@ type AsrResponseChannelItem struct {
 	speakerResult *speaker.IdentifyResult
 }
 
-const listenCommandHistoryTTL = 2 * time.Second
+const (
+	listenCommandHistoryTTL   = 800 * time.Millisecond
+	detectLLMDebounceDuration = 300 * time.Millisecond
+)
 
 type detectAction string
 
@@ -88,6 +91,9 @@ type ChatSession struct {
 
 	// stopSpeaking 保护，防止与 AddAsrResultToQueue/HandleWelcome 并发冲突
 	stopSpeakingMu sync.Mutex
+
+	detectLLMDebounceMu    sync.Mutex
+	detectLLMDebounceTimer *time.Timer
 
 	openClawStreamMu sync.Mutex
 	openClawStreams  map[string]chan llm_common.LLMResponseStruct
@@ -519,7 +525,74 @@ func resolveDetectAction(text string, enableGreeting bool, welcomeAlreadySpoken 
 	return detectActionLLM
 }
 
+func (s *ChatSession) cancelPendingDetectLLM() {
+	if s == nil {
+		return
+	}
+
+	s.detectLLMDebounceMu.Lock()
+	timer := s.detectLLMDebounceTimer
+	s.detectLLMDebounceTimer = nil
+	s.detectLLMDebounceMu.Unlock()
+
+	if timer != nil {
+		timer.Stop()
+	}
+}
+
+func (s *ChatSession) scheduleDetectLLM(text string) {
+	if s == nil {
+		return
+	}
+
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+
+	s.cancelPendingDetectLLM()
+
+	var timer *time.Timer
+	timer = time.AfterFunc(detectLLMDebounceDuration, func() {
+		s.detectLLMDebounceMu.Lock()
+		if s.detectLLMDebounceTimer != timer {
+			s.detectLLMDebounceMu.Unlock()
+			return
+		}
+		s.detectLLMDebounceTimer = nil
+		s.detectLLMDebounceMu.Unlock()
+
+		if s.IsClosing() || s.clientState == nil {
+			return
+		}
+		if s.clientState.Ctx != nil && s.clientState.Ctx.Err() != nil {
+			return
+		}
+
+		now := time.Now()
+		history := s.clientState.GetCommandHistorySnapshot()
+		if isRecentCommand(history, CommandTypeListenStart, now) {
+			log.Debugf("Detect LLM debounce canceled by recent listen start: history={%s}", history.DebugString(now))
+			return
+		}
+		if phase := s.clientState.GetListenPhase(); phase != ListenPhaseIdle {
+			log.Debugf("Detect LLM debounce skipped because listen phase=%s", phase)
+			return
+		}
+
+		if err := s.AddAsrResultToQueue(text, nil); err != nil {
+			log.Errorf("Detect LLM debounce enqueue failed: %v", err)
+		}
+	})
+
+	s.detectLLMDebounceMu.Lock()
+	s.detectLLMDebounceTimer = timer
+	s.detectLLMDebounceMu.Unlock()
+}
+
 func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
+	s.cancelPendingDetectLLM()
+
 	// 检查设备激活状态
 	if msg.Text != "" {
 		isActivated, err := s.CheckDeviceActivated()
@@ -558,7 +631,7 @@ func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
 			return nil
 		}
 
-		s.StopSpeaking(false)
+		s.StopSpeaking(true)
 
 		if action == detectActionWelcome {
 			s.HandleWelcome()
@@ -566,9 +639,7 @@ func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
 		}
 
 		if action == detectActionLLM {
-			if err := s.AddAsrResultToQueue(text, nil); err != nil {
-				log.Errorf("开始对话失败: %v", err)
-			}
+			s.scheduleDetectLLM(text)
 		}
 	}
 	return nil
@@ -850,6 +921,8 @@ func (s *ChatSession) InterruptAndClearTTSQueue() {
 
 // handleAbortMessage 处理中止消息
 func (s *ChatSession) HandleAbortMessage(msg *ClientMessage) error {
+	s.cancelPendingDetectLLM()
+
 	// 设置打断状态
 	s.clientState.Abort = true
 
@@ -905,6 +978,8 @@ func (s *ChatSession) CheckDeviceActivated() (bool, error) {
 }
 
 func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
+	s.cancelPendingDetectLLM()
+
 	// 先检查激活状态
 	isActivated, err := s.CheckDeviceActivated()
 	if err != nil {
@@ -938,7 +1013,7 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 	// realtime 模式首次启动：跳过欢迎语判断和 Destroy，直接进入监听
 	if msg.Mode == "realtime" {
 		s.clientState.RecordCommandArrival(CommandTypeListenStart, now)
-		s.StopSpeaking(false)
+		s.StopSpeaking(true)
 
 		s.clientState.ListenMode = msg.Mode
 		log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
@@ -963,7 +1038,7 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 	s.clientState.ListenMode = msg.Mode
 	log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
 	//if s.clientState.ListenMode == "manual" {
-	s.StopSpeaking(false)
+	s.StopSpeaking(true)
 	//}
 
 	startSeq := s.beginListenStart()
@@ -977,6 +1052,7 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 }
 
 func (s *ChatSession) HandleListenStop() error {
+	s.cancelPendingDetectLLM()
 	s.clientState.RecordCommandArrival(CommandTypeListenStop, time.Now())
 	/*if s.clientState.ListenMode == "auto" {
 		s.clientState.CancelSessionCtx()
@@ -1214,6 +1290,8 @@ func (s *ChatSession) CloseWithReason(reason string) {
 		if s.mediaPlayer != nil {
 			s.mediaPlayer.DetachSession(true)
 		}
+
+		s.cancelPendingDetectLLM()
 
 		// 取消会话级别的上下文
 		if s.cancel != nil {
