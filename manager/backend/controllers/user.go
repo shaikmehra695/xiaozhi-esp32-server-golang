@@ -29,7 +29,7 @@ type UserController struct {
 		RequestOpenClawStatusFromClient(ctx context.Context, agentID string) (map[string]interface{}, error)
 		CallOpenClawChatFromClient(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error)
 		CallOpenClawChatStreamFromClient(ctx context.Context, body map[string]interface{}, onResponse func(*WebSocketResponse) error) (map[string]interface{}, error)
-		InjectMessageToDevice(ctx context.Context, deviceID, message string, skipLlm bool) error
+		InjectMessageToDevice(ctx context.Context, deviceID, message string, skipLlm bool, autoListen bool) error
 	}
 }
 
@@ -88,9 +88,10 @@ func (uc *UserController) InjectMessage(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 
 	var req struct {
-		DeviceID string `json:"device_id" binding:"required"`
-		Message  string `json:"message" binding:"required"`
-		SkipLlm  bool   `json:"skip_llm"`
+		DeviceID   string `json:"device_id" binding:"required"`
+		Message    string `json:"message" binding:"required"`
+		SkipLlm    bool   `json:"skip_llm"`
+		AutoListen *bool  `json:"auto_listen"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -107,9 +108,14 @@ func (uc *UserController) InjectMessage(c *gin.Context) {
 		return
 	}
 
+	autoListen := true
+	if req.AutoListen != nil {
+		autoListen = *req.AutoListen
+	}
+
 	// 通过WebSocket发送消息注入请求到主服务器
 	ctx := context.Background()
-	err := uc.WebSocketController.InjectMessageToDevice(ctx, device.DeviceName, req.Message, req.SkipLlm)
+	err := uc.WebSocketController.InjectMessageToDevice(ctx, device.DeviceName, req.Message, req.SkipLlm, autoListen)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "消息注入失败: " + err.Error()})
 		return
@@ -119,9 +125,10 @@ func (uc *UserController) InjectMessage(c *gin.Context) {
 		"success": true,
 		"message": "消息注入请求已发送",
 		"data": gin.H{
-			"device_id": req.DeviceID,
-			"message":   req.Message,
-			"skip_llm":  req.SkipLlm,
+			"device_id":   req.DeviceID,
+			"message":     req.Message,
+			"skip_llm":    req.SkipLlm,
+			"auto_listen": autoListen,
 		},
 	})
 }

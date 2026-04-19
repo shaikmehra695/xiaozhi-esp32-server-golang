@@ -336,6 +336,23 @@
             </el-radio>
           </el-radio-group>
         </el-form-item>
+
+        <el-form-item label="播报完成后" prop="auto_listen">
+          <el-radio-group v-model="injectForm.auto_listen">
+            <el-radio :label="true">
+              <div class="radio-option">
+                <div class="radio-title">进入监听</div>
+                <div class="radio-desc">设备播报完成后自动进入 listening，可直接继续语音回复</div>
+              </div>
+            </el-radio>
+            <el-radio :label="false">
+              <div class="radio-option">
+                <div class="radio-title">回到空闲</div>
+                <div class="radio-desc">设备播报完成后回到 idle，适合纯通知场景</div>
+              </div>
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
       </el-form>
       
       <template #footer>
@@ -529,7 +546,8 @@ const deviceRules = {
 const injectForm = reactive({
   device_id: '',
   message: '',
-  skip_llm: false
+  skip_llm: false,
+  auto_listen: true
 })
 
 const injectRules = {
@@ -607,7 +625,8 @@ const handleInjectMessage = async () => {
     const response = await api.post('/user/devices/inject-message', {
       device_id: injectForm.device_id,
       message: injectForm.message,
-      skip_llm: injectForm.skip_llm
+      skip_llm: injectForm.skip_llm,
+      auto_listen: injectForm.auto_listen
     })
     
     if (response.data.success) {
@@ -628,7 +647,7 @@ const handleCloseInjectMessage = () => {
   if (injectFormRef.value) {
     injectFormRef.value.resetFields()
   }
-  Object.assign(injectForm, { device_id: '', message: '', skip_llm: false })
+  Object.assign(injectForm, { device_id: '', message: '', skip_llm: false, auto_listen: true })
 }
 
 // 切换显示所有设备
@@ -1379,6 +1398,9 @@ onMounted(() => {
 
 .radio-option {
   margin-left: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
 }
 
 .radio-title {
@@ -1414,6 +1436,7 @@ onMounted(() => {
 }
 
 :deep(.inject-message-dialog .el-radio) {
+  display: flex;
   margin-right: 0;
   align-items: flex-start;
   height: auto;
@@ -1425,7 +1448,8 @@ onMounted(() => {
 }
 
 :deep(.inject-message-dialog .el-radio__label) {
-  display: block;
+  display: flex;
+  flex: 1;
   padding-left: 8px;
   white-space: normal;
   line-height: 1.4;

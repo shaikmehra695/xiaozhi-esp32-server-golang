@@ -1227,6 +1227,7 @@ func (s *ChatSession) AddAsrResultToQueueWithOptions(text string, speakerResult 
 	}
 	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
 	ctx = withTTSPlaybackStartHook(ctx, options.onTTSPlaybackStart)
+	ctx = withTTSTurnEndPolicy(ctx, options.ttsTurnEndPolicy)
 
 	item := AsrResponseChannelItem{
 		ctx:           ctx,

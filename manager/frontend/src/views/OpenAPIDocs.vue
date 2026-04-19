@@ -160,9 +160,10 @@ X-API-Token: &lt;api-token&gt;</code></pre>
           <tr><td>device_id</td><td>string</td><td>是</td><td>设备标识（device_name）</td></tr>
           <tr><td>message</td><td>string</td><td>是</td><td>消息内容</td></tr>
           <tr><td>skip_llm</td><td>boolean</td><td>否</td><td>是否跳过 LLM，默认 false</td></tr>
+          <tr><td>auto_listen</td><td>boolean</td><td>否</td><td>播报完成后是否自动进入监听，默认 true</td></tr>
         </tbody></table>
         <h4>出参示例</h4>
-        <pre><code>{"success":true,"message":"消息注入请求已发送","data":{"device_id":"bedroom","message":"hello","skip_llm":false}}</code></pre>
+        <pre><code>{"success":true,"message":"消息注入请求已发送","data":{"device_id":"bedroom","message":"hello","skip_llm":false,"auto_listen":true}}</code></pre>
       </section>
 
       <section id="mcp" class="vp-section">

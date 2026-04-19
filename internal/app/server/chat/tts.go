@@ -72,6 +72,7 @@ type ttsMetricState struct {
 	firstAudio       bool
 	ttsStopped       bool
 	turnEnded        bool
+	turnEndPolicy    ttsTurnEndPolicy
 }
 
 // TTSManager 负责TTS相关的处理
@@ -342,8 +343,8 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 						continue
 					}
 				}
-				// 固定150ms等待，确保客户端播放完成
-				waitResult, interruptReq := t.waitUntilSenderDeadline(ctx, time.Now().Add(150*time.Millisecond), handleDelayedSentence)
+				// 额外留出一小段播放完成保护时间，避免客户端尾音尚未播完就进入 turn-end 收口。
+				waitResult, interruptReq := t.waitUntilSenderDeadline(ctx, time.Now().Add(ttsPlaybackCompletionGrace), handleDelayedSentence)
 				switch waitResult {
 				case senderWaitContextDone:
 					t.drainSessionAudioQueue()
@@ -357,7 +358,7 @@ func (t *TTSManager) runSenderLoop(ctx context.Context) {
 					}
 					continue
 				}
-				t.finishTtsStop(t.clientState.Ctx, true, nil)
+				t.finishTtsStop(withTTSTurnPlaybackSettled(t.clientState.Ctx), true, nil)
 				playbackTail = time.Time{}
 				totalFrames = 0
 				currentSentenceFrames = 0
@@ -468,6 +469,61 @@ func (t *TTSManager) currentTtsMetricCycle() uint64 {
 	t.ttsMetricMu.Lock()
 	defer t.ttsMetricMu.Unlock()
 	return t.ttsMetricState.cycleID
+}
+
+func (t *TTSManager) registerTTSTurnEndPolicy(ctx context.Context, cycleID uint64) {
+	if cycleID == 0 {
+		return
+	}
+	policy := ttsTurnEndPolicyFromContext(ctx)
+	if policy == ttsTurnEndPolicyNone {
+		return
+	}
+
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+
+	if t.ttsMetricState.cycleID != cycleID || t.ttsMetricState.turnEnded {
+		return
+	}
+	t.ttsMetricState.turnEndPolicy = policy
+}
+
+func (t *TTSManager) consumeTTSTurnEndPolicy() ttsTurnEndPolicy {
+	t.ttsMetricMu.Lock()
+	defer t.ttsMetricMu.Unlock()
+
+	policy := t.ttsMetricState.turnEndPolicy
+	t.ttsMetricState.turnEndPolicy = ttsTurnEndPolicyNone
+	return policy
+}
+
+func (t *TTSManager) dispatchTTSTurnEndPolicy(ctx context.Context, stopErr error) {
+	policy := t.consumeTTSTurnEndPolicy()
+	if policy == ttsTurnEndPolicyNone {
+		return
+	}
+
+	handler := ttsTurnEndPolicyHandlerFromContext(ctx)
+	if handler == nil && t.clientState != nil {
+		handler = ttsTurnEndPolicyHandlerFromContext(t.clientState.Ctx)
+	}
+	if handler == nil {
+		log.Debugf("TTS turn end policy dropped: no handler, policy=%d", policy)
+		return
+	}
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("TTS turn end policy handler panic: %v", r)
+			}
+		}()
+
+		// 在 sender loop 内同步重置会话会与 stopSpeaking/Interrupt 路径重入，
+		// 这里异步派发到 ChatManager，避免 runSenderLoop 自陷。
+		handler.handleTTSTurnEndPolicy(ctx, policy, stopErr)
+	}()
 }
 
 type ttsMetricCompletion struct {
@@ -1027,6 +1083,7 @@ func (t *TTSManager) finishTtsStop(ctx context.Context, sendTtsStop bool, stopEr
 	}
 
 	t.forceStopTtsMetric(ctx, stopErr)
+	t.dispatchTTSTurnEndPolicy(ctx, stopErr)
 
 	return true
 }
@@ -1037,7 +1094,8 @@ func (t *TTSManager) FinishTtsWithoutProtocolStop(ctx context.Context, stopErr e
 
 // EnqueueTtsStart 向会话级音频队列投递 TtsStart，由 runSenderLoop 统一发送；队列满时阻塞直到入队或 ctx.Done
 func (t *TTSManager) EnqueueTtsStart(ctx context.Context) {
-	t.startTtsMetricCycle()
+	cycleID := t.startTtsMetricCycle()
+	t.registerTTSTurnEndPolicy(ctx, cycleID)
 	t.enqueueSessionElem(ctx, t.currentAudioGeneration(), AudioQueueElem{Kind: AudioQueueKindTtsStart})
 }
 

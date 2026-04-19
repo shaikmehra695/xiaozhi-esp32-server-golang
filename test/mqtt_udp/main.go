@@ -40,9 +40,15 @@ const (
 	deviceStateIdle         = "idle"
 	deviceStateConnecting   = "connecting"
 	deviceStateConversation = "conversation"
+	deviceStateListening    = "listening"
 	deviceStateSpeaking     = "speaking"
 	speakRequestReuseWindow = 60 * time.Second
 )
+
+type speakRequestPlaybackState struct {
+	SessionID  string
+	AutoListen bool
+}
 
 // ServerMessage 表示服务器消息
 type ServerMessage struct {
@@ -95,6 +101,8 @@ var currentUDPClient *UDPClient
 var currentSessionID string
 var currentDeviceState = deviceStateConnecting
 var lastUDPTrafficAt time.Time
+var pendingSpeakRequestPlayback *speakRequestPlaybackState
+var armedAutoListenSessionID string
 
 func releaseAllowChat() {
 	select {
@@ -125,6 +133,60 @@ func getCurrentUDPClient() *UDPClient {
 	runtimeMu.RLock()
 	defer runtimeMu.RUnlock()
 	return currentUDPClient
+}
+
+func setPendingSpeakRequestPlayback(sessionID string, autoListen bool) {
+	runtimeMu.Lock()
+	defer runtimeMu.Unlock()
+	pendingSpeakRequestPlayback = &speakRequestPlaybackState{
+		SessionID:  strings.TrimSpace(sessionID),
+		AutoListen: autoListen,
+	}
+}
+
+func consumePendingSpeakRequestPlayback() (*speakRequestPlaybackState, bool) {
+	runtimeMu.Lock()
+	defer runtimeMu.Unlock()
+	if pendingSpeakRequestPlayback == nil {
+		return nil, false
+	}
+	state := *pendingSpeakRequestPlayback
+	pendingSpeakRequestPlayback = nil
+	return &state, true
+}
+
+func clearPendingSpeakRequestPlayback() {
+	runtimeMu.Lock()
+	defer runtimeMu.Unlock()
+	pendingSpeakRequestPlayback = nil
+}
+
+func armAutoListen(sessionID string) {
+	runtimeMu.Lock()
+	defer runtimeMu.Unlock()
+	armedAutoListenSessionID = strings.TrimSpace(sessionID)
+}
+
+func consumeAutoListen(sessionID string) bool {
+	runtimeMu.Lock()
+	defer runtimeMu.Unlock()
+
+	if armedAutoListenSessionID == "" {
+		return false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" && armedAutoListenSessionID != sessionID {
+		return false
+	}
+
+	armedAutoListenSessionID = ""
+	return true
+}
+
+func clearAutoListen() {
+	runtimeMu.Lock()
+	defer runtimeMu.Unlock()
+	armedAutoListenSessionID = ""
 }
 
 func markUDPTraffic() {
@@ -584,6 +646,8 @@ func handleSpeakRequest(mqttClient mqtt.Client, msg mqtt.Message) {
 		autoListen = *request.AutoListen
 	}
 	fmt.Printf("🔔 收到 speak_request: session_id=%s auto_listen=%v preview=%q\n", request.SessionID, autoListen, request.Text)
+	clearPendingSpeakRequestPlayback()
+	clearAutoListen()
 
 	setDeviceState(deviceStateConnecting)
 	reuseExisting := shouldReuseExistingUDP()
@@ -592,12 +656,16 @@ func handleSpeakRequest(mqttClient mqtt.Client, msg mqtt.Message) {
 		udpConfig, err := waitForHelloResponse(mqttClient, 10*time.Second)
 		if err != nil {
 			fmt.Printf("❌ speak_request 重复 hello 失败: %v\n", err)
+			clearPendingSpeakRequestPlayback()
+			clearAutoListen()
 			setDeviceState(deviceStateIdle)
 			releaseAllowChat()
 			return
 		}
 		if _, err := replaceUDPClient(udpConfig); err != nil {
 			fmt.Printf("❌ speak_request 重建 UDP 客户端失败: %v\n", err)
+			clearPendingSpeakRequestPlayback()
+			clearAutoListen()
 			setDeviceState(deviceStateIdle)
 			releaseAllowChat()
 			return
@@ -609,18 +677,16 @@ func handleSpeakRequest(mqttClient mqtt.Client, msg mqtt.Message) {
 	setDeviceState(deviceStateSpeaking)
 	if err := sendSpeakReady(mqttClient, request.SessionID, reuseExisting); err != nil {
 		fmt.Printf("❌ 发送 speak_ready 失败: %v\n", err)
+		clearPendingSpeakRequestPlayback()
 		setDeviceState(deviceStateIdle)
 		releaseAllowChat()
 		return
 	}
+	setPendingSpeakRequestPlayback(request.SessionID, autoListen)
 	firstAudio = false
 	firstTts = false
 	opusData = make([][]byte, 0)
 	sendAudioEndTs = time.Now().UnixMilli()
-
-	if autoListen {
-		fmt.Println("ℹ️ speak_request.auto_listen=true，但测试程序仍按控制台输入模式工作")
-	}
 }
 
 func handleLLM(client mqtt.Client, msg mqtt.Message) {
@@ -664,6 +730,23 @@ func handleTTS(client mqtt.Client, msg mqtt.Message) {
 			return
 		}
 		fmt.Printf("TTS 结束, 音频数据长度: %d\n", len(pcmDataList))
+
+		if playback, ok := consumePendingSpeakRequestPlayback(); ok {
+			if playback.AutoListen {
+				if err := enterAutoListen(client, playback.SessionID); err != nil {
+					fmt.Printf("❌ speak_request.auto_listen 启动失败: %v\n", err)
+					clearAutoListen()
+					setDeviceState(deviceStateIdle)
+				}
+				return
+			}
+			clearAutoListen()
+			setDeviceState(deviceStateIdle)
+			fmt.Println("ℹ️ speak_request 播放完成，auto_listen=false，已回到 idle")
+			return
+		}
+
+		clearAutoListen()
 		setDeviceState(deviceStateIdle)
 		releaseAllowChat()
 	}
@@ -687,8 +770,33 @@ func saveOpusData() error {
 
 func handleGoodbye(client mqtt.Client, msg mqtt.Message) {
 	fmt.Printf("处理 goodbye 消息: %s\n", string(msg.Payload()))
+	clearPendingSpeakRequestPlayback()
+	clearAutoListen()
 	setDeviceState(deviceStateIdle)
 	releaseAllowChat()
+}
+
+func enterAutoListen(mqttClient mqtt.Client, sessionID string) error {
+	sessionID = resolveActiveSessionID(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("auto_listen 缺少有效 session_id")
+	}
+	if err := sendListenStart(mqttClient, sessionID); err != nil {
+		return err
+	}
+	armAutoListen(sessionID)
+	setDeviceState(deviceStateListening)
+	fmt.Printf("🎤 speak_request 播放完成，auto_listen=true，进入 listening 状态: session_id=%s\n", sessionID)
+	releaseAllowChat()
+	return nil
+}
+
+func resolveActiveSessionID(fallback string) string {
+	sessionID := strings.TrimSpace(getCurrentSessionID())
+	if sessionID != "" {
+		return sessionID
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func connectUdqAndSendAudio(udpConfig *UDPConfig, mqttClient mqtt.Client) error {
@@ -1023,7 +1131,14 @@ func sendTextToSpeech(mqttClient mqtt.Client) error {
 		firstTts = false
 		opusData = make([][]byte, 0)
 		setDeviceState(deviceStateConversation)
-		sendListenStart(mqttClient, sessionID)
+		autoListenArmed := consumeAutoListen(sessionID)
+		if autoListenArmed {
+			fmt.Printf("🎙️ 复用 auto_listen 已开启的 listening 状态: session_id=%s\n", sessionID)
+		} else {
+			if err := sendListenStart(mqttClient, sessionID); err != nil {
+				return err
+			}
+		}
 		defer func() {
 			awaitFirstTTSAudio = true
 			if listenMode == "manual" {
@@ -1072,6 +1187,8 @@ func sendTextToSpeech(mqttClient mqtt.Client) error {
 		input = strings.TrimSpace(input)
 		if input == "" {
 			sessionID := getCurrentSessionID()
+			clearAutoListen()
+			clearPendingSpeakRequestPlayback()
 			if sessionID != "" {
 				sendAbort(mqttClient, sessionID)
 			}
