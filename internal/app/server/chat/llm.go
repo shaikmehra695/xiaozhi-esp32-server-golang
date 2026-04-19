@@ -36,11 +36,14 @@ const (
 type contextKey int
 
 const (
-	ttsStopDelayDuration time.Duration = 200 * time.Millisecond
-	fullTextKey          contextKey    = iota
+	ttsPlaybackCompletionGrace time.Duration = 150 * time.Millisecond
+	fullTextKey                contextKey    = iota
 	toolRoundMessagesKey
 	ttsTurnTrackerKey
 	ttsPlaybackStartHookKey
+	ttsTurnEndPolicyKey
+	ttsTurnEndPolicyHandlerKey
+	ttsTurnPlaybackSettledKey
 )
 
 const (
@@ -87,9 +90,21 @@ type llmResponseChannelOptions struct {
 	onStartFunc        func(args ...any)
 	onEndFunc          func(err error, args ...any)
 	onTTSPlaybackStart func()
+	ttsTurnEndPolicy   ttsTurnEndPolicy
 }
 
 type ttsPlaybackStartHook func()
+
+type ttsTurnEndPolicy uint8
+
+const (
+	ttsTurnEndPolicyNone ttsTurnEndPolicy = iota
+	ttsTurnEndPolicyGoodbyeAndIdle
+)
+
+type ttsTurnEndPolicyHandler interface {
+	handleTTSTurnEndPolicy(ctx context.Context, policy ttsTurnEndPolicy, stopErr error)
+}
 
 func withTTSPlaybackStartHook(ctx context.Context, hook func()) context.Context {
 	if ctx == nil || hook == nil {
@@ -113,6 +128,57 @@ func ttsPlaybackStartHookFromContext(ctx context.Context) func() {
 	return func() {
 		hook()
 	}
+}
+
+func withTTSTurnEndPolicy(ctx context.Context, policy ttsTurnEndPolicy) context.Context {
+	if ctx == nil || policy == ttsTurnEndPolicyNone {
+		return ctx
+	}
+	return context.WithValue(ctx, ttsTurnEndPolicyKey, policy)
+}
+
+func ttsTurnEndPolicyFromContext(ctx context.Context) ttsTurnEndPolicy {
+	if ctx == nil {
+		return ttsTurnEndPolicyNone
+	}
+	policy, ok := ctx.Value(ttsTurnEndPolicyKey).(ttsTurnEndPolicy)
+	if !ok {
+		return ttsTurnEndPolicyNone
+	}
+	return policy
+}
+
+func withTTSTurnEndPolicyHandler(ctx context.Context, handler ttsTurnEndPolicyHandler) context.Context {
+	if ctx == nil || handler == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ttsTurnEndPolicyHandlerKey, handler)
+}
+
+func withTTSTurnPlaybackSettled(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, ttsTurnPlaybackSettledKey, true)
+}
+
+func ttsTurnPlaybackSettledFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	settled, ok := ctx.Value(ttsTurnPlaybackSettledKey).(bool)
+	return ok && settled
+}
+
+func ttsTurnEndPolicyHandlerFromContext(ctx context.Context) ttsTurnEndPolicyHandler {
+	if ctx == nil {
+		return nil
+	}
+	handler, ok := ctx.Value(ttsTurnEndPolicyHandlerKey).(ttsTurnEndPolicyHandler)
+	if !ok {
+		return nil
+	}
+	return handler
 }
 
 type ttsTurnTracker struct {
@@ -509,6 +575,7 @@ func (l *LLMManager) AddTextToTTSQueueWithOptions(text string, options llmRespon
 	sessionCtx := l.clientState.SessionCtx.Get(l.clientState.Ctx)
 	ctx := l.clientState.AfterAsrSessionCtx.Get(sessionCtx)
 	ctx = withTTSPlaybackStartHook(ctx, options.onTTSPlaybackStart)
+	ctx = withTTSTurnEndPolicy(ctx, options.ttsTurnEndPolicy)
 	if err := l.HandleLLMResponseChannelAsyncWithOptions(ctx, msg, llmResponseChan, options); err != nil {
 		log.Warnf("AddTextToTTSQueue enqueue failed: %v", err)
 		return err
@@ -562,6 +629,7 @@ func (l *LLMManager) HandleLLMResponseChannelAsyncWithOptions(ctx context.Contex
 func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMessage *schema.Message, responseChan chan llm_common.LLMResponseStruct, options llmResponseChannelOptions) error {
 	ctx = ensureTTSTurnTrackerInContext(ctx)
 	ctx = withTTSPlaybackStartHook(ctx, options.onTTSPlaybackStart)
+	ctx = withTTSTurnEndPolicy(ctx, options.ttsTurnEndPolicy)
 
 	needSendTtsCmd := true
 	val := ctx.Value("nest")

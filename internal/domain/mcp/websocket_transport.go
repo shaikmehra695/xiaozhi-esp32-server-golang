@@ -63,6 +63,14 @@ func classifyJSONRPCMessage(message []byte) (method string, hasID bool, err erro
 	return envelope.Method, envelope.ID != nil, nil
 }
 
+func requestIDKey(id mcp.RequestId) string {
+	raw, err := id.MarshalJSON()
+	if err == nil {
+		return string(raw)
+	}
+	return id.String()
+}
+
 func isTransportTimeoutErr(err error) bool {
 	if err == nil {
 		return false
@@ -267,7 +275,7 @@ func (t *WebsocketTransport) handleMessage(message []byte) {
 func (t *WebsocketTransport) handleResponse(response *transport.JSONRPCResponse) {
 	respByte, _ := json.Marshal(response)
 	// 将 ID 转换为字符串作为键
-	idStr := response.ID.String()
+	idStr := requestIDKey(response.ID)
 
 	pending := t.popPending(idStr)
 	if pending == nil {
@@ -294,7 +302,7 @@ func (t *WebsocketTransport) SendRequest(ctx context.Context, request transport.
 	t.closedMux.RUnlock()
 
 	// 创建响应通道
-	idStr := request.ID.String()
+	idStr := requestIDKey(request.ID)
 	pending := newPendingResponse()
 
 	// 注册响应通道

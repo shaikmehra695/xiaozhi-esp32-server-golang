@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 	"xiaozhi-esp32-server-golang/internal/app/server/mqtt_udp"
@@ -76,10 +77,14 @@ func (s *ServerTransport) SendTtsStop() error {
 }
 
 func (s *ServerTransport) SendSpeakRequest(text string, autoListen bool) error {
+	sessionID := strings.TrimSpace(s.clientState.SessionID)
+	if sessionID == "" {
+		return fmt.Errorf("speak_request requires session_id")
+	}
 	msg := ServerMessage{
 		Type:       ServerMessageTypeSpeakRequest,
 		Text:       text,
-		SessionID:  s.clientState.SessionID,
+		SessionID:  sessionID,
 		AutoListen: &autoListen,
 	}
 	bytes, err := json.Marshal(msg)

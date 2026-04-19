@@ -136,6 +136,25 @@ func TestHandleGoodByeMessageRetainsSessionAndResetsSilentState(t *testing.T) {
 	}
 }
 
+func TestShouldSendSpeakRequestAfterGoodbyeRetention(t *testing.T) {
+	manager, _, session := newGoodbyeRetentionTestManager(t, time.Minute)
+	manager.lastSpeakPathWarmAt.Store(time.Now().UnixMilli())
+
+	if err := manager.HandleGoodByeMessage(&ClientMessage{
+		Type:     MessageTypeGoodBye,
+		DeviceID: manager.clientState.DeviceID,
+	}); err != nil {
+		t.Fatalf("HandleGoodByeMessage returned error: %v", err)
+	}
+
+	if manager.GetSession() != session {
+		t.Fatal("expected goodbye to retain current ChatSession")
+	}
+	if !manager.shouldSendSpeakRequest(time.Now()) {
+		t.Fatal("expected retained silent ChatSession to require speak_request")
+	}
+}
+
 func TestHandleGoodByeMessageCleansRetainedSessionAfterIdleTimeout(t *testing.T) {
 	manager, fakeConn, _ := newGoodbyeRetentionTestManager(t, 20*time.Millisecond)
 

@@ -44,7 +44,7 @@ type ConnInterface interface {
 type IotOverMcpTransport struct {
 	conn ConnInterface
 
-	notifyHandler func(notification mcp.JSONRPCNotification)
+	notifyHandler   func(notification mcp.JSONRPCNotification)
 	activityHandler func()
 	// 添加关闭回调
 	onCloseHandler func(reason string)
@@ -181,7 +181,7 @@ func (t *IotOverMcpTransport) handleMessage(message []byte) {
 			return
 		}
 
-		pending := t.popPending(response.ID.String())
+		pending := t.popPending(requestIDKey(response.ID))
 		if pending == nil {
 			log.Warnf("No IoT response channel found for ID: %s", response.ID.String())
 			return
@@ -201,7 +201,7 @@ func (t *IotOverMcpTransport) SendRequest(ctx context.Context, request transport
 	}
 	t.closedMux.RUnlock()
 
-	idStr := request.ID.String()
+	idStr := requestIDKey(request.ID)
 	pending := newPendingResponse()
 
 	t.respChansMux.Lock()

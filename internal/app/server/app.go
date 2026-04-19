@@ -360,6 +360,7 @@ func (a *App) onMqttTransportReady(deviceID string) {
 	if !exists || chatManager == nil {
 		return
 	}
+	chatManager.HandleMqttTransportReady()
 	chatManager.WarmupMcp()
 }
 
@@ -400,7 +401,7 @@ func (a *App) replayOpenClawOfflineMessages(deviceID string) {
 			if strings.TrimSpace(msg.Text) == "" {
 				return nil
 			}
-			return chatManager.InjectMessage(msg.Text, true)
+			return chatManager.InjectMessage(msg.Text, true, false)
 		})
 		if delivered > 0 {
 			log.Infof("OpenClaw离线消息补发成功, device=%s delivered=%d remaining=%d", deviceID, delivered, remaining)
@@ -503,9 +504,10 @@ func (a *App) registerHandler() {
 // 向客户端注入消息
 func (a *App) HandleInjectMsg(ctx context.Context, eventType string, eventData map[string]interface{}) (string, error) {
 	type InjectMsg struct {
-		SkipLlm  bool   `json:"skip_llm"`
-		DeviceId string `json:"device_id"`
-		Message  string `json:"message"`
+		SkipLlm    bool   `json:"skip_llm"`
+		AutoListen *bool  `json:"auto_listen"`
+		DeviceId   string `json:"device_id"`
+		Message    string `json:"message"`
 	}
 	bodyBytes, _ := json.Marshal(eventData)
 	var msg InjectMsg
@@ -532,11 +534,16 @@ func (a *App) HandleInjectMsg(ctx context.Context, eventType string, eventData m
 		return "", fmt.Errorf("device %s not found or offline", msg.DeviceId)
 	}
 
-	log.Debugf("HandleInjectMsg: injecting message to device %s, skip_llm: %v, message: %s",
-		msg.DeviceId, msg.SkipLlm, msg.Message)
+	autoListen := true
+	if msg.AutoListen != nil {
+		autoListen = *msg.AutoListen
+	}
+
+	log.Debugf("HandleInjectMsg: injecting message to device %s, skip_llm: %v, auto_listen: %v, message: %s",
+		msg.DeviceId, msg.SkipLlm, autoListen, msg.Message)
 
 	// 使用ChatManager的公开方法注入消息
-	err = chatManager.InjectMessage(msg.Message, msg.SkipLlm)
+	err = chatManager.InjectMessage(msg.Message, msg.SkipLlm, autoListen)
 	if err != nil {
 		log.Errorf("HandleInjectMsg: failed to inject message to device %s: %v", msg.DeviceId, err)
 		return "", fmt.Errorf("failed to inject message: %v", err)

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -62,6 +63,36 @@ func (am *AuthManager) CreateSession(deviceID string) (*ClientSession, error) {
 	am.sessions[sessionID] = session
 	am.mutex.Unlock()
 
+	return session, nil
+}
+
+// EnsureSession 确保给定会话ID存在；若 preferredID 为空则创建新会话
+func (am *AuthManager) EnsureSession(deviceID string, preferredID string) (*ClientSession, error) {
+	preferredID = strings.TrimSpace(preferredID)
+	if preferredID == "" {
+		return am.CreateSession(deviceID)
+	}
+
+	now := time.Now()
+
+	am.mutex.Lock()
+	defer am.mutex.Unlock()
+
+	if session, exists := am.sessions[preferredID]; exists {
+		if deviceID != "" {
+			session.DeviceID = deviceID
+		}
+		session.LastSeen = now
+		return session, nil
+	}
+
+	session := &ClientSession{
+		ID:        preferredID,
+		DeviceID:  deviceID,
+		CreatedAt: now,
+		LastSeen:  now,
+	}
+	am.sessions[preferredID] = session
 	return session, nil
 }
 

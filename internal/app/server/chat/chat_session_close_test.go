@@ -59,6 +59,28 @@ func (c *sessionCloseTestConn) GetData(key string) (interface{}, error) {
 	return nil, nil
 }
 
+func assertSingleGoodbyeCommand(t *testing.T, fakeConn *sessionCloseTestConn, sessionID string) {
+	t.Helper()
+
+	if len(fakeConn.sentCmds) != 1 {
+		t.Fatalf("expected one mqtt goodbye command, got %d", len(fakeConn.sentCmds))
+	}
+
+	var msg map[string]any
+	if err := json.Unmarshal(fakeConn.sentCmds[0], &msg); err != nil {
+		t.Fatalf("failed to unmarshal goodbye command: %v", err)
+	}
+	if got := msg["type"]; got != "goodbye" {
+		t.Fatalf("expected goodbye type, got %v", got)
+	}
+	if got := msg["state"]; got != "stop" {
+		t.Fatalf("expected goodbye state stop, got %v", got)
+	}
+	if got := msg["session_id"]; got != sessionID {
+		t.Fatalf("expected session_id %s, got %v", sessionID, got)
+	}
+}
+
 func TestHandleSessionClosedSendsMqttGoodbyeOnExplicitExit(t *testing.T) {
 	fakeConn := &sessionCloseTestConn{
 		deviceID:      "device-1",
@@ -78,32 +100,81 @@ func TestHandleSessionClosedSendsMqttGoodbyeOnExplicitExit(t *testing.T) {
 	if manager.GetSession() != nil {
 		t.Fatalf("expected session to be cleared after explicit exit")
 	}
-	if fakeConn.closeAudioCalls != 1 {
-		t.Fatalf("expected CloseAudioChannel to be called once, got %d", fakeConn.closeAudioCalls)
+	if fakeConn.closeAudioCalls != 0 {
+		t.Fatalf("expected CloseAudioChannel to be skipped on explicit exit, got %d", fakeConn.closeAudioCalls)
 	}
-	if len(fakeConn.sentCmds) != 1 {
-		t.Fatalf("expected one mqtt goodbye command, got %d", len(fakeConn.sentCmds))
-	}
-
-	var msg map[string]any
-	if err := json.Unmarshal(fakeConn.sentCmds[0], &msg); err != nil {
-		t.Fatalf("failed to unmarshal goodbye command: %v", err)
-	}
-	if got := msg["type"]; got != "goodbye" {
-		t.Fatalf("expected goodbye type, got %v", got)
-	}
-	if got := msg["state"]; got != "stop" {
-		t.Fatalf("expected goodbye state stop, got %v", got)
-	}
-	if got := msg["session_id"]; got != "session-1" {
-		t.Fatalf("expected session_id session-1, got %v", got)
-	}
+	assertSingleGoodbyeCommand(t, fakeConn, "session-1")
 	if !manager.helloInited {
 		t.Fatalf("expected helloInited to stay true after mqtt explicit exit")
 	}
+	if !manager.needFreshHello {
+		t.Fatalf("expected mqtt explicit exit to require a fresh hello before the next session bootstrap")
+	}
 }
 
-func TestEnsureSessionRequiresHelloAfterMqttExplicitExit(t *testing.T) {
+func TestHandleSessionClosedSendsMqttGoodbyeOnFatalError(t *testing.T) {
+	fakeConn := &sessionCloseTestConn{
+		deviceID:      "device-1",
+		transportType: types_conn.TransportTypeMqttUdp,
+	}
+	clientState := &ClientState{SessionID: "session-1"}
+	session := &ChatSession{}
+	manager := &ChatManager{
+		transport:       fakeConn,
+		serverTransport: NewServerTransport(fakeConn, clientState),
+		session:         session,
+		helloInited:     true,
+	}
+
+	manager.handleSessionClosed(session, chatSessionCloseReasonFatalError)
+
+	if manager.GetSession() != nil {
+		t.Fatalf("expected session to be cleared after fatal_error")
+	}
+	if fakeConn.closeAudioCalls != 0 {
+		t.Fatalf("expected CloseAudioChannel to be skipped on fatal_error, got %d", fakeConn.closeAudioCalls)
+	}
+	assertSingleGoodbyeCommand(t, fakeConn, "session-1")
+	if !manager.helloInited {
+		t.Fatalf("expected helloInited to stay true after fatal_error")
+	}
+	if !manager.needFreshHello {
+		t.Fatalf("expected fatal_error to require a fresh hello before the next session bootstrap")
+	}
+}
+
+func TestHandleSessionClosedSendsMqttGoodbyeOnRetainedIdleTimeout(t *testing.T) {
+	fakeConn := &sessionCloseTestConn{
+		deviceID:      "device-1",
+		transportType: types_conn.TransportTypeMqttUdp,
+	}
+	clientState := &ClientState{SessionID: "session-1"}
+	session := &ChatSession{}
+	manager := &ChatManager{
+		transport:       fakeConn,
+		serverTransport: NewServerTransport(fakeConn, clientState),
+		session:         session,
+		helloInited:     true,
+	}
+
+	manager.handleSessionClosed(session, chatSessionCloseReasonRetainedIdleTimeout)
+
+	if manager.GetSession() != nil {
+		t.Fatalf("expected session to be cleared after retained_idle_timeout")
+	}
+	if fakeConn.closeAudioCalls != 0 {
+		t.Fatalf("expected CloseAudioChannel to be skipped on retained_idle_timeout, got %d", fakeConn.closeAudioCalls)
+	}
+	assertSingleGoodbyeCommand(t, fakeConn, "session-1")
+	if !manager.helloInited {
+		t.Fatalf("expected helloInited to stay true after retained_idle_timeout")
+	}
+	if !manager.needFreshHello {
+		t.Fatalf("expected retained_idle_timeout to require a fresh hello before the next session bootstrap")
+	}
+}
+
+func TestHandleSessionClosedDoesNotRequireHelloAfterMqttExplicitExit(t *testing.T) {
 	fakeConn := &sessionCloseTestConn{
 		deviceID:      "device-1",
 		transportType: types_conn.TransportTypeMqttUdp,
@@ -120,15 +191,7 @@ func TestEnsureSessionRequiresHelloAfterMqttExplicitExit(t *testing.T) {
 	manager.handleSessionClosed(session, chatSessionCloseReasonExplicitExit)
 
 	if !manager.needFreshHello {
-		t.Fatalf("expected explicit exit to require a new hello before recreating session")
-	}
-
-	_, err := manager.ensureSession()
-	if err == nil {
-		t.Fatalf("expected ensureSession to be blocked until the next hello")
-	}
-	if !strings.Contains(err.Error(), "hello") {
-		t.Fatalf("expected ensureSession error to mention hello, got %v", err)
+		t.Fatalf("expected explicit exit to require a fresh hello")
 	}
 }
 

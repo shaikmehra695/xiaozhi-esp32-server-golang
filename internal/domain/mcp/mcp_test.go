@@ -731,6 +731,15 @@ func TestWebsocketTransportHandleMessageRoutesNotification(t *testing.T) {
 	}
 }
 
+func TestRequestIDKeyNormalizesUint64AndInt64ToSameKey(t *testing.T) {
+	requestID := mcp.NewRequestId(uint64(1))
+	assert.Equal(t, "1", requestIDKey(requestID))
+
+	var response transport.JSONRPCResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`), &response))
+	assert.Equal(t, "1", requestIDKey(response.ID))
+}
+
 func TestIotOverMcpTransportSendRequestMatchesResponseByID(t *testing.T) {
 	conn := newTestIotConn("udp")
 	iotTransport, err := NewIotOverMcpTransport(conn)
@@ -804,6 +813,33 @@ func TestIotOverMcpTransportSendRequestMatchesResponseByID(t *testing.T) {
 	require.NotNil(t, result2.response)
 	assert.Equal(t, "string:req-1", result1.response.ID.String())
 	assert.Equal(t, "string:req-2", result2.response.ID.String())
+}
+
+func TestIotOverMcpTransportSendRequestMatchesUint64ResponseID(t *testing.T) {
+	conn := newTestIotConn("udp")
+	iotTransport, err := NewIotOverMcpTransport(conn)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, iotTransport.Close())
+	})
+
+	req := transport.JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      mcp.NewRequestId(uint64(1)),
+		Method:  string(mcp.MethodInitialize),
+	}
+
+	go func() {
+		payload := <-conn.sent
+		var captured capturedJSONRPCRequest
+		require.NoError(t, json.Unmarshal(payload, &captured))
+		conn.recv <- buildJSONRPCSuccessResponsePayload(captured.ID, map[string]any{"ok": true})
+	}()
+
+	response, err := iotTransport.SendRequest(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	assert.Equal(t, "int64:1", response.ID.String())
 }
 
 func TestIotOverMcpTransportSendNotificationSendsPayload(t *testing.T) {
