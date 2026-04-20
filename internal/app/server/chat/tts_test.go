@@ -224,6 +224,8 @@ func TestFinishTtsWithoutProtocolStopClearsLocalTTSState(t *testing.T) {
 	manager.clientState.SetStatus(data_client.ClientStatusTTSStart)
 	manager.clientState.SetTtsStart(true)
 	manager.ttsActive.Store(true)
+	manager.clientState.StartAudioIdleWindow(time.Now().Add(-5 * time.Second))
+	manager.clientState.PauseAudioIdleWindow(time.Now().Add(-4 * time.Second))
 
 	if !manager.FinishTtsWithoutProtocolStop(context.Background(), nil) {
 		t.Fatal("expected active TTS turn to finish")
@@ -234,6 +236,42 @@ func TestFinishTtsWithoutProtocolStopClearsLocalTTSState(t *testing.T) {
 	if manager.clientState.GetStatus() != data_client.ClientStatusListenStop {
 		t.Fatalf("expected logical TTS stop to return status to listenStop, got %s", manager.clientState.GetStatus())
 	}
+	if !manager.clientState.AudioIdleStarted() {
+		t.Fatal("expected realtime logical tts stop to restart audio idle window")
+	}
+	if manager.clientState.AudioIdlePaused() {
+		t.Fatal("expected realtime logical tts stop to resume idle counting")
+	}
+	if elapsed := manager.clientState.GetAudioIdleElapsed(time.Now()); elapsed > time.Second {
+		t.Fatalf("expected realtime logical tts stop to reset idle window, got elapsed=%s", elapsed)
+	}
+}
+
+func TestFinishTtsWithoutProtocolStopRestartsAutoIdleWindow(t *testing.T) {
+	manager := newTestTTSManager(false)
+	manager.clientState.ListenMode = "auto"
+	manager.clientState.SetStatus(data_client.ClientStatusTTSStart)
+	manager.clientState.SetTtsStart(true)
+	manager.ttsActive.Store(true)
+	manager.clientState.StartAudioIdleWindow(time.Now().Add(-5 * time.Second))
+	manager.clientState.PauseAudioIdleWindow(time.Now().Add(-4 * time.Second))
+	manager.clientState.SetClientVoiceStop(true)
+
+	if !manager.FinishTtsWithoutProtocolStop(context.Background(), nil) {
+		t.Fatal("expected active auto TTS turn to finish")
+	}
+	if !manager.clientState.AudioIdleStarted() {
+		t.Fatal("expected auto logical tts stop to restart audio idle window")
+	}
+	if manager.clientState.AudioIdlePaused() {
+		t.Fatal("expected auto logical tts stop to resume idle counting")
+	}
+	if manager.clientState.GetClientVoiceStop() {
+		t.Fatal("expected auto logical tts stop to clear voice stop flag")
+	}
+	if elapsed := manager.clientState.GetAudioIdleElapsed(time.Now()); elapsed > time.Second {
+		t.Fatalf("expected auto logical tts stop to reset idle window, got elapsed=%s", elapsed)
+	}
 }
 
 func TestRealtimeInactiveTTSStopClearsInterruptedLLMState(t *testing.T) {
@@ -241,6 +279,8 @@ func TestRealtimeInactiveTTSStopClearsInterruptedLLMState(t *testing.T) {
 	manager.clientState.ListenMode = "realtime"
 	manager.clientState.SetStatus(data_client.ClientStatusLLMStart)
 	manager.clientState.SetTtsStart(false)
+	manager.clientState.StartAudioIdleWindow(time.Now().Add(-6 * time.Second))
+	manager.clientState.PauseAudioIdleWindow(time.Now().Add(-5 * time.Second))
 
 	if manager.finishTtsStop(context.Background(), true, context.Canceled) {
 		t.Fatal("expected inactive TTS stop to report no active TTS turn")
@@ -250,6 +290,41 @@ func TestRealtimeInactiveTTSStopClearsInterruptedLLMState(t *testing.T) {
 	}
 	if manager.clientState.GetTtsStart() {
 		t.Fatal("expected interrupted realtime LLM state to keep TTS start flag cleared")
+	}
+	if !manager.clientState.AudioIdleStarted() {
+		t.Fatal("expected interrupted realtime LLM state to restart audio idle window")
+	}
+	if manager.clientState.AudioIdlePaused() {
+		t.Fatal("expected interrupted realtime LLM state to resume idle counting")
+	}
+	if elapsed := manager.clientState.GetAudioIdleElapsed(time.Now()); elapsed > time.Second {
+		t.Fatalf("expected interrupted realtime LLM state to reset idle window, got elapsed=%s", elapsed)
+	}
+}
+
+func TestInactiveAutoTTSStopRestartsIdleWindow(t *testing.T) {
+	manager := newTestTTSManager(false)
+	manager.clientState.ListenMode = "auto"
+	manager.clientState.SetStatus(data_client.ClientStatusListenStop)
+	manager.clientState.SetTtsStart(false)
+	manager.clientState.StartAudioIdleWindow(time.Now().Add(-6 * time.Second))
+	manager.clientState.PauseAudioIdleWindow(time.Now().Add(-5 * time.Second))
+	manager.clientState.SetClientVoiceStop(true)
+
+	if manager.finishTtsStop(context.Background(), false, context.Canceled) {
+		t.Fatal("expected inactive auto TTS stop to report no active TTS turn")
+	}
+	if !manager.clientState.AudioIdleStarted() {
+		t.Fatal("expected inactive auto TTS stop to restart audio idle window")
+	}
+	if manager.clientState.AudioIdlePaused() {
+		t.Fatal("expected inactive auto TTS stop to resume idle counting")
+	}
+	if manager.clientState.GetClientVoiceStop() {
+		t.Fatal("expected inactive auto TTS stop to clear voice stop flag")
+	}
+	if elapsed := manager.clientState.GetAudioIdleElapsed(time.Now()); elapsed > time.Second {
+		t.Fatalf("expected inactive auto TTS stop to reset idle window, got elapsed=%s", elapsed)
 	}
 }
 

@@ -56,6 +56,7 @@ const (
 	chatSessionCloseReasonManagerShutdown     = "manager_shutdown"
 	chatSessionCloseReasonExplicitExit        = "explicit_exit"
 	chatSessionCloseReasonFatalError          = "fatal_error"
+	chatSessionCloseReasonAudioIdleTimeout    = "audio_idle_timeout"
 	chatSessionCloseReasonRetainedIdleTimeout = "retained_idle_timeout"
 )
 
@@ -233,6 +234,8 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 	// 设置 ASR 首次返回字符的回调
 	clientState.OnAsrFirstTextCallback = func(text string, isFinal bool) {
 		clientState.Asr.MarkTextReceived()
+		clientState.ClearAudioIdleTimeoutPending()
+		clientState.PauseAudioIdleWindow(time.Now())
 		log.Debugf("ASR首次返回字符: device=%s, text=%s, isFinal=%v", clientState.DeviceID, text, isFinal)
 		clientState.MarkAsrFirstText()
 		s.TraceAsrFirstText(clientState.Ctx, time.Now().UnixMilli())
@@ -271,9 +274,10 @@ func (s *ChatSession) Start(pctx context.Context) error {
 	}()
 
 	if !s.vadLoopStarted {
-		s.asrManager.ProcessVadAudio(s.ctx, func() {
-			s.CloseWithReason(chatSessionCloseReasonFatalError)
-		})
+		// Session 级 idle watchdog 需要独立于单次 ASR loop 生命周期存在，
+		// 这样 auto 模式在一轮成功结束后仍能继续统计连接空闲时间。
+		go s.asrManager.runAudioIdleTimeoutWatchdog(s.ctx)
+		s.asrManager.ProcessVadAudio(s.ctx)
 		s.vadLoopStarted = true
 	}
 
@@ -1050,9 +1054,10 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 		s.clientState.ListenMode = msg.Mode
 		log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
 
+		shouldStartAudioIdleWindow := s.clientState.GetListenPhase() != ListenPhaseListening
 		startSeq := s.beginListenStart()
 		go func() {
-			if err := s.OnListenStart(startSeq); err != nil {
+			if err := s.OnListenStart(startSeq, shouldStartAudioIdleWindow); err != nil {
 				log.Errorf("设备 %s listen start 启动失败: %v", msg.DeviceID, err)
 			}
 		}()
@@ -1075,7 +1080,7 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 
 	startSeq := s.beginListenStart()
 	go func() {
-		if err := s.OnListenStart(startSeq); err != nil {
+		if err := s.OnListenStart(startSeq, true); err != nil {
 			log.Errorf("设备 %s listen start 启动失败: %v", msg.DeviceID, err)
 		}
 	}()
@@ -1096,7 +1101,7 @@ func (s *ChatSession) HandleListenStop() error {
 	return nil
 }
 
-func (s *ChatSession) OnListenStart(startSeq uint64) error {
+func (s *ChatSession) OnListenStart(startSeq uint64, shouldStartAudioIdleWindow bool) error {
 	log.Debugf("OnListenStart start")
 	defer log.Debugf("OnListenStart end")
 
@@ -1167,6 +1172,9 @@ func (s *ChatSession) OnListenStart(startSeq uint64) error {
 	}
 
 	s.clientState.SetListenPhase(ListenPhaseListening)
+	if shouldStartAudioIdleWindow {
+		s.clientState.StartAudioIdleWindow(time.Now())
+	}
 
 	// 定义消息保存回调
 	onMessageSave := func(userMsg *schema.Message, messageID string, audioData []float32) {

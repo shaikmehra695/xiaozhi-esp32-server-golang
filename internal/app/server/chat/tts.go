@@ -1054,9 +1054,14 @@ func (t *TTSManager) InterruptAndClearQueueSync(ctx context.Context) error {
 
 func (t *TTSManager) finishTtsStop(ctx context.Context, sendTtsStop bool, stopErr error) bool {
 	if !t.ttsActive.Swap(false) {
-		if sendTtsStop && t.clientState != nil && t.clientState.IsRealTime() {
-			t.clientState.SetStatus(ClientStatusListenStop)
-			t.clientState.SetTtsStart(false)
+		if t.clientState != nil {
+			if sendTtsStop && t.clientState.IsRealTime() {
+				t.clientState.SetStatus(ClientStatusListenStop)
+				t.clientState.SetTtsStart(false)
+			}
+			if t.clientState.UsesAudioIdleClock() {
+				t.clientState.StartAudioIdleWindow(time.Now())
+			}
 		}
 		return false
 	}
@@ -1079,6 +1084,9 @@ func (t *TTSManager) finishTtsStop(ctx context.Context, sendTtsStop bool, stopEr
 	if !sentTtsStop && t.clientState != nil {
 		t.clientState.SetStatus(ClientStatusListenStop)
 		t.clientState.SetTtsStart(false)
+	}
+	if t.clientState != nil && t.clientState.UsesAudioIdleClock() {
+		t.clientState.StartAudioIdleWindow(time.Now())
 	}
 	if t.session != nil {
 		hookErr := t.session.hookHub.EmitTTSOutputStop(t.session.hookContext(ctx), chathooks.TTSOutputStopData{Err: stopErr})

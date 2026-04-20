@@ -1,6 +1,9 @@
 package client
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestShouldCountAudioIdleTimeoutRealtimeOutputStates(t *testing.T) {
 	state := &ClientState{ListenMode: "realtime"}
@@ -40,5 +43,44 @@ func TestShouldCountAudioIdleTimeoutNonRealtimeKeepsExistingBehavior(t *testing.
 
 	if !state.ShouldCountAudioIdleTimeout() {
 		t.Fatal("expected non-realtime idle timeout behavior to stay unchanged")
+	}
+}
+
+func TestOnManualStopClearsAudioIdleTimeoutPending(t *testing.T) {
+	state := &ClientState{}
+	if !state.MarkAudioIdleTimeoutPending() {
+		t.Fatal("expected timeout pending mark to succeed")
+	}
+
+	state.OnManualStop()
+
+	if state.AudioIdleTimeoutPending() {
+		t.Fatal("expected manual stop to clear timeout pending state")
+	}
+}
+
+func TestStartAudioIdleWindowClearsVoiceStop(t *testing.T) {
+	state := &ClientState{ListenMode: "auto"}
+	state.SetClientVoiceStop(true)
+
+	state.StartAudioIdleWindow(time.Now())
+
+	if state.GetClientVoiceStop() {
+		t.Fatal("expected starting idle window to clear voice stop flag")
+	}
+}
+
+func TestResumeAudioIdleWindowClearsVoiceStop(t *testing.T) {
+	state := &ClientState{ListenMode: "realtime"}
+	startAt := time.Now().Add(-5 * time.Second)
+
+	state.StartAudioIdleWindow(startAt)
+	state.PauseAudioIdleWindow(startAt.Add(time.Second))
+	state.SetClientVoiceStop(true)
+
+	state.ResumeAudioIdleWindow(time.Now())
+
+	if state.GetClientVoiceStop() {
+		t.Fatal("expected resuming idle window to clear voice stop flag")
 	}
 }
