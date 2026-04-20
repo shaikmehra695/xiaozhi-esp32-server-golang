@@ -302,6 +302,21 @@ func TestRealtimeInactiveTTSStopClearsInterruptedLLMState(t *testing.T) {
 	}
 }
 
+func TestFinishTtsStopKeepsRealtimeListenSessionActive(t *testing.T) {
+	session, _, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+
+	session.realtimeListenSessionActive.Store(true)
+	session.ttsManager.ttsActive.Store(true)
+
+	if !session.ttsManager.finishTtsStop(context.Background(), false, nil) {
+		t.Fatal("expected active TTS turn to finish")
+	}
+	if !session.isRealtimeListenSessionActive() {
+		t.Fatal("expected tts stop to keep realtime listen session active")
+	}
+}
+
 func TestInactiveAutoTTSStopRestartsIdleWindow(t *testing.T) {
 	manager := newTestTTSManager(false)
 	manager.clientState.ListenMode = "auto"
