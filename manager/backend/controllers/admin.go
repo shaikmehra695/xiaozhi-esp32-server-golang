@@ -193,17 +193,27 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 			return &model
 		}
 
-		query := ac.DB.Model(&models.VoiceClone{}).
-			Where("user_id = ? AND tts_config_id = ? AND provider_voice_id = ? AND status = ?",
-				device.UserID, ttsConfigID, voiceID, voiceCloneStatusActive)
-		if provider == "doubao" {
-			query = query.Where("provider IN ?", []string{"doubao", "doubao_ws"})
-		} else {
-			query = query.Where("provider = ?", provider)
+		var clone models.VoiceClone
+		findCloneByScope := func(base *gorm.DB) error {
+			query := base.Where("tts_config_id = ? AND provider_voice_id = ? AND status = ?",
+				ttsConfigID, voiceID, voiceCloneStatusActive)
+			if provider == "doubao" {
+				query = query.Where("provider IN ?", []string{"doubao", "doubao_ws"})
+			} else {
+				query = query.Where("provider = ?", provider)
+			}
+			return query.Order("updated_at DESC, created_at DESC").First(&clone).Error
 		}
 
-		var clone models.VoiceClone
-		err := query.Order("updated_at DESC, created_at DESC").First(&clone).Error
+		err := findCloneByScope(ac.DB.Model(&models.VoiceClone{}).Where("user_id = ?", device.UserID))
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 回退：允许命中管理员共享给所有人的复刻音色，解决普通用户使用共享音色时模型覆盖缺失问题。
+			err = findCloneByScope(
+				ac.DB.Model(&models.VoiceClone{}).
+					Joins("JOIN users ON users.id = voice_clones.user_id").
+					Where("voice_clones.shared_to_all = ? AND users.role = ?", true, "admin"),
+			)
+		}
 		if err != nil {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				log.Printf("检测复刻音色模型覆盖失败: provider=%s user_id=%d tts_config_id=%s voice_id=%s err=%v", provider, device.UserID, ttsConfigID, voiceID, err)
