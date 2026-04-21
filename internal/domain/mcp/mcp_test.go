@@ -514,6 +514,12 @@ type closeAwareIotConn struct {
 	cancelOnce    sync.Once
 }
 
+type dropInboundIotConn struct {
+	transportType string
+	sent          chan []byte
+	handleCount   atomic.Int32
+}
+
 type capturedJSONRPCRequest struct {
 	Method string          `json:"method"`
 	ID     json.RawMessage `json:"id"`
@@ -629,6 +635,13 @@ func newCloseAwareIotConn(transportType string) *closeAwareIotConn {
 	}
 }
 
+func newDropInboundIotConn(transportType string) *dropInboundIotConn {
+	return &dropInboundIotConn{
+		transportType: transportType,
+		sent:          make(chan []byte, 8),
+	}
+}
+
 func (c *closeAwareIotConn) SendMcpMsg(payload []byte) error {
 	return nil
 }
@@ -654,6 +667,29 @@ func (c *closeAwareIotConn) HandleMcpMessage(payload []byte) error {
 }
 
 func (c *closeAwareIotConn) GetMcpTransportType() string {
+	return c.transportType
+}
+
+func (c *dropInboundIotConn) SendMcpMsg(payload []byte) error {
+	c.sent <- append([]byte(nil), payload...)
+	return nil
+}
+
+func (c *dropInboundIotConn) RecvMcpMsg(ctx context.Context, timeout int) ([]byte, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(time.Duration(timeout) * time.Millisecond):
+		return nil, fmt.Errorf("timeout")
+	}
+}
+
+func (c *dropInboundIotConn) HandleMcpMessage(payload []byte) error {
+	c.handleCount.Add(1)
+	return nil
+}
+
+func (c *dropInboundIotConn) GetMcpTransportType() string {
 	return c.transportType
 }
 
@@ -1116,6 +1152,60 @@ func TestShouldScheduleDeviceIotOverMcp_UsesTransportInitState(t *testing.T) {
 
 	otherConn := newTestIotConn("websocket")
 	assert.True(t, ShouldScheduleDeviceIotOverMcp(deviceID, otherConn))
+}
+
+func TestHandleDeviceIotMcpMessage_DirectlyInjectsIntoActiveTransport(t *testing.T) {
+	deviceID := fmt.Sprintf("inject-device-%d", time.Now().UnixNano())
+	conn := newDropInboundIotConn("udp")
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &DeviceMcpSession{
+		deviceID:              deviceID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+	instance := NewIotOverMcpClient(deviceID, conn.transportType, conn)
+	require.NotNil(t, instance)
+	instance.SetOnCloseHandler(session.handleMcpClientClose)
+	session.iotOverMcpByTransport[normalizeDeviceTransportType(conn.transportType)] = instance
+	require.NoError(t, AddDeviceMcpClient(deviceID, session))
+
+	t.Cleanup(func() {
+		cancel()
+		instance.closeWithReason("test_cleanup")
+		_ = RemoveDeviceMcpClient(deviceID)
+	})
+
+	reqCtx, reqCancel := context.WithTimeout(context.Background(), time.Second)
+	defer reqCancel()
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := instance.iotTransport.SendRequest(reqCtx, transport.JSONRPCRequest{
+			JSONRPC: mcp.JSONRPC_VERSION,
+			ID:      mcp.NewRequestId(uint64(2)),
+			Method:  string(mcp.MethodToolsList),
+			Params:  map[string]any{},
+		})
+		resultCh <- err
+	}()
+
+	select {
+	case <-conn.sent:
+	case <-time.After(time.Second):
+		t.Fatal("expected transport to send tools/list request")
+	}
+
+	require.NoError(t, HandleDeviceIotMcpMessage(deviceID, conn.transportType, []byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`)))
+
+	select {
+	case err := <-resultCh:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("expected MCP response to resolve the pending request")
+	}
+
+	assert.Zero(t, conn.handleCount.Load(), "direct injection should not fall back to conn.HandleMcpMessage")
 }
 
 func TestCloseDeviceIotOverMcpClosesUnderlyingTransport(t *testing.T) {
