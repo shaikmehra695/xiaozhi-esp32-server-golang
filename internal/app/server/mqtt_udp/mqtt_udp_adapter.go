@@ -404,10 +404,10 @@ func (s *MqttUdpAdapter) getOrCreateLifecycleState(deviceID string) *mqttDeviceL
 	return actual.(*mqttDeviceLifecycleState)
 }
 
-func (s *MqttUdpAdapter) markDeviceOnline(deviceID string, eventTs int64) bool {
+func (s *MqttUdpAdapter) markDeviceOnline(deviceID string, eventTs int64) (bool, bool) {
 	state := s.getOrCreateLifecycleState(deviceID)
 	if state == nil {
-		return false
+		return false, false
 	}
 	if eventTs <= 0 {
 		eventTs = time.Now().UnixMilli()
@@ -417,7 +417,7 @@ func (s *MqttUdpAdapter) markDeviceOnline(deviceID string, eventTs int64) bool {
 	defer state.mu.Unlock()
 
 	if state.lastEventTs > 0 && eventTs < state.lastEventTs {
-		return false
+		return false, false
 	}
 
 	if eventTs > state.lastEventTs {
@@ -431,7 +431,7 @@ func (s *MqttUdpAdapter) markDeviceOnline(deviceID string, eventTs int64) bool {
 		state.cleanupTimer.Stop()
 		state.cleanupTimer = nil
 	}
-	return !wasOnline
+	return !wasOnline, true
 }
 
 func (s *MqttUdpAdapter) markDeviceOffline(deviceID string, eventTs int64) (bool, uint64) {
@@ -525,16 +525,19 @@ func (s *MqttUdpAdapter) EnsureDeviceTransport(deviceId string) (*MqttUdpConn, e
 	return deviceSession, nil
 }
 
-func (s *MqttUdpAdapter) promoteDeviceOnline(deviceID string, eventTs int64) (*MqttUdpConn, bool, error) {
-	notifyOnline := s.markDeviceOnline(deviceID, eventTs)
+func (s *MqttUdpAdapter) promoteDeviceOnline(deviceID string, eventTs int64) (*MqttUdpConn, bool, bool, error) {
+	notifyOnline, acceptedOnline := s.markDeviceOnline(deviceID, eventTs)
+	if !acceptedOnline {
+		return s.getDeviceSession(deviceID), false, false, nil
+	}
 	conn, err := s.EnsureDeviceTransport(deviceID)
 	if err != nil {
-		return nil, notifyOnline, err
+		return nil, notifyOnline, true, err
 	}
 	if conn != nil {
 		conn.MarkBrokerOnline()
 	}
-	return conn, notifyOnline, nil
+	return conn, notifyOnline, true, nil
 }
 
 func (s *MqttUdpAdapter) handleLifecycleMessage(payload []byte) {
@@ -551,15 +554,20 @@ func (s *MqttUdpAdapter) handleLifecycleMessage(payload []byte) {
 
 	switch strings.TrimSpace(lifecycleEvent.State) {
 	case msgdata.MqttLifecycleStateOnline:
-		_, notifyOnline, err := s.promoteDeviceOnline(deviceID, lifecycleEvent.Ts)
+		_, notifyOnline, acceptedOnline, err := s.promoteDeviceOnline(deviceID, lifecycleEvent.Ts)
 		if err != nil {
 			Errorf("处理 MQTT 上线事件失败: device=%s err=%v", deviceID, err)
+			return
+		}
+		if !acceptedOnline {
 			return
 		}
 		if notifyOnline && s.onDeviceOnline != nil {
 			s.onDeviceOnline(deviceID)
 		}
-		if notifyOnline && s.onTransportReady != nil {
+		// 设备重启后即便 broker 在线状态没有翻转，online 广播仍然意味着设备侧 runtime 可能已重建，
+		// 需要触发 transport ready 链路重置 IoT MCP runtime 并重新 initialize。
+		if s.onTransportReady != nil {
 			s.onTransportReady(deviceID)
 		}
 	case msgdata.MqttLifecycleStateOffline:
@@ -600,7 +608,7 @@ func (s *MqttUdpAdapter) processMessage() {
 			}
 
 			existingSession := s.getDeviceSession(deviceId)
-			deviceSession, notifyOnline, err := s.promoteDeviceOnline(deviceId, time.Now().UnixMilli())
+			deviceSession, notifyOnline, _, err := s.promoteDeviceOnline(deviceId, time.Now().UnixMilli())
 			if err != nil {
 				Errorf("确保 MQTT transport 在线失败: device=%s err=%v", deviceId, err)
 				continue
