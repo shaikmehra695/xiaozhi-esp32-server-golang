@@ -1,10 +1,5 @@
 <template>
   <div class="admin-devices">
-    <div class="page-header">
-      <h2>设备管理</h2>
-      <p class="page-subtitle">管理系统中的所有设备</p>
-    </div>
-
     <div class="toolbar">
       <el-button type="primary" @click="openAddDialog">
         <el-icon><Plus /></el-icon>
@@ -542,27 +537,12 @@ onMounted(() => {
   padding: 20px;
 }
 
-.page-header {
-  margin-bottom: 20px;
-}
-
-.page-header h2 {
-  margin: 0 0 8px 0;
-  color: #303133;
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.page-subtitle {
-  margin: 0;
-  color: #909399;
-  font-size: 14px;
-}
-
 .toolbar {
   margin-bottom: 20px;
   display: flex;
   gap: 12px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .tools-tags { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }

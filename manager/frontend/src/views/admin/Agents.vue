@@ -1,10 +1,5 @@
 <template>
   <div class="admin-agents">
-    <div class="page-header">
-      <h2>智能体管理</h2>
-      <p class="page-subtitle">管理系统中的所有智能体</p>
-    </div>
-
     <div class="toolbar">
       <el-button type="primary" @click="showAddDialog = true">
         <el-icon><Plus /></el-icon>
@@ -1151,27 +1146,12 @@ onMounted(() => {
   padding: 20px;
 }
 
-.page-header {
-  margin-bottom: 20px;
-}
-
-.page-header h2 {
-  margin: 0 0 8px 0;
-  color: #303133;
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.page-subtitle {
-  margin: 0;
-  color: #909399;
-  font-size: 14px;
-}
-
 .toolbar {
   margin-bottom: 20px;
   display: flex;
   gap: 12px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .mcp-endpoint-display {
@@ -1233,20 +1213,20 @@ onMounted(() => {
 
 .openclaw-tip-content code {
   background: #f3f4f6;
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 0 4px;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
 }
 
 :deep(.openclaw-tip-popper) {
   max-width: 460px;
-  background: #ffffff !important;
+  background: rgba(255, 255, 255, 0.96) !important;
   border: 1px solid #dbeafe !important;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12) !important;
 }
 
 :deep(.openclaw-tip-popper .el-popper__arrow::before) {
-  background: #ffffff !important;
+  background: rgba(255, 255, 255, 0.96) !important;
   border: 1px solid #dbeafe !important;
 }
 

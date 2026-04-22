@@ -16,14 +16,32 @@ type AuthController struct {
 }
 
 type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username      string `json:"username" binding:"required"`
+	Password      string `json:"password" binding:"required"`
+	CaptchaID     string `json:"captchaId"`
+	CaptchaAnswer string `json:"captchaAnswer"`
 }
 
 type RegisterRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	Email    string `json:"email" binding:"required,email"`
+	Username      string `json:"username" binding:"required"`
+	Password      string `json:"password" binding:"required"`
+	Email         string `json:"email" binding:"required,email"`
+	CaptchaID     string `json:"captchaId"`
+	CaptchaAnswer string `json:"captchaAnswer"`
+}
+
+// 获取简单人机验证码
+func (ac *AuthController) GetSimpleCaptcha(c *gin.Context) {
+	captchaID, prompt, err := authCaptchaStore.NewChallenge()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成人机验证失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"captchaId": captchaID,
+		"prompt":    prompt,
+	})
 }
 
 // 用户登录
@@ -31,6 +49,11 @@ func (ac *AuthController) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !authCaptchaStore.Verify(req.CaptchaID, req.CaptchaAnswer) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "人机验证失败，请换一题重试"})
 		return
 	}
 
@@ -106,6 +129,11 @@ func (ac *AuthController) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !authCaptchaStore.Verify(req.CaptchaID, req.CaptchaAnswer) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "人机验证失败，请换一题重试"})
 		return
 	}
 

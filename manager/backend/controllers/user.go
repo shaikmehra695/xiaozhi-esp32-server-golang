@@ -203,6 +203,22 @@ func generateRandomCode() string {
 	return code
 }
 
+func isSixDigitCode(value string) bool {
+	if len(value) != 6 {
+		return false
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeDeviceNameCandidate(value string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", ":"))
+}
+
 // 获取用户所有设备概览（只读）
 func (uc *UserController) GetMyDevices(c *gin.Context) {
 	userID, _ := c.Get("user_id")
@@ -536,10 +552,26 @@ func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 	agentID := c.Param("id")
 
 	var req struct {
-		Code string `json:"code" binding:"required,len=6"`
+		Code       string `json:"code"`
+		DeviceMAC  string `json:"device_mac"`
+		DeviceName string `json:"device_name"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误"})
+		return
+	}
+
+	code := strings.TrimSpace(req.Code)
+	deviceName := strings.TrimSpace(req.DeviceMAC)
+	if deviceName == "" {
+		deviceName = strings.TrimSpace(req.DeviceName)
+	}
+	if code == "" && deviceName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写设备验证码或设备MAC"})
+		return
+	}
+	if code != "" && !isSixDigitCode(code) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码格式错误"})
 		return
 	}
@@ -551,11 +583,20 @@ func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 		return
 	}
 
-	// 验证设备验证码（user_id为0表示设备未绑定用户）
+	// 验证未绑定设备（user_id为0表示设备未绑定用户）
 	var device models.Device
-	if err := uc.DB.Where("device_code = ? AND user_id = 0", req.Code).First(&device).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码无效或设备已被绑定"})
-		return
+	query := uc.DB.Where("user_id = 0")
+	if code != "" {
+		if err := query.Where("device_code = ?", code).First(&device).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码无效或设备已被绑定"})
+			return
+		}
+	} else {
+		normalizedDeviceName := normalizeDeviceNameCandidate(deviceName)
+		if err := query.Where("LOWER(REPLACE(device_name, '-', ':')) = ?", normalizedDeviceName).First(&device).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "设备MAC无效或设备已被绑定"})
+			return
+		}
 	}
 
 	// 绑定设备到用户和智能体
@@ -1192,13 +1233,16 @@ func (uc *UserController) GetDashboardStats(c *gin.Context) {
 	userRole, _ := c.Get("role")
 
 	type DashboardStats struct {
-		TotalUsers    int64 `json:"totalUsers"`
-		TotalDevices  int64 `json:"totalDevices"`
-		TotalAgents   int64 `json:"totalAgents"`
-		OnlineDevices int64 `json:"onlineDevices"`
+		TotalUsers       int64  `json:"totalUsers"`
+		TotalDevices     int64  `json:"totalDevices"`
+		TotalAgents      int64  `json:"totalAgents"`
+		OnlineDevices    int64  `json:"onlineDevices"`
+		ProgramStartedAt string `json:"programStartedAt"`
 	}
 
-	stats := DashboardStats{}
+	stats := DashboardStats{
+		ProgramStartedAt: programStartedAt.Format(time.RFC3339),
+	}
 
 	if userRole == "admin" {
 		// 管理员查看全部数据

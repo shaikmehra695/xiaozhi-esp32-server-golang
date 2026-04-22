@@ -1,10 +1,5 @@
 <template>
   <div class="config-wizard">
-    <div class="wizard-header">
-      <h2>配置向导</h2>
-      <p class="wizard-desc">按步骤完成 OTA、VAD、ASR、LLM、TTS 基础配置，可随时跳过某步。</p>
-    </div>
-
     <el-steps :active="currentStep" finish-status="success" align-center class="wizard-steps">
       <el-step title="OTA" description="服务地址" />
       <el-step title="VAD" description="语音活动检测" />
@@ -1315,19 +1310,6 @@ onMounted(async () => {
   max-width: 820px;
   margin: 0 auto;
 }
-.wizard-header {
-  margin-bottom: 24px;
-}
-.wizard-header h2 {
-  margin: 0 0 8px 0;
-  font-size: 22px;
-  color: #303133;
-}
-.wizard-desc {
-  margin: 0;
-  color: #909399;
-  font-size: 14px;
-}
 .wizard-steps {
   margin-bottom: 24px;
 }
@@ -1388,9 +1370,9 @@ onMounted(async () => {
 .ota-test-json {
   margin: 0;
   padding: 12px;
-  background: #f5f7fa;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+  border-radius: 12px;
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;

@@ -1,86 +1,151 @@
 <template>
   <div class="login-container">
-    <el-card class="login-card">
-      <template #header>
-        <div class="card-header">
-          <h2>小智管理系统</h2>
+    <div class="login-shell">
+      <section class="login-hero">
+        <p class="login-eyebrow">APPLE LIGHT UI</p>
+        <h1>更干净的控制台入口。</h1>
+        <p>
+          用更轻的留白、磨砂层和清晰的层级打开管理台，桌面与 H5 保持同一套语言。
+        </p>
+        <div class="login-meta">
+          <span class="apple-chip is-primary">小智管理系统</span>
+          <span class="apple-chip">设备 / 智能体 / 配置</span>
         </div>
-      </template>
-      
-      <el-tabs v-model="activeTab" class="login-tabs">
-        <el-tab-pane label="登录" name="login">
-          <el-form
-            ref="loginFormRef"
-            :model="loginForm"
-            :rules="loginRules"
-            label-width="80px"
-          >
-            <el-form-item label="用户名" prop="username">
-              <el-input v-model="loginForm.username" placeholder="请输入用户名" />
-            </el-form-item>
-            <el-form-item label="密码" prop="password">
-              <el-input
-                v-model="loginForm.password"
-                type="password"
-                placeholder="请输入密码"
-                @keyup.enter="handleLogin"
-              />
-            </el-form-item>
-            <el-form-item>
-              <el-button
-                type="primary"
-                :loading="loading"
-                @click="handleLogin"
-                style="width: 100%"
-              >
-                登录
-              </el-button>
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
-        
-        <el-tab-pane label="注册" name="register">
-          <el-form
-            ref="registerFormRef"
-            :model="registerForm"
-            :rules="registerRules"
-            label-width="80px"
-          >
-            <el-form-item label="用户名" prop="username">
-              <el-input v-model="registerForm.username" placeholder="请输入用户名" />
-            </el-form-item>
-            <el-form-item label="邮箱" prop="email">
-              <el-input v-model="registerForm.email" placeholder="请输入邮箱" />
-            </el-form-item>
-            <el-form-item label="密码" prop="password">
-              <el-input
-                v-model="registerForm.password"
-                type="password"
-                placeholder="请输入密码"
-              />
-            </el-form-item>
-            <el-form-item label="确认密码" prop="confirmPassword">
-              <el-input
-                v-model="registerForm.confirmPassword"
-                type="password"
-                placeholder="请确认密码"
-                @keyup.enter="handleRegister"
-              />
-            </el-form-item>
-            <el-form-item>
-              <el-button
-                type="primary"
-                :loading="loading"
-                @click="handleRegister"
-                style="width: 100%"
-              >
-                注册
-              </el-button>
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
-      </el-tabs>
-    </el-card>
+      </section>
+
+      <el-card class="login-card">
+        <template #header>
+          <div class="card-header">
+            <div>
+              <p class="card-eyebrow">WELCOME BACK</p>
+              <h2>登录或创建账户</h2>
+            </div>
+          </div>
+        </template>
+
+        <el-tabs v-model="activeTab" class="login-tabs">
+          <el-tab-pane label="登录" name="login">
+            <el-form
+              ref="loginFormRef"
+              :model="loginForm"
+              :rules="loginRules"
+              label-position="top"
+            >
+              <el-form-item label="用户名" prop="username">
+                <el-input v-model="loginForm.username" placeholder="请输入用户名" />
+              </el-form-item>
+              <el-form-item label="密码" prop="password">
+                <el-input
+                  v-model="loginForm.password"
+                  type="password"
+                  placeholder="请输入密码"
+                  @keyup.enter="handleLogin"
+                />
+              </el-form-item>
+              <div class="captcha-strip">
+                <div class="captcha-copy">
+                  <span class="captcha-label">人机验证</span>
+                  <strong>{{ loginCaptchaPrompt || '正在生成题目...' }}</strong>
+                  <p>简单算术题，防止脚本批量登录。</p>
+                </div>
+                <el-button
+                  link
+                  type="primary"
+                  :loading="loginCaptchaLoading"
+                  @click="refreshLoginCaptcha"
+                >
+                  换一题
+                </el-button>
+              </div>
+              <el-form-item label="计算结果" prop="captchaAnswer">
+                <el-input
+                  v-model="loginForm.captchaAnswer"
+                  inputmode="numeric"
+                  placeholder="请输入计算结果"
+                  @keyup.enter="handleLogin"
+                />
+              </el-form-item>
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  :loading="loading"
+                  :disabled="loginCaptchaLoading || !loginForm.captchaId"
+                  @click="handleLogin"
+                  style="width: 100%"
+                >
+                  登录
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
+
+          <el-tab-pane label="注册" name="register">
+            <el-form
+              ref="registerFormRef"
+              :model="registerForm"
+              :rules="registerRules"
+              label-position="top"
+            >
+              <el-form-item label="用户名" prop="username">
+                <el-input v-model="registerForm.username" placeholder="请输入用户名" />
+              </el-form-item>
+              <el-form-item label="邮箱" prop="email">
+                <el-input v-model="registerForm.email" placeholder="请输入邮箱" />
+              </el-form-item>
+              <el-form-item label="密码" prop="password">
+                <el-input
+                  v-model="registerForm.password"
+                  type="password"
+                  placeholder="请输入密码"
+                />
+              </el-form-item>
+              <el-form-item label="确认密码" prop="confirmPassword">
+                <el-input
+                  v-model="registerForm.confirmPassword"
+                  type="password"
+                  placeholder="请确认密码"
+                  @keyup.enter="handleRegister"
+                />
+              </el-form-item>
+              <div class="captcha-strip">
+                <div class="captcha-copy">
+                  <span class="captcha-label">人机验证</span>
+                  <strong>{{ registerCaptchaPrompt || '正在生成题目...' }}</strong>
+                  <p>完成简单算式后再提交注册。</p>
+                </div>
+                <el-button
+                  link
+                  type="primary"
+                  :loading="registerCaptchaLoading"
+                  @click="refreshRegisterCaptcha"
+                >
+                  换一题
+                </el-button>
+              </div>
+              <el-form-item label="计算结果" prop="captchaAnswer">
+                <el-input
+                  v-model="registerForm.captchaAnswer"
+                  inputmode="numeric"
+                  placeholder="请输入计算结果"
+                  @keyup.enter="handleRegister"
+                />
+              </el-form-item>
+              <el-form-item>
+                <el-button
+                  type="primary"
+                  :loading="loading"
+                  :disabled="registerCaptchaLoading || !registerForm.captchaId"
+                  @click="handleRegister"
+                  style="width: 100%"
+                >
+                  注册
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
+        </el-tabs>
+      </el-card>
+    </div>
   </div>
 </template>
 
@@ -89,6 +154,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
+import api from '../utils/api'
 import { getPostLoginRedirectPath } from '../utils/authRedirect'
 import { checkNeedsSetup } from '../utils/setupStatus'
 
@@ -99,22 +165,31 @@ const activeTab = ref('login')
 const loading = ref(false)
 const loginFormRef = ref()
 const registerFormRef = ref()
+const loginCaptchaPrompt = ref('')
+const registerCaptchaPrompt = ref('')
+const loginCaptchaLoading = ref(false)
+const registerCaptchaLoading = ref(false)
 
 const loginForm = reactive({
   username: '',
-  password: ''
+  password: '',
+  captchaId: '',
+  captchaAnswer: ''
 })
 
 const registerForm = reactive({
   username: '',
   email: '',
   password: '',
-  confirmPassword: ''
+  confirmPassword: '',
+  captchaId: '',
+  captchaAnswer: ''
 })
 
 const loginRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  captchaAnswer: [{ required: true, message: '请输入计算结果', trigger: 'blur' }]
 }
 
 const registerRules = {
@@ -139,51 +214,111 @@ const registerRules = {
       },
       trigger: 'blur'
     }
+  ],
+  captchaAnswer: [
+    { required: true, message: '请输入计算结果', trigger: 'blur' }
   ]
+}
+
+const fetchCaptcha = async (form, promptRef, loadingRef, formRef) => {
+  loadingRef.value = true
+  try {
+    const { data } = await api.get('/captcha/challenge')
+    form.captchaId = data.captchaId
+    form.captchaAnswer = ''
+    promptRef.value = data.prompt
+    formRef?.value?.clearValidate?.(['captchaAnswer'])
+  } catch (error) {
+    form.captchaId = ''
+    form.captchaAnswer = ''
+    promptRef.value = '题目加载失败，请换一题重试'
+  } finally {
+    loadingRef.value = false
+  }
+}
+
+const refreshLoginCaptcha = async () => {
+  await fetchCaptcha(loginForm, loginCaptchaPrompt, loginCaptchaLoading, loginFormRef)
+}
+
+const refreshRegisterCaptcha = async () => {
+  await fetchCaptcha(registerForm, registerCaptchaPrompt, registerCaptchaLoading, registerFormRef)
 }
 
 const handleLogin = async () => {
   if (!loginFormRef.value) return
-  
-  await loginFormRef.value.validate(async (valid) => {
-    if (valid) {
-      loading.value = true
-      const result = await authStore.login(loginForm)
-      loading.value = false
-      
-      if (result.success) {
-        ElMessage.success('登录成功')
-        router.push(getPostLoginRedirectPath(authStore.user))
-      } else {
-        ElMessage.error(result.message)
-      }
-    }
+
+  try {
+    await loginFormRef.value.validate()
+  } catch {
+    return
+  }
+
+  if (!loginForm.captchaId) {
+    ElMessage.error('人机验证加载失败，请换一题重试')
+    await refreshLoginCaptcha()
+    return
+  }
+
+  loading.value = true
+  const result = await authStore.login({
+    username: loginForm.username,
+    password: loginForm.password,
+    captchaId: loginForm.captchaId,
+    captchaAnswer: loginForm.captchaAnswer.trim()
   })
+  loading.value = false
+
+  if (result.success) {
+    ElMessage.success('登录成功')
+    router.push(getPostLoginRedirectPath(authStore.user))
+  } else {
+    ElMessage.error(result.message)
+    await refreshLoginCaptcha()
+  }
 }
 
 const handleRegister = async () => {
   if (!registerFormRef.value) return
-  
-  await registerFormRef.value.validate(async (valid) => {
-    if (valid) {
-      loading.value = true
-      const result = await authStore.register(registerForm)
-      loading.value = false
-      
-      if (result.success) {
-        ElMessage.success('注册成功，请登录')
-        activeTab.value = 'login'
-        Object.assign(registerForm, {
-          username: '',
-          email: '',
-          password: '',
-          confirmPassword: ''
-        })
-      } else {
-        ElMessage.error(result.message)
-      }
-    }
+
+  try {
+    await registerFormRef.value.validate()
+  } catch {
+    return
+  }
+
+  if (!registerForm.captchaId) {
+    ElMessage.error('人机验证加载失败，请换一题重试')
+    await refreshRegisterCaptcha()
+    return
+  }
+
+  loading.value = true
+  const result = await authStore.register({
+    username: registerForm.username,
+    email: registerForm.email,
+    password: registerForm.password,
+    captchaId: registerForm.captchaId,
+    captchaAnswer: registerForm.captchaAnswer.trim()
   })
+  loading.value = false
+
+  if (result.success) {
+    ElMessage.success('注册成功，请登录')
+    activeTab.value = 'login'
+    Object.assign(registerForm, {
+      username: '',
+      email: '',
+      password: '',
+      confirmPassword: '',
+      captchaId: '',
+      captchaAnswer: ''
+    })
+    await Promise.all([refreshLoginCaptcha(), refreshRegisterCaptcha()])
+  } else {
+    ElMessage.error(result.message)
+    await refreshRegisterCaptcha()
+  }
 }
 
 // 检查系统状态，如果未初始化则跳转到引导页面
@@ -199,33 +334,140 @@ const checkSystemStatus = async () => {
 
 onMounted(() => {
   checkSystemStatus()
+  Promise.allSettled([refreshLoginCaptcha(), refreshRegisterCaptcha()])
 })
 </script>
 
 <style scoped>
 .login-container {
+  min-height: 100vh;
   display: flex;
-  justify-content: center;
   align-items: center;
-  height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-shell {
+  width: min(1120px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 24px;
+  align-items: center;
+}
+
+.login-hero {
+  padding: 28px;
+}
+
+.login-eyebrow,
+.card-eyebrow {
+  margin: 0 0 8px;
+  color: var(--apple-primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.login-hero h1 {
+  margin: 0;
+  font-size: 48px;
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+}
+
+.login-hero p {
+  margin: 16px 0 0;
+  max-width: 520px;
+  color: var(--apple-text-secondary);
+  line-height: 1.8;
+}
+
+.login-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
 }
 
 .login-card {
-  width: 400px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border-radius: 30px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: var(--apple-shadow-lg);
 }
 
 .card-header {
-  text-align: center;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .card-header h2 {
   margin: 0;
-  color: #333;
+  color: var(--apple-text);
+  font-size: 28px;
+  letter-spacing: -0.03em;
 }
 
 .login-tabs {
-  margin-top: 20px;
+  margin-top: 8px;
+}
+
+.captcha-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--apple-border);
+  background: rgba(247, 248, 250, 0.92);
+}
+
+.captcha-copy {
+  min-width: 0;
+}
+
+.captcha-copy strong {
+  display: block;
+  color: var(--apple-text);
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.captcha-copy p {
+  margin: 6px 0 0;
+  color: var(--apple-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.captcha-label {
+  display: inline-block;
+  margin-bottom: 6px;
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@media (max-width: 960px) {
+  .login-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .login-hero {
+    padding: 8px 0;
+  }
+
+  .login-hero h1 {
+    font-size: 38px;
+  }
+
+  .captcha-strip {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

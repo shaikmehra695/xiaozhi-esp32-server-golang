@@ -1,13 +1,8 @@
 <template>
   <div class="config-page">
-    <div class="page-header">
-      <div class="header-left">
-        <h2>聊天设置</h2>
-      </div>
-      <div class="header-right">
-        <el-button @click="loadSettings" :loading="loading">刷新</el-button>
-        <el-button type="primary" @click="saveSettings" :loading="saving">保存设置</el-button>
-      </div>
+    <div class="page-actions">
+      <el-button @click="loadSettings" :loading="loading">刷新</el-button>
+      <el-button type="primary" @click="saveSettings" :loading="saving">保存设置</el-button>
     </div>
 
     <el-card v-loading="loading">
@@ -147,21 +142,13 @@ onMounted(() => {
   padding: 20px;
 }
 
-.page-header {
+.page-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
-  margin-bottom: 20px;
-}
-
-.header-left h2 {
-  margin: 0;
-  color: #303133;
-}
-
-.header-right {
-  display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
 }
 
 .form-help {

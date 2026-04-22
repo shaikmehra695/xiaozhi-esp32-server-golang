@@ -1,133 +1,127 @@
 <template>
   <div class="mqtt-config">
-    <!-- 页面头部 -->
-    <div class="page-header">
-      <div class="header-content">
-        <div class="title-section">
-          <el-icon class="title-icon">
-            <Connection />
-          </el-icon>
-          <h1 class="page-title">MQTT配置管理</h1>
-        </div>
-      </div>
-    </div>
-
-    <!-- 配置说明 -->
-    <div class="config-description">
-      <el-alert
-        title="配置说明"
-        description="配置MQTT连接参数和认证信息。此配置页面是主程序以mqtt client角色连接mqtt server的配置信息，可以是程序自带的mqtt server，也可以配置连接外部emqx"
-        type="info"
-        :closable="false"
-        show-icon
-      />
-    </div>
-
-    <!-- 表单容器 -->
-    <div class="form-container">
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        class="config-form"
-        v-loading="loading"
-      >
-        <!-- 基础配置卡片 -->
-        <el-card class="config-card basic-config" shadow="never">
+    <el-form
+      ref="formRef"
+      :model="form"
+      :rules="rules"
+      class="config-form"
+      v-loading="loading"
+    >
+      <div class="config-layout">
+        <el-card class="config-card" shadow="never">
           <template #header>
-            <div class="card-header">
-              <el-icon class="card-icon">
-                <Setting />
-              </el-icon>
-              <span class="card-title">基础配置</span>
+            <div class="card-head">
+              <div>
+                <p class="card-kicker">Connection</p>
+                <h3>连接参数</h3>
+                <p class="card-description">先补齐地址、协议和客户端身份，保证主程序能稳定连接到目标 Broker。</p>
+              </div>
+              <el-tag :type="isCoreFieldsComplete ? 'success' : 'warning'" effect="plain" round>
+                {{ isCoreFieldsComplete ? '参数完整' : '待补充' }}
+              </el-tag>
             </div>
           </template>
-          
-          <div class="form-grid">
-            <el-form-item label="启用MQTT" prop="enable" class="form-item">
-              <el-switch v-model="form.enable" />
-            </el-form-item>
-          </div>
-        </el-card>
 
-        <!-- 连接配置卡片 -->
-        <el-card class="config-card connection-config" shadow="never">
-          <template #header>
-            <div class="card-header">
-              <el-icon class="card-icon connection-icon">
-                <Link />
-              </el-icon>
-              <span class="card-title">连接配置</span>
-            </div>
-          </template>
-          
-          <div class="form-grid">
-            <el-form-item label="配置名称" prop="name" class="form-item">
-              <el-input v-model="form.name" placeholder="请输入配置名称" />
+          <div class="field-grid">
+            <el-form-item label="配置名称" prop="name">
+              <el-input v-model="form.name" placeholder="例如：默认 MQTT 连接" />
             </el-form-item>
-            
-            <el-form-item label="Broker地址" prop="broker" class="form-item">
-              <el-input v-model="form.broker" placeholder="请输入MQTT Broker地址" />
+
+            <el-form-item label="Broker 地址" prop="broker">
+              <el-input v-model="form.broker" placeholder="例如：mqtt://127.0.0.1 或 broker.example.com" />
             </el-form-item>
-            
-            <el-form-item label="连接类型" prop="type" class="form-item">
+
+            <el-form-item label="连接类型" prop="type">
               <el-select v-model="form.type" placeholder="请选择连接类型" style="width: 100%">
-                <el-option label="TCP" value="tcp" />
-                <el-option label="WebSocket" value="websocket" />
-                <el-option label="SSL/TLS" value="ssl" />
+                <el-option
+                  v-for="option in connectionTypeOptions"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
               </el-select>
             </el-form-item>
-            
-            <el-form-item label="端口" prop="port" class="form-item">
-              <el-input-number v-model="form.port" :min="1" :max="65535" placeholder="请输入端口号" style="width: 100%" />
+
+            <el-form-item label="端口" prop="port">
+              <el-input-number
+                v-model="form.port"
+                :min="1"
+                :max="65535"
+                controls-position="right"
+                style="width: 100%"
+              />
             </el-form-item>
-            
-            <el-form-item label="客户端ID" prop="client_id" class="form-item">
-              <el-input v-model="form.client_id" placeholder="请输入客户端ID" />
+
+            <el-form-item label="客户端 ID" prop="client_id" class="field-span-full">
+              <el-input
+                v-model="form.client_id"
+                placeholder="请输入主程序连接 Broker 时使用的 Client ID"
+              />
+              <div class="field-help">
+                建议使用稳定且可识别的 Client ID，便于在 Broker 侧定位连接来源。
+              </div>
             </el-form-item>
           </div>
         </el-card>
 
-        <!-- 认证配置卡片 -->
-        <el-card class="config-card auth-config" shadow="never">
+        <el-card class="config-card config-card-side" shadow="never">
           <template #header>
-            <div class="card-header">
-              <el-icon class="card-icon auth-icon">
-                <User />
-              </el-icon>
-              <span class="card-title">认证配置</span>
-              <el-tooltip content="连接mqtt server的用户名密码，需要具有任意订阅权限" placement="top">
-                <el-icon class="help-icon"><QuestionFilled /></el-icon>
-              </el-tooltip>
+            <div class="card-head">
+              <div>
+                <p class="card-kicker">Authentication</p>
+                <h3>认证信息</h3>
+                <p class="card-description">如果 Broker 开启账号密码认证，请填写具有订阅权限的凭证。</p>
+              </div>
+              <el-tag :type="hasCredentials ? 'success' : 'info'" effect="plain" round>
+                {{ hasCredentials ? '已填写凭证' : '可留空' }}
+              </el-tag>
             </div>
           </template>
-          
-          <div class="form-grid">
-            <el-form-item label="用户名" prop="username" class="form-item">
-              <el-input v-model="form.username" placeholder="请输入用户名" />
+
+          <div class="field-stack">
+            <el-form-item label="用户名" prop="username">
+              <el-input v-model="form.username" placeholder="未启用鉴权可留空" />
             </el-form-item>
-            
-            <el-form-item label="密码" prop="password" class="form-item">
-              <el-input v-model="form.password" type="password" placeholder="请输入密码" show-password />
+
+            <el-form-item label="密码" prop="password">
+              <el-input
+                v-model="form.password"
+                type="password"
+                placeholder="未启用鉴权可留空"
+                show-password
+              />
             </el-form-item>
           </div>
-        </el-card>
 
-        <!-- 操作按钮 -->
-        <div class="action-section">
-          <el-button type="primary" @click="handleSave" :loading="saving" class="save-button">
-            保存配置
-          </el-button>
+          <div class="helper-panel">
+            <div class="helper-item">
+              <span>鉴权说明</span>
+              <p>如果只填写了用户名或密码，也会一并保存；建议按 Broker 的实际策略成对维护。</p>
+            </div>
+            <div class="helper-item">
+              <span>协议提醒</span>
+              <p>常见组合是 TCP/1883、SSL/TLS/8883、WebSocket/8083，最终以你的 Broker 设置为准。</p>
+            </div>
+          </div>
+        </el-card>
+      </div>
+
+      <div class="footer-bar">
+        <p class="footer-note">
+          保存后会更新默认 MQTT Client 配置，供主程序后续连接 Broker 使用。
+        </p>
+        <div class="footer-actions">
+          <el-button plain :loading="loading" @click="loadConfig">重置为当前配置</el-button>
+          <el-button type="primary" :loading="saving" @click="handleSave">保存配置</el-button>
         </div>
-      </el-form>
-    </div>
+      </div>
+    </el-form>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Connection, Setting, Link, User, QuestionFilled } from '@element-plus/icons-vue'
 import api from '@/utils/api'
 
 const loading = ref(false)
@@ -135,7 +129,7 @@ const saving = ref(false)
 const configId = ref(null)
 const formRef = ref()
 
-const form = reactive({
+const createDefaultFormState = () => ({
   name: 'MQTT配置',
   is_default: true,
   enable: true,
@@ -147,66 +141,90 @@ const form = reactive({
   password: ''
 })
 
-const generateConfig = () => {
-  return JSON.stringify({
-    enable: form.enable,
-    broker: form.broker,
-    type: form.type,
-    port: form.port,
-    client_id: form.client_id,
-    username: form.username,
-    password: form.password
-  })
-}
+const form = reactive(createDefaultFormState())
+
+const connectionTypeOptions = [
+  { label: 'TCP', value: 'tcp' },
+  { label: 'WebSocket', value: 'websocket' },
+  { label: 'SSL/TLS', value: 'ssl' }
+]
 
 const rules = {
   name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
-  broker: [{ required: true, message: '请输入MQTT Broker地址', trigger: 'blur' }],
+  broker: [{ required: true, message: '请输入 MQTT Broker 地址', trigger: 'blur' }],
   type: [{ required: true, message: '请选择连接类型', trigger: 'change' }],
   port: [
     { required: true, message: '请输入端口号', trigger: 'blur' },
-    { type: 'number', min: 1, max: 65535, message: '端口号必须在1-65535之间', trigger: 'blur' }
+    { type: 'number', min: 1, max: 65535, message: '端口号必须在 1-65535 之间', trigger: 'blur' }
   ],
-  client_id: [{ required: true, message: '请输入客户端ID', trigger: 'blur' }]
+  client_id: [{ required: true, message: '请输入客户端 ID', trigger: 'blur' }]
+}
+
+const hasCredentials = computed(() => {
+  return Boolean(String(form.username || '').trim() || String(form.password || '').trim())
+})
+
+const isCoreFieldsComplete = computed(() => {
+  return Boolean(
+    String(form.broker || '').trim() &&
+    String(form.client_id || '').trim() &&
+    form.type &&
+    Number(form.port)
+  )
+})
+
+const resetForm = () => {
+  Object.assign(form, createDefaultFormState())
+}
+
+const generateConfig = () => {
+  return {
+    enable: form.enable,
+    broker: String(form.broker || '').trim(),
+    type: form.type,
+    port: Number(form.port),
+    client_id: String(form.client_id || '').trim(),
+    username: String(form.username || '').trim(),
+    password: String(form.password || '')
+  }
+}
+
+const applyLoadedConfig = (config) => {
+  configId.value = config?.id || null
+  form.name = config?.name || 'MQTT配置'
+  form.is_default = config?.is_default ?? true
+
+  let configData = {}
+  try {
+    configData = JSON.parse(config?.json_data || '{}')
+  } catch (error) {
+    ElMessage.warning('MQTT 配置格式异常，已回退到默认值')
+    configData = {}
+  }
+
+  form.enable = typeof configData.enable === 'boolean' ? configData.enable : true
+  form.broker = String(configData.broker || '')
+  form.type = String(configData.type || 'tcp')
+  form.port = Number(configData.port) > 0 ? Number(configData.port) : 1883
+  form.client_id = String(configData.client_id || '')
+  form.username = String(configData.username || '')
+  form.password = String(configData.password || '')
 }
 
 const loadConfig = async () => {
   loading.value = true
   try {
-    console.log('开始加载MQTT配置...')
     const response = await api.get('/admin/mqtt-configs')
-    console.log('MQTT配置API响应:', response)
-    const configs = response.data.data || []
-    console.log('解析的配置列表:', configs)
-    
-    // 如果有配置，加载第一个配置
+    const configs = response.data?.data || []
+
     if (configs.length > 0) {
-      const config = configs[0]
-      console.log('加载配置:', config)
-      configId.value = config.id
-      form.name = config.name
-      form.is_default = config.is_default
-      
-      try {
-        const configData = JSON.parse(config.json_data || '{}')
-        console.log('解析的配置数据:', configData)
-        form.enable = configData.enable || true
-        form.broker = configData.broker || ''
-        form.type = configData.type || 'tcp'
-        form.port = configData.port || 1883
-        form.client_id = configData.client_id || ''
-        form.username = configData.username || ''
-        form.password = configData.password || ''
-      } catch (error) {
-        console.error('解析配置失败:', error)
-        ElMessage.warning('配置格式错误，已重置为默认值')
-      }
+      applyLoadedConfig(configs[0])
     } else {
-      console.log('没有找到配置，使用默认值')
+      configId.value = null
+      resetForm()
     }
   } catch (error) {
-    console.error('加载配置失败:', error)
-    ElMessage.error('加载配置失败')
+    ElMessage.error('加载 MQTT 配置失败')
   } finally {
     loading.value = false
   }
@@ -215,77 +233,72 @@ const loadConfig = async () => {
 const handleSave = async () => {
   if (!formRef.value) return
 
-  await formRef.value.validate(async (valid) => {
-    if (valid) {
-      saving.value = true
-      try {
-        // 生成config_id，格式为"类型_名称"
-        const generatedConfigId = `mqtt_${form.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`
+  try {
+    await formRef.value.validate()
+  } catch {
+    return
+  }
 
-        let configData, isUpdate = false
+  saving.value = true
+  try {
+    const generatedConfigId = `mqtt_${String(form.name || '')
+      .replace(/[^a-zA-Z0-9]/g, '_')
+      .toLowerCase()}`
 
-        // 如果是更新操作，先获取现有配置，只更新 enable 字段，保留其他配置
-        if (configId.value) {
-          const response = await api.get('/admin/mqtt-configs')
-          const configs = response.data.data || []
-          const existingConfig = configs.find(c => c.id === configId.value)
+    const nextConfigPayload = generateConfig()
+    let configData
+    let isUpdate = false
 
-          if (existingConfig) {
-            // 解析现有配置，保留其他字段，只更新 enable
-            const existingData = JSON.parse(existingConfig.json_data || '{}')
-            existingData.enable = form.enable
+    if (configId.value) {
+      const response = await api.get('/admin/mqtt-configs')
+      const configs = response.data?.data || []
+      const existingConfig = configs.find(item => item.id === configId.value)
 
-            // 同时更新其他字段（如果表单有值则用表单值）
-            if (form.broker) existingData.broker = form.broker
-            if (form.type) existingData.type = form.type
-            if (form.port) existingData.port = form.port
-            if (form.client_id) existingData.client_id = form.client_id
-            if (form.username) existingData.username = form.username
-            if (form.password) existingData.password = form.password
-
-            configData = {
-              name: form.name,
-              config_id: generatedConfigId,
-              is_default: true,
-              json_data: JSON.stringify(existingData)
-            }
-            isUpdate = true
-          } else {
-            // 配置不存在，走新建逻辑
-            configData = {
-              name: form.name,
-              config_id: generatedConfigId,
-              is_default: true,
-              json_data: generateConfig()
-            }
-          }
-        } else {
-          // 新建配置，使用完整表单数据
-          configData = {
-            name: form.name,
-            config_id: generatedConfigId,
-            is_default: true,
-            json_data: generateConfig()
-          }
+      if (existingConfig) {
+        let existingData = {}
+        try {
+          existingData = JSON.parse(existingConfig.json_data || '{}')
+        } catch {
+          existingData = {}
         }
 
-        if (isUpdate) {
-          // 更新现有配置
-          await api.put(`/admin/mqtt-configs/${configId.value}`, configData)
-          ElMessage.success('更新成功')
-        } else {
-          // 创建新配置
-          const response = await api.post('/admin/mqtt-configs', configData)
-          configId.value = response.data.data.id
-          ElMessage.success('保存成功')
+        configData = {
+          name: form.name,
+          config_id: generatedConfigId,
+          is_default: true,
+          json_data: JSON.stringify({
+            ...existingData,
+            ...nextConfigPayload
+          })
         }
-      } catch (error) {
-        ElMessage.error(error.response?.data?.message || '保存失败')
-      } finally {
-        saving.value = false
+        isUpdate = true
       }
     }
-  })
+
+    if (!configData) {
+      configData = {
+        name: form.name,
+        config_id: generatedConfigId,
+        is_default: true,
+        json_data: JSON.stringify(nextConfigPayload)
+      }
+    }
+
+    if (isUpdate) {
+      await api.put(`/admin/mqtt-configs/${configId.value}`, configData)
+      ElMessage.success('MQTT 配置已更新')
+    } else {
+      const response = await api.post('/admin/mqtt-configs', configData)
+      configId.value = response.data?.data?.id || configId.value
+      ElMessage.success('MQTT 配置已保存')
+    }
+
+    await loadConfig()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '保存 MQTT 配置失败')
+  } finally {
+    saving.value = false
+  }
 }
 
 onMounted(() => {
@@ -295,234 +308,168 @@ onMounted(() => {
 
 <style scoped>
 .mqtt-config {
-  min-height: 100vh;
-  background: #f8f9fa;
-  padding: 24px;
+  display: grid;
+  padding: 0 24px 32px;
 }
 
-/* 页面头部 */
-.page-header {
-  margin-bottom: 24px;
-}
-
-.header-content {
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.title-section {
+.footer-actions {
   display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
-.title-icon {
-  font-size: 32px;
-  color: #409eff;
+.card-kicker {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.page-title {
-  font-size: 28px;
-  font-weight: 600;
-  color: #1f2937;
-  margin: 0;
-  background: linear-gradient(135deg, #409eff 0%, #67c23a 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+.card-kicker {
+  color: var(--apple-text-tertiary);
 }
 
-/* 配置说明 */
-.config-description {
-  max-width: 1200px;
-  margin: 0 auto 24px;
-}
-
-/* 表单容器 */
-.form-container {
-  max-width: 1200px;
-  margin: 0 auto;
+.card-description,
+.field-help,
+.helper-item p,
+.footer-note {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--apple-text-secondary);
 }
 
 .config-form {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-/* 配置卡片 */
-.config-card {
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  transition: all 0.3s ease;
-  overflow: hidden;
-}
-
-.config-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 25px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-}
-
-.basic-config {
-  border-left: 4px solid #409eff;
-}
-
-.connection-config {
-  border-left: 4px solid #67c23a;
-}
-
-.auth-config {
-  border-left: 4px solid #e6a23c;
-}
-
-/* 卡片头部 */
-.card-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0;
-}
-
-.card-icon {
-  font-size: 20px;
-  color: #409eff;
-}
-
-.connection-icon {
-  color: #67c23a;
-}
-
-.auth-icon {
-  color: #e6a23c;
-}
-
-.card-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1f2937;
-}
-
-.help-icon {
-  color: #9ca3af;
-  cursor: help;
-  font-size: 0.875rem;
-}
-
-.help-icon:hover {
-  color: #6366f1;
-}
-
-/* 表单网格 */
-.form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 24px;
-  padding: 24px;
 }
 
-.form-item {
-  margin-bottom: 0;
+.config-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+  gap: 24px;
 }
 
-/* Element Plus 组件深度样式 */
-:deep(.el-form-item__label) {
-  font-weight: 500;
-  color: #374151;
-  font-size: 14px;
+.config-card {
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--apple-shadow-md);
 }
 
-:deep(.el-input__wrapper) {
-  border-radius: 8px;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-  transition: all 0.2s ease;
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
 }
 
-:deep(.el-input__wrapper:hover) {
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+.card-head h3 {
+  margin: 8px 0 0;
+  font-size: 22px;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  color: var(--apple-text);
 }
 
-:deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.1);
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 18px;
 }
 
-:deep(.el-select .el-input__wrapper) {
-  border-radius: 8px;
+.field-span-full {
+  grid-column: 1 / -1;
 }
 
-:deep(.el-input-number .el-input__wrapper) {
-  border-radius: 8px;
+.field-stack {
+  display: grid;
+  gap: 20px;
 }
 
-:deep(.el-switch) {
-  --el-switch-on-color: #409eff;
+.helper-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 8px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(229, 229, 234, 0.72);
+}
+
+.helper-item span {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--apple-text);
+}
+
+.footer-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 0 4px;
+}
+
+.footer-note {
+  max-width: 620px;
+  margin: 0;
 }
 
 :deep(.el-card__header) {
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  border-bottom: 1px solid #e2e8f0;
-  padding: 20px 24px;
+  padding: 24px 24px 0;
+  border-bottom: none;
+  background: transparent;
 }
 
 :deep(.el-card__body) {
-  padding: 0;
+  padding: 24px;
 }
 
-/* 操作按钮区域 */
-.action-section {
-  display: flex;
-  justify-content: center;
-  padding: 32px 0;
+:deep(.el-form-item) {
+  margin-bottom: 0;
 }
 
-.save-button {
-  padding: 12px 32px;
-  font-size: 16px;
-  font-weight: 500;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #409eff 0%, #67c23a 100%);
-  border: none;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  transition: all 0.3s ease;
+:deep(.el-form-item__label) {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--apple-text);
 }
 
-.save-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 25px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+@media (max-width: 1180px) {
+  .config-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
-/* 响应式设计 */
 @media (max-width: 768px) {
   .mqtt-config {
-    padding: 16px;
+    padding: 0 16px 24px;
   }
-  
-  .page-title {
-    font-size: 24px;
-  }
-  
-  .title-icon {
-    font-size: 28px;
-  }
-  
-  .form-grid {
-    grid-template-columns: 1fr;
-    gap: 16px;
-    padding: 16px;
-  }
-}
 
-@media (max-width: 480px) {
-  .title-section {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+  :deep(.el-card__body) {
+    padding: 20px;
   }
-  
-  .page-title {
-    font-size: 20px;
+
+  :deep(.el-card__header) {
+    padding: 20px 20px 0;
+  }
+
+  .footer-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .footer-actions {
+    justify-content: stretch;
+  }
+
+  .footer-actions :deep(.el-button) {
+    flex: 1;
   }
 }
 </style>

@@ -65,6 +65,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	api := r.Group("/api")
 	{
 		// 公开路由（无需认证）
+		api.GET("/captcha/challenge", authController.GetSimpleCaptcha)
 		api.POST("/login", authController.Login)
 		api.POST("/register", authController.Register)
 

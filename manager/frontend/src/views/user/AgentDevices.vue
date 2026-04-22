@@ -6,9 +6,9 @@
           <el-icon><ArrowLeft /></el-icon>
           返回
         </el-button>
-        <div class="header-info">
-          <h2>设备管理</h2>
-          <p class="page-subtitle">管理智能体关联的设备</p>
+        <div class="header-context">
+          <span class="context-label">智能体设备</span>
+          <p class="context-meta">绑定、移除并查看当前智能体的设备状态</p>
         </div>
       </div>
       <div class="header-right">
@@ -22,7 +22,7 @@
     <div v-if="devices.length === 0" class="empty-section">
       <el-card class="empty-card">
         <div class="empty-content">
-          <el-icon size="64" color="#909399"><Monitor /></el-icon>
+          <el-icon size="64" color="var(--apple-text-tertiary)"><Monitor /></el-icon>
           <h3>暂无设备</h3>
           <p>该智能体还没有关联任何设备。</p>
           <div class="empty-actions">
@@ -93,44 +93,12 @@
       </div>
     </div>
 
-    <!-- 添加设备弹窗 -->
-    <el-dialog
+    <DeviceBindingDialog
       v-model="showAddDeviceDialog"
-      title="添加设备"
-      width="400px"
-      :before-close="handleCloseAddDevice"
-    >
-      <div class="device-dialog-content">
-        <div class="device-icon">
-          <el-icon size="48"><Monitor /></el-icon>
-        </div>
-        <p class="device-tip">请输入设备验证码</p>
-        <el-form
-          ref="deviceFormRef"
-          :model="deviceForm"
-          :rules="deviceRules"
-        >
-          <el-form-item prop="code">
-            <el-input
-              v-model="deviceForm.code"
-              placeholder="请输入6位验证码"
-              size="large"
-              :maxlength="6"
-              style="text-align: center; font-size: 18px; letter-spacing: 4px;"
-            />
-          </el-form-item>
-        </el-form>
-      </div>
-      
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="handleCloseAddDevice" size="large">取消</el-button>
-          <el-button type="primary" @click="handleAddDevice" :loading="addingDevice" size="large">
-            确定
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
+      :fixed-agent-id="agentId"
+      title="绑定设备"
+      @success="handleDeviceBound"
+    />
 
     <!-- 设备MCP弹窗 -->
 
@@ -268,6 +236,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Plus, Monitor, Setting, Delete, User } from '@element-plus/icons-vue'
 import api from '../../utils/api'
+import DeviceBindingDialog from '../../components/user/DeviceBindingDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -275,8 +244,6 @@ const route = useRoute()
 const agentId = route.params.id
 const devices = ref([])
 const showAddDeviceDialog = ref(false)
-const addingDevice = ref(false)
-const deviceFormRef = ref()
 
 const showMcpDialog = ref(false)
 const mcpLoading = ref(false)
@@ -296,17 +263,6 @@ const selectedRole = ref(null)
 const availableRoles = ref([])
 const isRoleActive = (role) => role?.status === 'active' || !role?.status
 
-const deviceForm = reactive({
-  code: ''
-})
-
-const deviceRules = {
-  code: [
-    { required: true, message: '请输入设备验证码', trigger: 'blur' },
-    { len: 6, message: '验证码长度为6位', trigger: 'blur' }
-  ]
-}
-
 const loadDevices = async () => {
   try {
     const response = await api.get(`/user/agents/${agentId}/devices`)
@@ -316,36 +272,8 @@ const loadDevices = async () => {
   }
 }
 
-const handleAddDevice = async () => {
-  if (!deviceFormRef.value) return
-  
-  try {
-    await deviceFormRef.value.validate()
-    addingDevice.value = true
-    
-    const response = await api.post(`/user/agents/${agentId}/devices`, {
-      code: deviceForm.code
-    })
-    
-    if (response.data.success) {
-      ElMessage.success('设备添加成功')
-      handleCloseAddDevice()
-      await loadDevices()
-    }
-  } catch (error) {
-    console.error('添加设备失败:', error)
-    ElMessage.error('添加设备失败')
-  } finally {
-    addingDevice.value = false
-  }
-}
-
-const handleCloseAddDevice = () => {
-  showAddDeviceDialog.value = false
-  if (deviceFormRef.value) {
-    deviceFormRef.value.resetFields()
-  }
-  Object.assign(deviceForm, { code: '' })
+const handleDeviceBound = async () => {
+  await loadDevices()
 }
 
 const handleDeviceMcp = async (device) => {
@@ -649,9 +577,10 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
   padding: 20px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: var(--apple-radius-lg);
+  box-shadow: var(--apple-shadow-md);
 }
 
 .header-left {
@@ -662,18 +591,25 @@ onMounted(() => {
 
 .back-btn {
   padding: 8px;
-  color: #409EFF;
+  color: var(--apple-primary);
 }
 
-.header-info h2 {
-  margin: 0;
-  color: #333;
+.header-context {
+  display: grid;
+  gap: 4px;
 }
 
-.page-subtitle {
-  margin: 5px 0 0 0;
-  color: #666;
+.context-label {
+  color: var(--apple-text);
   font-size: 14px;
+  font-weight: 700;
+}
+
+.context-meta {
+  margin: 0;
+  color: var(--apple-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .empty-section {
@@ -687,11 +623,11 @@ onMounted(() => {
 
 .empty-content h3 {
   margin: 20px 0 10px 0;
-  color: #333;
+  color: var(--apple-text);
 }
 
 .empty-content p {
-  color: #666;
+  color: var(--apple-text-secondary);
   margin-bottom: 30px;
 }
 
@@ -708,10 +644,11 @@ onMounted(() => {
 }
 
 .device-card {
-  background: white;
-  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 22px;
   padding: 20px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+  box-shadow: var(--apple-shadow-md);
   transition: all 0.3s ease;
   height: 100%;
   display: flex;
@@ -723,7 +660,8 @@ onMounted(() => {
 
 .device-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--apple-shadow-sm);
+  border-color: rgba(0, 122, 255, 0.18);
 }
 
 .device-header {
@@ -736,7 +674,7 @@ onMounted(() => {
 .device-icon {
   width: 48px;
   height: 48px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(180deg, #2e90ff 0%, #007aff 100%);
   border-radius: 12px;
   display: flex;
   align-items: center;
@@ -754,7 +692,7 @@ onMounted(() => {
   margin: 0 0 4px 0;
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--apple-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -763,7 +701,7 @@ onMounted(() => {
 .device-code {
   margin: 0;
   font-size: 12px;
-  color: #999;
+  color: var(--apple-text-tertiary);
   font-family: monospace;
 }
 
@@ -778,20 +716,20 @@ onMounted(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #ddd;
+  background: var(--apple-line-strong);
 }
 
 .status-dot.online {
-  background: #67c23a;
+  background: var(--apple-success);
 }
 
 .status-dot.offline {
-  background: #f56c6c;
+  background: var(--apple-danger);
 }
 
 .status-text {
   font-size: 12px;
-  color: #666;
+  color: var(--apple-text-secondary);
 }
 
 .device-meta {
@@ -812,18 +750,18 @@ onMounted(() => {
 
 .meta-label {
   font-size: 12px;
-  color: #999;
+  color: var(--apple-text-secondary);
 }
 
 .meta-value {
   font-size: 12px;
-  color: #666;
+  color: var(--apple-text);
   font-weight: 500;
 }
 
 .mcp-tools-header { margin-bottom: 12px; }
 .tools-tags { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
-.tools-empty { color:#909399; margin: 8px 0 16px; }
+.tools-empty { color: var(--apple-text-secondary); margin: 8px 0 16px; }
 .mcp-result-box {
   white-space: pre-wrap;
   font-family: monospace;
@@ -853,22 +791,6 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.device-dialog-content {
-  text-align: center;
-  padding: 20px 0;
-}
-
-.device-dialog-content .device-icon {
-  margin: 0 auto 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.device-tip {
-  margin-bottom: 20px;
-  color: #666;
-  font-size: 14px;
-}
-
 .dialog-footer {
   display: flex;
   justify-content: center;
@@ -890,7 +812,7 @@ onMounted(() => {
 
 .current-role-info p {
   margin: 4px 0;
-  color: #666;
+  color: var(--apple-text-secondary);
 }
 
 .role-option-item {
@@ -912,8 +834,8 @@ onMounted(() => {
 }
 
 .role-preview-card {
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
 }
 
 .role-preview-content {
@@ -925,7 +847,7 @@ onMounted(() => {
 }
 
 .role-preview-content strong {
-  color: #333;
+  color: var(--apple-text);
   margin-right: 8px;
 }
 
@@ -936,11 +858,12 @@ onMounted(() => {
 }
 
 .prompt-preview {
-  background: #f5f5f5;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
   padding: 12px;
-  border-radius: 6px;
+  border-radius: 14px;
   font-size: 13px;
-  color: #666;
+  color: var(--apple-text-secondary);
   line-height: 1.6;
 }
 

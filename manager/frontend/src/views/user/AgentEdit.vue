@@ -8,7 +8,10 @@
           circle 
           size="large"
         />
-        <h1>智能体配置</h1>
+        <div class="header-context">
+          <span class="context-label">当前编辑</span>
+          <strong class="context-value">{{ form.name || '未命名智能体' }}</strong>
+        </div>
       </div>
       <el-button type="primary" @click="handleSave" :loading="saving" size="large">
         保存配置
@@ -179,7 +182,7 @@
                 :value="voice.value"
               >
                 <span>{{ voice.label }}</span>
-                <span style="color: #8492a6; font-size: 13px; margin-left: 8px;">{{ voice.value }}</span>
+                <span class="apple-option-value">{{ voice.value }}</span>
               </el-option>
             </el-select>
             <div class="form-help">
@@ -241,15 +244,122 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">OpenClaw</label>
-            <el-button type="primary" size="large" style="width: 100%" @click="showOpenClawSettings">
-              查看openclaw
-            </el-button>
-            <div class="form-help">
-              已配置: {{ form.openclaw_allowed ? '开启' : '关闭' }}，进入词 {{ form.openclaw_enter_keywords.length }} 个，退出词 {{ form.openclaw_exit_keywords.length }} 个。
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">OpenClaw</h3>
+
+          <div class="advanced-card">
+            <div class="advanced-card-header">
+              <div class="advanced-card-copy">
+                <strong>入口词、状态和测试都直接在页内维护</strong>
+                <p>保存前就能检查关键词、连接状态和角色配置命令，不用再进弹窗。</p>
+              </div>
+              <div class="advanced-card-actions">
+                <el-link :href="openClawDocURL" target="_blank" type="primary" :underline="false">
+                  查看文档
+                </el-link>
+                <el-button size="small" @click="fetchOpenClawEndpoint" :loading="openClawEndpointLoading">
+                  刷新状态
+                </el-button>
+                <el-button size="small" type="primary" @click="copyOpenClawCommands" :disabled="!openClawCommandData.ready">
+                  复制命令
+                </el-button>
+              </div>
+            </div>
+
+            <div class="dialog-grid openclaw-grid">
+              <div class="form-group form-group-compact">
+                <label class="form-label">开关</label>
+                <div class="toggle-row">
+                  <span>允许进入 OpenClaw 模式</span>
+                  <el-switch v-model="form.openclaw_allowed" />
+                </div>
+              </div>
+
+              <div class="form-group form-group-compact">
+                <label class="form-label">连接状态</label>
+                <div class="status-panel-inline">
+                  <el-tag :type="openClawStatusTagType">{{ openClawStatusText }}</el-tag>
+                  <span class="status-panel-text">
+                    {{ openClawEndpointData.status_message || '角色配置命令会在下方实时展示。' }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="dialog-grid openclaw-grid">
+              <div class="form-group form-group-compact">
+                <label class="form-label">进入关键词</label>
+                <el-select
+                  v-model="form.openclaw_enter_keywords"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  style="width: 100%"
+                  placeholder="输入后回车，可添加多个关键词"
+                />
+              </div>
+
+              <div class="form-group form-group-compact">
+                <label class="form-label">退出关键词</label>
+                <el-select
+                  v-model="form.openclaw_exit_keywords"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  style="width: 100%"
+                  placeholder="输入后回车，可添加多个关键词"
+                />
+              </div>
+            </div>
+
+            <div class="advanced-block" v-loading="openClawEndpointLoading">
+              <div class="endpoint-header">
+                <div class="endpoint-label">OpenClaw 角色配置命令</div>
+              </div>
+              <div v-if="openClawCommandData.ready" class="openclaw-command-hint">在 OpenClaw 控制台角色配置中依次执行以下命令：</div>
+              <div v-if="openClawCommandData.ready" class="openclaw-command-steps">
+                <div
+                  v-for="(step, index) in openClawCommandData.steps"
+                  :key="`${step.title}-${index}`"
+                  class="openclaw-command-step"
+                >
+                  <div class="openclaw-command-step-title">第 {{ index + 1 }} 行：{{ step.title }}</div>
+                  <pre class="openclaw-command-content">{{ step.command }}</pre>
+                </div>
+              </div>
+              <pre v-else class="openclaw-command-content">{{ openClawCommandDisplayText }}</pre>
+            </div>
+
+            <div class="advanced-block">
+              <div class="endpoint-header">
+                <div class="endpoint-label">OpenClaw 对话测试</div>
+              </div>
+              <el-form label-position="top">
+                <el-form-item label="测试消息">
+                  <el-input
+                    v-model="openClawChatTestForm.message"
+                    type="textarea"
+                    :rows="3"
+                    placeholder="请输入测试消息"
+                  />
+                </el-form-item>
+              </el-form>
+              <el-button type="primary" @click="testOpenClawChat" :loading="openClawChatTesting">
+                发送测试
+              </el-button>
+              <div class="mcp-result-box">{{ openClawChatTestResult || '暂无测试结果' }}</div>
             </div>
           </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">MCP 能力</h3>
 
           <div class="form-group" v-loading="mcpServiceOptionsLoading">
             <label class="form-label">MCP服务</label>
@@ -277,232 +387,86 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">MCP接入点</label>
-            <el-button 
-              type="primary" 
-              @click="showMCPEndpoint" 
-              size="large"
-              style="width: 100%"
-            >
-              查看MCP接入点
-            </el-button>
-            <div class="form-help">获取智能体的MCP WebSocket接入点URL，可用于设备连接</div>
+          <div class="advanced-card" v-loading="mcpLoading">
+            <div class="advanced-card-header">
+              <div class="advanced-card-copy">
+                <strong>MCP 接入点与工具调试</strong>
+                <p>页内直接查看接入点、刷新工具列表，并手动调试一次工具调用。</p>
+              </div>
+              <div class="advanced-card-actions">
+                <el-button size="small" @click="refreshMcpDebugInfo" :loading="mcpLoading">
+                  刷新数据
+                </el-button>
+                <el-button size="small" type="primary" @click="copyMCPEndpoint" :disabled="!mcpEndpointData.endpoint">
+                  复制 URL
+                </el-button>
+              </div>
+            </div>
+
+            <div class="advanced-block">
+              <div class="endpoint-label">MCP 接入点 URL</div>
+              <div class="endpoint-content">
+                {{ mcpEndpointData.endpoint || '暂无接入点，请先保存智能体并刷新。' }}
+              </div>
+            </div>
+
+            <div class="advanced-block">
+              <div class="tools-header">
+                <div class="tools-title">MCP 工具列表</div>
+                <el-button size="small" type="primary" @click="refreshMcpTools" :loading="toolsLoading">
+                  <el-icon><Refresh /></el-icon>
+                  刷新工具列表
+                </el-button>
+              </div>
+
+              <div class="tools-list">
+                <div v-if="mcpTools.length === 0" class="tools-empty">
+                  <el-tag type="info" size="large" class="tool-tag">
+                    暂无工具数据
+                  </el-tag>
+                </div>
+
+                <div v-else class="tools-tags">
+                  <el-tag
+                    v-for="tool in mcpTools"
+                    :key="tool.name"
+                    :type="tool.schema ? 'success' : 'info'"
+                    size="large"
+                    class="tool-tag"
+                    :title="tool.description"
+                  >
+                    {{ tool.name }}
+                    <el-tooltip
+                      v-if="tool.description"
+                      :content="tool.description"
+                      placement="top"
+                      :show-after="500"
+                    >
+                      <el-icon class="tool-info-icon"><InfoFilled /></el-icon>
+                    </el-tooltip>
+                  </el-tag>
+                </div>
+              </div>
+            </div>
+
+            <div class="advanced-block">
+              <el-form label-position="top">
+                <el-form-item label="工具">
+                  <el-select v-model="mcpCallForm.tool_name" placeholder="请选择工具" style="width: 100%" @change="handleMcpToolChange">
+                    <el-option v-for="tool in mcpTools" :key="tool.name" :label="tool.name" :value="tool.name" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="参数 JSON">
+                  <el-input v-model="mcpCallForm.argumentsText" type="textarea" :rows="6" placeholder='例如: {"query":"hello"}' />
+                </el-form-item>
+              </el-form>
+              <el-button type="primary" @click="callAgentMcpTool" :loading="callingTool">调用工具</el-button>
+              <div class="mcp-result-box">{{ mcpCallResult || '暂无调用结果' }}</div>
+            </div>
           </div>
         </div>
       </div>
     </div>
-
-    <!-- MCP接入点对话框 -->
-    <el-dialog
-      v-model="showMCPDialog"
-      title="MCP接入点"
-      width="700px"
-    >
-      <div v-loading="mcpLoading">
-        <!-- 工具列表区域 -->
-        <div class="mcp-tools-section">
-          <div class="tools-header">
-            <div class="tools-title">MCP工具列表</div>
-            <el-button 
-              size="small" 
-              type="primary" 
-              @click="refreshMcpTools"
-              :loading="toolsLoading"
-            >
-              <el-icon><Refresh /></el-icon>
-              刷新工具列表
-            </el-button>
-          </div>
-          
-          <div class="tools-list">
-            <div v-if="mcpTools.length === 0" class="tools-empty">
-              <el-tag type="info" size="large" class="tool-tag">
-                暂无工具数据
-              </el-tag>
-            </div>
-            
-            <div v-else class="tools-tags">
-              <el-tag
-                v-for="tool in mcpTools"
-                :key="tool.name"
-                :type="tool.schema ? 'success' : 'info'"
-                size="large"
-                class="tool-tag"
-                :title="tool.description"
-              >
-                {{ tool.name }}
-                <el-tooltip
-                  v-if="tool.description"
-                  :content="tool.description"
-                  placement="top"
-                  :show-after="500"
-                >
-                  <el-icon class="tool-info-icon"><InfoFilled /></el-icon>
-                </el-tooltip>
-              </el-tag>
-            </div>
-          </div>
-        </div>
-
-        <el-alert
-          title="接入点信息"
-          description="这是智能体的MCP WebSocket接入点URL，可用于设备连接"
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 20px; margin-top: 24px;"
-        />
-        
-        <div class="mcp-endpoint-display">
-          <div class="endpoint-header">
-            <div class="endpoint-label">MCP接入点URL：</div>
-            <el-button size="small" type="primary" @click="copyMCPEndpoint">复制URL</el-button>
-          </div>
-          <div class="endpoint-content">
-            {{ mcpEndpointData.endpoint }}
-          </div>
-        </div>
-
-        <el-divider />
-        <el-form :model="mcpCallForm" label-width="90px">
-          <el-form-item label="工具">
-            <el-select v-model="mcpCallForm.tool_name" placeholder="请选择工具" style="width: 100%" @change="handleMcpToolChange">
-              <el-option v-for="tool in mcpTools" :key="tool.name" :label="tool.name" :value="tool.name" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="参数JSON">
-            <el-input v-model="mcpCallForm.argumentsText" type="textarea" :rows="6" placeholder='例如: {"query":"hello"}' />
-          </el-form-item>
-        </el-form>
-        <el-button type="primary" @click="callAgentMcpTool" :loading="callingTool">调用工具</el-button>
-        <div class="mcp-result-box">{{ mcpCallResult || '暂无调用结果' }}</div>
-      </div>
-
-      <template #footer>
-        <el-button @click="showMCPDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="showOpenClawDialog"
-      title="OpenClaw设置"
-      width="680px"
-    >
-      <div>
-        <div class="openclaw-tip-row">
-          <span class="openclaw-tip-title">接入tips</span>
-          <el-tooltip effect="light" placement="top-start" :show-after="200" :enterable="true" popper-class="openclaw-tip-popper">
-            <template #content>
-              <div class="openclaw-tip-content">
-                <div>架构：设备语音 -> 服务端路由 -> OpenClaw 会话 -> xiaozhi 插件。</div>
-                <div>角色配置：在 OpenClaw 控制台角色配置中使用下方四条命令，最后执行 `openclaw gateway restart` 使配置生效。</div>
-                <div>进入逻辑：命中进入词（默认“打开龙虾/进入龙虾”）后进入 OpenClaw 模式，后续文本优先走 OpenClaw。</div>
-                <div>退出逻辑：在 OpenClaw 模式下命中退出词（默认“关闭龙虾/退出龙虾”）即退出，恢复普通 LLM 对话。</div>
-                <el-link :href="openClawDocURL" target="_blank" type="primary" :underline="false">
-                  查看完整文档
-                </el-link>
-              </div>
-            </template>
-            <el-icon class="openclaw-tip-icon"><QuestionFilled /></el-icon>
-          </el-tooltip>
-        </div>
-
-        <el-form label-width="100px">
-          <el-form-item label="开关">
-            <el-switch v-model="form.openclaw_allowed" />
-          </el-form-item>
-          <el-form-item label="进入关键词">
-            <el-select
-              v-model="form.openclaw_enter_keywords"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              clearable
-              style="width: 100%"
-              placeholder="输入后回车，可添加多个关键词"
-            />
-          </el-form-item>
-          <el-form-item label="退出关键词">
-            <el-select
-              v-model="form.openclaw_exit_keywords"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              clearable
-              style="width: 100%"
-              placeholder="输入后回车，可添加多个关键词"
-            />
-          </el-form-item>
-        </el-form>
-
-        <el-divider />
-
-        <div v-loading="openClawEndpointLoading">
-          <div class="openclaw-status-bar">
-            <div class="endpoint-label">连接状态：</div>
-            <el-tag :type="openClawStatusTagType">{{ openClawStatusText }}</el-tag>
-          </div>
-          <div v-if="openClawEndpointData.status_message" class="openclaw-status-message">
-            {{ openClawEndpointData.status_message }}
-          </div>
-          <div class="mcp-endpoint-display">
-            <div class="endpoint-header">
-              <div class="endpoint-label">OpenClaw角色配置命令：</div>
-              <div class="endpoint-actions">
-                <el-button size="small" @click="fetchOpenClawEndpoint" :loading="openClawEndpointLoading">刷新</el-button>
-                <el-button size="small" type="primary" @click="copyOpenClawCommands" :disabled="!openClawCommandData.ready">复制命令</el-button>
-              </div>
-            </div>
-            <div v-if="openClawCommandData.ready" class="openclaw-command-hint">在 OpenClaw 控制台角色配置中依次执行以下命令：</div>
-            <div v-if="openClawCommandData.ready" class="openclaw-command-steps">
-              <div
-                v-for="(step, index) in openClawCommandData.steps"
-                :key="`${step.title}-${index}`"
-                class="openclaw-command-step"
-              >
-                <div class="openclaw-command-step-title">第 {{ index + 1 }} 行：{{ step.title }}</div>
-                <pre class="openclaw-command-content">{{ step.command }}</pre>
-              </div>
-            </div>
-            <pre v-else class="openclaw-command-content">{{ openClawCommandDisplayText }}</pre>
-          </div>
-        </div>
-
-        <el-divider />
-        <el-alert
-          title="对话测试"
-          description="向openclaw发送一条文本，验证连通与回复。"
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 12px"
-        />
-        <el-form label-width="100px">
-          <el-form-item label="测试消息">
-            <el-input
-              v-model="openClawChatTestForm.message"
-              type="textarea"
-              :rows="3"
-              placeholder="请输入测试消息"
-            />
-          </el-form-item>
-        </el-form>
-        <el-button
-          type="primary"
-          @click="testOpenClawChat"
-          :loading="openClawChatTesting"
-        >
-          发送测试
-        </el-button>
-        <div class="mcp-result-box">{{ openClawChatTestResult || '暂无测试结果' }}</div>
-      </div>
-      <template #footer>
-        <el-button @click="showOpenClawDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -510,7 +474,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, VideoPlay, Refresh, InfoFilled, QuestionFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, Refresh, InfoFilled, QuestionFilled } from '@element-plus/icons-vue'
 import api from '@/utils/api'
 import { postJSONWithSSE } from '@/utils/sse'
 import { buildOpenClawCommands } from '@/utils/openclaw'
@@ -587,7 +551,6 @@ const selectedMcpServices = ref([])
 const mcpServiceOptionsLoading = ref(false)
 
 // MCP接入点相关
-const showMCPDialog = ref(false)
 const mcpLoading = ref(false)
 const mcpEndpointData = ref({
   endpoint: ''
@@ -597,7 +560,6 @@ const mcpTools = ref([])
 const callingTool = ref(false)
 const mcpCallResult = ref('')
 const mcpCallForm = ref({ tool_name: '', argumentsText: '{}' })
-const showOpenClawDialog = ref(false)
 const openClawEndpointLoading = ref(false)
 const openClawEndpointData = ref({
   endpoint: '',
@@ -884,12 +846,6 @@ const copyOpenClawCommands = async () => {
     console.error('复制 OpenClaw 角色配置命令失败:', error)
     ElMessage.error('复制失败，请手动复制')
   }
-}
-
-const showOpenClawSettings = async () => {
-  showOpenClawDialog.value = true
-  openClawChatTestResult.value = ''
-  await fetchOpenClawEndpoint()
 }
 
 const formatOpenClawChatResult = (reply, latency) => {
@@ -1208,23 +1164,22 @@ const autoSelectDefaultConfigs = () => {
   }
 }
 
-// 显示MCP接入点
-const showMCPEndpoint = async () => {
-  showMCPDialog.value = true
+const refreshMcpDebugInfo = async () => {
   mcpLoading.value = true
   mcpCallResult.value = ""
   mcpCallForm.value = { tool_name: "", argumentsText: "{}" }
   
   try {
     const response = await api.get(`/user/agents/${route.params.id}/mcp-endpoint`)
-    mcpEndpointData.value = response.data.data
+    mcpEndpointData.value = response.data.data || { endpoint: '' }
     
     // 获取工具列表
     await refreshMcpTools()
   } catch (error) {
     ElMessage.error('获取MCP接入点失败')
     console.error('Error getting MCP endpoint:', error)
-    showMCPDialog.value = false
+    mcpEndpointData.value = { endpoint: '' }
+    mcpTools.value = []
   } finally {
     mcpLoading.value = false
   }
@@ -1385,6 +1340,10 @@ const callAgentMcpTool = async () => {
 
 // 复制MCP接入点URL
 const copyMCPEndpoint = async () => {
+  if (!mcpEndpointData.value.endpoint) {
+    ElMessage.warning('暂无可复制的 MCP 接入点')
+    return
+  }
   try {
     await navigator.clipboard.writeText(mcpEndpointData.value.endpoint)
     ElMessage.success('MCP接入点URL已复制到剪贴板')
@@ -1497,7 +1456,11 @@ onMounted(async () => {
   if (route.params.id) {
     // 编辑现有智能体，加载智能体数据
     await loadAgent()
-    await loadMcpServiceOptions()
+    await Promise.all([
+      loadMcpServiceOptions(),
+      fetchOpenClawEndpoint(),
+      refreshMcpDebugInfo()
+    ])
     // 如果已有TTS配置，加载对应的音色列表
     if (form.tts_config_id) {
       previousTtsConfigId.value = form.tts_config_id
@@ -1519,20 +1482,20 @@ onMounted(async () => {
 
 <style scoped>
 .agent-config {
-  min-height: 100vh;
-  background: #f8fafc;
-  padding: 24px;
+  min-height: 100%;
+  padding: 8px 0 24px;
 }
 
 .config-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 32px;
-  background: white;
-  padding: 20px 24px;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  margin-bottom: 24px;
+  background: rgba(255, 255, 255, 0.88);
+  padding: 22px 24px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: var(--apple-shadow-md);
 }
 
 .header-left {
@@ -1541,29 +1504,41 @@ onMounted(async () => {
   gap: 16px;
 }
 
-.header-left h1 {
-  margin: 0;
-  font-size: 24px;
+.header-context {
+  display: grid;
+  gap: 4px;
+}
+
+.context-label {
+  color: var(--apple-text-secondary);
+  font-size: 12px;
   font-weight: 600;
-  color: #1f2937;
+}
+
+.context-value {
+  color: var(--apple-text);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
 }
 
 .config-content {
-  max-width: 800px;
+  max-width: 1120px;
   margin: 0 auto;
 }
 
 .config-form {
-  background: white;
-  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 32px;
   padding: 32px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: var(--apple-shadow-md);
 }
 
 .form-section {
   margin-bottom: 40px;
   padding-bottom: 32px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid rgba(229, 229, 234, 0.78);
 }
 
 .quick-config-section {
@@ -1575,7 +1550,7 @@ onMounted(async () => {
 .help-icon {
   margin-left: 8px;
   font-size: 16px;
-  color: #909399;
+  color: var(--apple-text-secondary);
   cursor: help;
 }
 
@@ -1607,7 +1582,7 @@ onMounted(async () => {
 }
 
 .role-inline-line::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: rgba(148, 163, 184, 0.72);
   border-radius: 999px;
 }
 
@@ -1617,24 +1592,24 @@ onMounted(async () => {
   gap: 8px;
   white-space: nowrap;
   padding: 6px 10px;
-  border: 1px solid #d1d5db;
+  border: 1px solid rgba(229, 229, 234, 0.9);
   border-radius: 999px;
   background: #fff;
-  color: #374151;
+  color: var(--apple-text);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .role-inline-item:hover {
-  border-color: #93c5fd;
+  border-color: rgba(0, 122, 255, 0.28);
   background: #f8fbff;
 }
 
 .role-inline-item.active {
-  border-color: #3b82f6;
-  background: #eff6ff;
-  color: #1d4ed8;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15);
+  border-color: rgba(0, 122, 255, 0.42);
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--apple-primary);
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.08);
 }
 
 .role-inline-name {
@@ -1670,10 +1645,10 @@ onMounted(async () => {
 .section-title {
   font-size: 18px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--apple-text);
   margin: 0 0 24px 0;
   padding-bottom: 8px;
-  border-bottom: 2px solid #3b82f6;
+  border-bottom: 2px solid rgba(0, 122, 255, 0.36);
   display: inline-block;
 }
 
@@ -1689,13 +1664,13 @@ onMounted(async () => {
   display: block;
   font-size: 14px;
   font-weight: 600;
-  color: #374151;
+  color: var(--apple-text);
   margin-bottom: 8px;
 }
 
 .form-help {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary);
   margin-top: 4px;
 }
 
@@ -1715,10 +1690,10 @@ onMounted(async () => {
   max-width: 220px;
   min-width: 0;
   padding: 4px 10px;
-  border: 1px solid #d1d5db;
+  border: 1px solid rgba(229, 229, 234, 0.9);
   border-radius: 999px;
   background: #f8fafc;
-  color: #374151;
+  color: var(--apple-text);
   cursor: pointer;
   transition: all 0.2s ease;
   line-height: 1.2;
@@ -1726,15 +1701,15 @@ onMounted(async () => {
 }
 
 .clone-voice-item:hover {
-  border-color: #93c5fd;
+  border-color: rgba(0, 122, 255, 0.28);
   background: #f1f7ff;
 }
 
 .clone-voice-item.active {
-  border-color: #3b82f6;
-  background: #e9f2ff;
-  color: #1d4ed8;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1);
+  border-color: rgba(0, 122, 255, 0.42);
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--apple-primary);
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.08);
 }
 
 .clone-voice-name {
@@ -1746,93 +1721,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.switch-group {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.switch-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  background: #f9fafb;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-}
-
-.switch-item span {
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-}
-
-.template-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-}
-
-.template-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 20px 16px;
-  border: 2px solid #e5e7eb;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  background: #fafafa;
-}
-
-.template-card:hover {
-  border-color: #3b82f6;
-  background: #f0f9ff;
-}
-
-.template-card.active {
-  border-color: #3b82f6;
-  background: #eff6ff;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.template-icon {
-  font-size: 32px;
-  margin-bottom: 8px;
-}
-
-.template-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-  text-align: center;
-}
-
-
-
-.memory-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.memory-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px;
-  background: #f9fafb;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-}
-
-.memory-item span {
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-}
-
 .config-option {
   display: flex;
   flex-direction: column;
@@ -1841,17 +1729,98 @@ onMounted(async () => {
 
 .config-name {
   font-weight: 500;
-  color: #374151;
+  color: var(--apple-text);
 }
 
 .config-desc {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary);
 }
 
-/* MCP工具列表相关样式 */
-.mcp-tools-section {
-  margin-bottom: 24px;
+.form-group-compact {
+  margin-bottom: 0;
+}
+
+.advanced-card {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(249, 251, 254, 0.96) 100%);
+  border: 1px solid rgba(229, 229, 234, 0.78);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+}
+
+.advanced-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.advanced-card-copy strong {
+  display: block;
+  color: var(--apple-text);
+  margin-bottom: 6px;
+}
+
+.advanced-card-copy p {
+  margin: 0;
+  color: var(--apple-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.advanced-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.advanced-block {
+  padding-top: 18px;
+  border-top: 1px solid rgba(229, 229, 234, 0.78);
+}
+
+.openclaw-grid {
+  align-items: start;
+}
+
+.toggle-row {
+  min-height: 48px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+}
+
+.toggle-row span {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--apple-text);
+}
+
+.status-panel-inline {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+}
+
+.status-panel-text {
+  font-size: 12px;
+  color: var(--apple-text-secondary);
+  line-height: 1.5;
 }
 
 .tools-header {
@@ -1864,7 +1833,7 @@ onMounted(async () => {
 .tools-title {
   font-size: 16px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--apple-text);
 }
 
 .tools-list {
@@ -1895,7 +1864,7 @@ onMounted(async () => {
 .tool-info-icon {
   margin-left: 6px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary);
   cursor: help;
 }
 
@@ -1908,86 +1877,6 @@ onMounted(async () => {
   border-radius: 8px;
   padding: 10px;
   min-height: 80px;
-}
-
-.mcp-endpoint-display {
-  margin: 20px 0;
-}
-
-.openclaw-status-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.openclaw-status-message {
-  margin-bottom: 12px;
-  color: #6b7280;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.openclaw-tip-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.openclaw-tip-title {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-.openclaw-tip-icon {
-  font-size: 16px;
-  color: #1d4ed8;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  border-radius: 999px;
-  padding: 2px;
-  cursor: help;
-  transition: all 0.2s ease;
-}
-
-.openclaw-tip-icon:hover {
-  color: #1e40af;
-  background: #dbeafe;
-  border-color: #93c5fd;
-}
-
-.openclaw-tip-content {
-  max-width: 420px;
-  color: #111827;
-  font-size: 12px;
-  line-height: 1.7;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.openclaw-tip-content code {
-  background: #f3f4f6;
-  border-radius: 4px;
-  padding: 0 4px;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-}
-
-:deep(.openclaw-tip-popper) {
-  max-width: 460px;
-  background: #ffffff !important;
-  border: 1px solid #dbeafe !important;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12) !important;
-}
-
-:deep(.openclaw-tip-popper .el-popper__arrow::before) {
-  background: #ffffff !important;
-  border: 1px solid #dbeafe !important;
-}
-
-:deep(.openclaw-tip-popper .el-link) {
-  color: #2563eb !important;
 }
 
 .endpoint-header {
@@ -2003,22 +1892,16 @@ onMounted(async () => {
   margin-bottom: 0;
 }
 
-.endpoint-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .endpoint-label {
   font-size: 14px;
   font-weight: 500;
-  color: #374151;
+  color: var(--apple-text);
   margin-bottom: 8px;
 }
 
 .openclaw-command-hint {
   margin-bottom: 8px;
-  color: #6b7280;
+  color: var(--apple-text-secondary);
   font-size: 12px;
 }
 
@@ -2030,7 +1913,7 @@ onMounted(async () => {
 
 .openclaw-command-step-title {
   margin-bottom: 6px;
-  color: #374151;
+  color: var(--apple-text);
   font-size: 13px;
   font-weight: 500;
 }
@@ -2066,13 +1949,14 @@ onMounted(async () => {
 
 @media (max-width: 768px) {
   .agent-config {
-    padding: 16px;
+    padding: 0 0 16px;
   }
   
   .config-header {
     flex-direction: column;
     gap: 16px;
     align-items: stretch;
+    border-radius: 24px;
   }
   
   .header-left {
@@ -2081,16 +1965,18 @@ onMounted(async () => {
   
   .config-form {
     padding: 24px 16px;
+    border-radius: 24px;
   }
-  
-  .template-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  
-  .memory-item {
+
+  .advanced-card-header,
+  .endpoint-header,
+  .tools-header {
     flex-direction: column;
-    gap: 12px;
     align-items: stretch;
+  }
+
+  .advanced-card-actions {
+    justify-content: flex-start;
   }
 }
 </style>
