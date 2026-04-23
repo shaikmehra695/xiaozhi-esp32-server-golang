@@ -1,6 +1,7 @@
 package mqtt_udp
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func TestLifecycleReconnectCancelsOfflineCleanup(t *testing.T) {
 	adapter.offlineGracePeriod = 20 * time.Millisecond
 	defer adapter.Stop()
 
-	if notify := adapter.markDeviceOnline("device-1", 100); !notify {
+	if notify, accepted := adapter.markDeviceOnline("device-1", 100); !accepted || !notify {
 		t.Fatalf("expected first online event to notify")
 	}
 
@@ -56,7 +57,7 @@ func TestLifecycleReconnectCancelsOfflineCleanup(t *testing.T) {
 
 	time.Sleep(5 * time.Millisecond)
 
-	if notify := adapter.markDeviceOnline("device-1", 300); !notify {
+	if notify, accepted := adapter.markDeviceOnline("device-1", 300); !accepted || !notify {
 		t.Fatalf("expected reconnect to notify online again")
 	}
 
@@ -74,6 +75,68 @@ func TestLifecycleReconnectCancelsOfflineCleanup(t *testing.T) {
 	}
 	if state.cleanupTimer != nil {
 		t.Fatalf("expected offline cleanup timer to be cancelled after reconnect")
+	}
+}
+
+func TestLifecycleOnlineAlwaysTriggersTransportReadyCallback(t *testing.T) {
+	readyCalls := 0
+	adapter := NewMqttUdpAdapter(&MqttConfig{}, WithOnTransportReady(func(deviceID string) {
+		if deviceID != "device-1" {
+			t.Fatalf("unexpected device id: %s", deviceID)
+		}
+		readyCalls++
+	}))
+	adapter.setUdpServer(NewUDPServer(0, "", 0))
+	defer adapter.Stop()
+
+	onlinePayload := func(ts int64) []byte {
+		payload, err := json.Marshal(map[string]interface{}{
+			"device_id": "device-1",
+			"state":     "online",
+			"ts":        ts,
+		})
+		if err != nil {
+			t.Fatalf("marshal lifecycle payload failed: %v", err)
+		}
+		return payload
+	}
+
+	adapter.handleLifecycleMessage(onlinePayload(100))
+	adapter.handleLifecycleMessage(onlinePayload(200))
+
+	if readyCalls != 2 {
+		t.Fatalf("expected online broadcast to trigger transport ready twice, got %d", readyCalls)
+	}
+}
+
+func TestLifecycleStaleOnlineDoesNotTriggerTransportReadyCallback(t *testing.T) {
+	readyCalls := 0
+	adapter := NewMqttUdpAdapter(&MqttConfig{}, WithOnTransportReady(func(deviceID string) {
+		if deviceID != "device-1" {
+			t.Fatalf("unexpected device id: %s", deviceID)
+		}
+		readyCalls++
+	}))
+	adapter.setUdpServer(NewUDPServer(0, "", 0))
+	defer adapter.Stop()
+
+	onlinePayload := func(ts int64) []byte {
+		payload, err := json.Marshal(map[string]interface{}{
+			"device_id": "device-1",
+			"state":     "online",
+			"ts":        ts,
+		})
+		if err != nil {
+			t.Fatalf("marshal lifecycle payload failed: %v", err)
+		}
+		return payload
+	}
+
+	adapter.handleLifecycleMessage(onlinePayload(200))
+	adapter.handleLifecycleMessage(onlinePayload(100))
+
+	if readyCalls != 1 {
+		t.Fatalf("expected stale online broadcast to be ignored, got %d transport ready callbacks", readyCalls)
 	}
 }
 

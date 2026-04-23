@@ -874,8 +874,26 @@ func (c *ChatManager) markMqttConversationStateStale(reason string) {
 	c.resetSpeakPathAfterMqttRebootstrap(reason)
 }
 
+func (c *ChatManager) resetMcpRuntimeOnMqttTransportReady() {
+	if c == nil {
+		return
+	}
+
+	c.helloMu.Lock()
+	defer c.helloMu.Unlock()
+
+	c.mcpInitState = chatMcpInitStateIdle
+	if c.clientState == nil || c.mcpTransport == nil {
+		return
+	}
+
+	log.Infof("设备 %s 收到 MQTT online 广播，销毁现有 IoT MCP runtime，准备重新初始化", c.DeviceID)
+	closeDeviceMcpRuntime(c.clientState.DeviceID, c.mcpTransport)
+}
+
 func (c *ChatManager) HandleMqttTransportReady() {
 	c.markMqttConversationStateStale("transport_ready")
+	c.resetMcpRuntimeOnMqttTransportReady()
 }
 
 func (c *ChatManager) resetSpeakPathAfterGoodbye() {

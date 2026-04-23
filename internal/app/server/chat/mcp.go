@@ -16,6 +16,9 @@ var (
 	ensureDeviceMcpRuntime = func(deviceID string, mcpTransport *McpTransport) error {
 		return mcp.EnsureDeviceIotOverMcp(deviceID, mcpTransport)
 	}
+	closeDeviceMcpRuntime = func(deviceID string, mcpTransport *McpTransport) {
+		mcp.CloseDeviceIotOverMcp(deviceID, mcpTransport)
+	}
 	shouldScheduleDeviceMcpRuntimeInit = func(deviceID string, mcpTransport *McpTransport) bool {
 		return mcp.ShouldScheduleDeviceIotOverMcp(deviceID, mcpTransport)
 	}
