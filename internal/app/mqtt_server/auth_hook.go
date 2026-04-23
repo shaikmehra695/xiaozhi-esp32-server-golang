@@ -43,11 +43,15 @@ func (h *AuthHook) OnConnectAuthenticate(cl *mqttServer.Client, pk packets.Packe
 	clientId := string(pk.Connect.ClientIdentifier)
 
 	// 超级管理员校验
-	adminUsername := viper.GetString("mqtt_server.username")
-	adminPassword := viper.GetString("mqtt_server.password")
+	adminUsername := configuredAdminUsername()
+	adminPassword := configuredAdminPassword()
 	if username == adminUsername && password == adminPassword {
 		log.Infof("超级管理员登录成功: %s", username)
 		return true
+	}
+	if username == adminUsername {
+		log.Warnf("MQTT管理员登录失败: username=%s, clientId=%s, 原因=密码错误", username, clientId)
+		return false
 	}
 
 	// 普通用户校验 - 使用新的签名验证逻辑
@@ -59,7 +63,7 @@ func (h *AuthHook) OnConnectAuthenticate(cl *mqttServer.Client, pk packets.Packe
 		//log.Infof("MQTT用户验证开始: credentialInfo=%+v", credentialInfo)
 
 		if err != nil {
-			log.Warnf("MQTT凭据验证失败: %v", err)
+			log.Warnf("MQTT凭据验证失败: username=%s, clientId=%s, err=%v", username, clientId, err)
 			return false
 		}
 
