@@ -136,7 +136,7 @@ func (s *UdpServer) processPacket(addr *net.UDPAddr, data []byte) {
 	strConnID := hex.EncodeToString(connID)
 	udpSession := s.getSessionByConnID(strConnID)
 	if udpSession == nil {
-		Warnf("session不存在 addr: %s, connID: %s", addr, strConnID)
+		//Warnf("session不存在 addr: %s, connID: %s", addr, strConnID)
 		return
 	}
 
