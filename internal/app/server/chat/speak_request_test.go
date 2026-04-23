@@ -664,6 +664,66 @@ func TestHandleMqttTransportReadyResetsConversationState(t *testing.T) {
 	}
 }
 
+func TestHandleMqttTransportReadyResetsMcpRuntimeBeforeWarmup(t *testing.T) {
+	manager, _ := newSpeakRequestTestManager(types_conn.TransportTypeMqttUdp)
+	manager.mcpInitState = chatMcpInitStateReady
+
+	oldCloseRuntime := closeDeviceMcpRuntime
+	oldEnsureRuntime := ensureDeviceMcpRuntime
+	oldShouldSchedule := shouldScheduleDeviceMcpRuntimeInit
+	defer func() {
+		closeDeviceMcpRuntime = oldCloseRuntime
+		ensureDeviceMcpRuntime = oldEnsureRuntime
+		shouldScheduleDeviceMcpRuntimeInit = oldShouldSchedule
+	}()
+
+	closeCalled := make(chan struct{}, 1)
+	initCalled := make(chan struct{}, 1)
+	closeDeviceMcpRuntime = func(deviceID string, mcpTransport *McpTransport) {
+		if deviceID != manager.DeviceID {
+			t.Fatalf("unexpected device id passed to closeDeviceMcpRuntime: %s", deviceID)
+		}
+		if mcpTransport != manager.mcpTransport {
+			t.Fatal("expected closeDeviceMcpRuntime to receive current MCP transport")
+		}
+		closeCalled <- struct{}{}
+	}
+	shouldScheduleDeviceMcpRuntimeInit = func(deviceID string, mcpTransport *McpTransport) bool {
+		return true
+	}
+	ensureDeviceMcpRuntime = func(deviceID string, mcpTransport *McpTransport) error {
+		if deviceID != manager.DeviceID {
+			t.Fatalf("unexpected device id passed to ensureDeviceMcpRuntime: %s", deviceID)
+		}
+		if mcpTransport != manager.mcpTransport {
+			t.Fatal("expected ensureDeviceMcpRuntime to receive current MCP transport")
+		}
+		initCalled <- struct{}{}
+		return nil
+	}
+
+	manager.HandleMqttTransportReady()
+
+	select {
+	case <-closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("expected mqtt transport ready to close existing IoT MCP runtime")
+	}
+	if manager.mcpInitState != chatMcpInitStateIdle {
+		t.Fatalf("expected MCP init state to reset to idle, got %v", manager.mcpInitState)
+	}
+
+	manager.WarmupMcp()
+
+	select {
+	case <-initCalled:
+	case <-time.After(time.Second):
+		t.Fatal("expected WarmupMcp to reinitialize IoT MCP runtime after transport ready")
+	}
+
+	waitForMcpInitState(t, manager, chatMcpInitStateReady)
+}
+
 func TestMarkMqttConversationStateStaleSkipsDuplicateHelloWhenSpeakRequestPending(t *testing.T) {
 	manager, _ := newSpeakRequestTestManager(types_conn.TransportTypeMqttUdp)
 	manager.lastSpeakPathWarmAt.Store(123)
@@ -814,6 +874,10 @@ func newSpeakRequestTestManager(transportType string) (*ChatManager, *speakReque
 	manager.transport = conn
 	manager.clientState = clientState
 	manager.serverTransport = NewServerTransport(conn, clientState)
+	manager.mcpTransport = &McpTransport{
+		Client:          clientState,
+		ServerTransport: manager.serverTransport,
+	}
 	manager.ctx = ctx
 	manager.cancel = cancel
 	manager.speakReadyTimeout = 200 * time.Millisecond

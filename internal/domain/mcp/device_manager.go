@@ -142,6 +142,7 @@ type McpClientInstance struct {
 	Ctx              context.Context
 	cancel           context.CancelFunc
 	conn             ConnInterface
+	iotTransport     *IotOverMcpTransport
 	initState        uint32
 	lastPing         atomic.Int64
 	lastToolsRefresh atomic.Int64
@@ -204,31 +205,32 @@ func NewWsEndPointMcpClient(ctx context.Context, deviceID string, conn *websocke
 func NewIotOverMcpClient(deviceID string, transportType string, conn ConnInterface) *McpClientInstance {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	wsTransport, err := NewIotOverMcpTransport(conn)
+	iotTransport, err := NewIotOverMcpTransport(conn)
 	if err != nil {
 		logger.Errorf("创建MCP客户端失败: %v", err)
 		return nil
 	}
-	mcpClient := client.NewClient(wsTransport)
+	mcpClient := client.NewClient(iotTransport)
 
 	iotOverMcp := &McpClientInstance{
-		serverName: buildIotServerName(deviceID, transportType),
-		mcpClient:  mcpClient,
-		Ctx:        ctx,
-		cancel:     cancel,
-		conn:       conn,
-		initState:  uint32(mcpClientInitStateInitializing),
+		serverName:   buildIotServerName(deviceID, transportType),
+		mcpClient:    mcpClient,
+		Ctx:          ctx,
+		cancel:       cancel,
+		conn:         conn,
+		iotTransport: iotTransport,
+		initState:    uint32(mcpClientInitStateInitializing),
 	}
 	iotOverMcp.storeToolsSnapshot(make(map[string]tool.InvokableTool))
 	iotOverMcp.setConnected(true)
 	iotOverMcp.setLastPing(time.Now())
-	wsTransport.SetNotificationHandler(iotOverMcp.handleJSONRPCNotification)
-	wsTransport.SetActivityHandler(func() {
+	iotTransport.SetNotificationHandler(iotOverMcp.handleJSONRPCNotification)
+	iotTransport.SetActivityHandler(func() {
 		iotOverMcp.setLastPing(time.Now())
 	})
 
 	// 设置transport的关闭回调
-	wsTransport.SetOnCloseHandler(iotOverMcp.handleTransportClose)
+	iotTransport.SetOnCloseHandler(iotOverMcp.handleTransportClose)
 
 	return iotOverMcp
 }
