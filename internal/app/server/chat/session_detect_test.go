@@ -119,6 +119,85 @@ func TestHandleListenStartIgnoresDuplicateRealtimeStart(t *testing.T) {
 	}
 }
 
+func TestHandleListenStartIgnoresAutoStartDuringWelcome(t *testing.T) {
+	session, conn, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+
+	session.clientState.IsWelcomePlaying = true
+	session.clientState.RecordCommandArrival(data_client.CommandTypeDetect, time.Now())
+	initialHistory := session.clientState.GetCommandHistorySnapshot()
+
+	session.ttsManager.EnqueueTtsStart(context.Background())
+	startMsg := waitForServerMessage(t, conn, 0)
+	if startMsg.Type != msgdata.ServerMessageTypeTts || startMsg.State != msgdata.MessageStateStart {
+		t.Fatalf("expected first server message to be tts start, got type=%s state=%s", startMsg.Type, startMsg.State)
+	}
+
+	if err := session.HandleListenStart(&data_client.ClientMessage{
+		Type:     msgdata.MessageTypeListen,
+		DeviceID: session.clientState.DeviceID,
+		Mode:     "auto",
+	}); err != nil {
+		t.Fatalf("HandleListenStart returned error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := conn.sentCmdCount(); got != 1 {
+		t.Fatalf("expected auto listen start during welcome to avoid interrupting TTS, got %d commands", got)
+	}
+	if !session.clientState.IsWelcomePlaying {
+		t.Fatal("expected auto listen start during welcome to keep welcome playback active")
+	}
+	if got := session.clientState.ListenMode; got != "" {
+		t.Fatalf("expected ignored auto listen start not to update listen mode, got %q", got)
+	}
+
+	history := session.clientState.GetCommandHistorySnapshot()
+	if history.LastCmdType != initialHistory.LastCmdType || !history.LastCmdAt.Equal(initialHistory.LastCmdAt) {
+		t.Fatalf("expected ignored auto listen start not to update command history, got %+v want %+v", history, initialHistory)
+	}
+}
+
+func TestHandleListenStartRealtimeInterruptsWelcomePlayback(t *testing.T) {
+	session, conn, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+
+	session.clientState.IsWelcomePlaying = true
+	session.clientState.RecordCommandArrival(data_client.CommandTypeDetect, time.Now())
+	// 让后台 OnListenStart 在测试里快速失败并收口，避免依赖真实 ASR 环境。
+	session.clientState.DeviceConfig.Asr.Provider = "unsupported_provider"
+
+	session.ttsManager.EnqueueTtsStart(context.Background())
+	startMsg := waitForServerMessage(t, conn, 0)
+	if startMsg.Type != msgdata.ServerMessageTypeTts || startMsg.State != msgdata.MessageStateStart {
+		t.Fatalf("expected first server message to be tts start, got type=%s state=%s", startMsg.Type, startMsg.State)
+	}
+
+	if err := session.HandleListenStart(&data_client.ClientMessage{
+		Type:     msgdata.MessageTypeListen,
+		DeviceID: session.clientState.DeviceID,
+		Mode:     "realtime",
+	}); err != nil {
+		t.Fatalf("HandleListenStart returned error: %v", err)
+	}
+
+	stopMsg := waitForServerMessage(t, conn, 1)
+	if stopMsg.Type != msgdata.ServerMessageTypeTts || stopMsg.State != msgdata.MessageStateStop {
+		t.Fatalf("expected realtime listen start during welcome to interrupt TTS, got type=%s state=%s", stopMsg.Type, stopMsg.State)
+	}
+	if session.clientState.IsWelcomePlaying {
+		t.Fatal("expected realtime listen start during welcome to clear welcome playback flag")
+	}
+	if got := session.clientState.ListenMode; got != "realtime" {
+		t.Fatalf("expected realtime listen start to update listen mode, got %q", got)
+	}
+
+	history := session.clientState.GetCommandHistorySnapshot()
+	if history.LastCmdType != data_client.CommandTypeListenStart {
+		t.Fatalf("expected realtime listen start to update command history, got %+v", history)
+	}
+}
+
 func TestStopSpeakingClearsRealtimeListenSessionActive(t *testing.T) {
 	session := newDetectDebounceTestSession(t)
 	session.realtimeListenSessionActive.Store(true)

@@ -536,6 +536,10 @@ func isRecentCommand(prev CommandHistorySnapshot, cmdType string, now time.Time)
 	return prev.LastCmdType == cmdType && isWithinCommandTTL(prev.LastCmdAt, now)
 }
 
+func shouldIgnoreListenStartDuringWelcome(mode string, recentDetect bool, welcomePlaying bool) bool {
+	return recentDetect && welcomePlaying && mode != "realtime"
+}
+
 func resolveDetectAction(text string, enableGreeting bool, welcomeAlreadySpoken bool, recentListenStart bool) detectAction {
 	if text == "" {
 		return detectActionSilent
@@ -1039,7 +1043,7 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 	prevHistory := s.clientState.GetCommandHistorySnapshot()
 	recentDetect := isRecentCommand(prevHistory, CommandTypeDetect, now)
 
-	if recentDetect && s.clientState.IsWelcomePlaying {
+	if shouldIgnoreListenStartDuringWelcome(msg.Mode, recentDetect, s.clientState.IsWelcomePlaying) {
 		log.Infof("设备 %s 欢迎语播放中，忽略 listen start: history={%s}", msg.DeviceID, prevHistory.DebugString(now))
 		return nil
 	}
