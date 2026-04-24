@@ -31,6 +31,11 @@ func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema
 		return toolCallResponseSummary{}, nil
 	}
 
+	tools = normalizeToolCallIDs(tools)
+	if respMsg != nil && len(respMsg.ToolCalls) > 0 {
+		respMsg.ToolCalls = normalizeToolCallIDs(respMsg.ToolCalls)
+	}
+
 	log.Infof("处理 %d 个工具调用", len(tools))
 	if executor == nil {
 		executor = newToolCallExecutor(l, ctx)
@@ -168,6 +173,7 @@ func (e *toolCallExecutor) Submit(toolCalls []schema.ToolCall) {
 		e.mu.Unlock()
 
 		toolCall := tc
+		toolCall.ID = callID
 		go func() {
 			defer e.wg.Done()
 			result := e.executeToolCall(order, toolCall)
@@ -177,6 +183,22 @@ func (e *toolCallExecutor) Submit(toolCalls []schema.ToolCall) {
 			e.mu.Unlock()
 		}()
 	}
+}
+
+func normalizeToolCallIDs(toolCalls []schema.ToolCall) []schema.ToolCall {
+	if len(toolCalls) == 0 {
+		return toolCalls
+	}
+
+	normalized := make([]schema.ToolCall, len(toolCalls))
+	for i, tc := range toolCalls {
+		tcCopy := tc
+		if strings.TrimSpace(tcCopy.ID) == "" {
+			tcCopy.ID = fmt.Sprintf("auto_call_%d_%s", i, strings.TrimSpace(tcCopy.Function.Name))
+		}
+		normalized[i] = tcCopy
+	}
+	return normalized
 }
 
 func (e *toolCallExecutor) Wait() []toolCallExecutionResult {
