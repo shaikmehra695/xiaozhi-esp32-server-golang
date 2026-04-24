@@ -669,7 +669,7 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 				l.ttsManager.ClearAudioHistory()
 				log.Debugf("onStartFunc 首次调用，已清空TTS音频缓存")
 			}
-			l.ttsManager.EnqueueTtsStart(ctx)
+			l.ttsManager.EnqueueTtsStartWithReason(ctx, "LLMManager.handleLLMResponseChannelAsync onStart")
 		}
 		onEndFunc = func(err error, args ...any) {
 			handleResult := llmHandleResultFromArgs(args)
@@ -682,7 +682,7 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 			if handleResult.suppressProtocolTtsStop {
 				l.ttsManager.FinishTtsWithoutProtocolStop(ctx, err)
 			} else {
-				l.ttsManager.EnqueueTtsStop(ctx)
+				l.ttsManager.EnqueueTtsStopWithReason(ctx, "LLMManager.handleLLMResponseChannelAsync onEnd")
 			}
 			l.ttsManager.RequestTurnEnd(ctx, err)
 
@@ -774,7 +774,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 			l.ttsManager.ClearAudioHistory()
 			log.Debugf("HandleLLMResponseChannelSync 首次调用，已清空TTS音频缓存")
 		}
-		l.ttsManager.EnqueueTtsStart(ctx)
+		l.ttsManager.EnqueueTtsStartWithReason(ctx, "LLMManager.HandleLLMResponseChannelSync start")
 	}
 
 	result, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
@@ -791,7 +791,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 		if result.suppressProtocolTtsStop {
 			l.ttsManager.FinishTtsWithoutProtocolStop(ctx, err)
 		} else {
-			l.ttsManager.EnqueueTtsStop(ctx)
+			l.ttsManager.EnqueueTtsStopWithReason(ctx, "LLMManager.HandleLLMResponseChannelSync end")
 		}
 		l.ttsManager.RequestTurnEnd(ctx, err)
 

@@ -56,6 +56,15 @@ func (s *ServerTransport) SendTtsStart() error {
 }
 
 func (s *ServerTransport) SendTtsStop() error {
+	log.Infof(
+		"SendTtsStop: device=%s session=%s status=%s phase=%s welcomeSpeaking=%v welcomePlaying=%v",
+		s.clientState.DeviceID,
+		s.clientState.SessionID,
+		s.clientState.GetStatus(),
+		s.clientState.GetListenPhase(),
+		s.clientState.IsWelcomeSpeaking,
+		s.clientState.IsWelcomePlaying,
+	)
 	msg := ServerMessage{
 		Type:      ServerMessageTypeTts,
 		State:     MessageStateStop,

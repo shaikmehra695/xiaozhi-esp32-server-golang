@@ -39,10 +39,7 @@ type AsrResponseChannelItem struct {
 	speakerResult *speaker.IdentifyResult
 }
 
-const (
-	listenCommandHistoryTTL   = 800 * time.Millisecond
-	detectLLMDebounceDuration = 300 * time.Millisecond
-)
+const detectLLMDebounceDuration = 300 * time.Millisecond
 
 type detectAction string
 
@@ -51,6 +48,10 @@ const (
 	detectActionWelcome detectAction = "welcome"
 	detectActionLLM     detectAction = "llm"
 )
+
+type welcomePlaybackResult struct {
+	natural bool
+}
 
 const (
 	chatSessionCloseReasonManagerShutdown     = "manager_shutdown"
@@ -94,6 +95,9 @@ type ChatSession struct {
 
 	// stopSpeaking 保护，防止与 AddAsrResultToQueue/HandleWelcome 并发冲突
 	stopSpeakingMu sync.Mutex
+
+	welcomePlaybackMu     sync.Mutex
+	welcomePlaybackDoneCh chan welcomePlaybackResult
 
 	detectLLMDebounceMu    sync.Mutex
 	detectLLMDebounceTimer *time.Timer
@@ -246,7 +250,7 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 				return
 			}
 			clientState.AfterAsrSessionCtx.CancelWithReason("ChatSession.OnAsrFirstTextCallback: realtime_mode=4")
-			s.InterruptAndClearTTSQueue()
+			s.InterruptAndClearTTSQueueWithReason("ChatSession.OnAsrFirstTextCallback realtime_mode=4")
 		}
 	}
 
@@ -528,30 +532,129 @@ func (s *ChatSession) shouldIgnoreAsrLoopError(startSeq uint64, ctx context.Cont
 	return errors.Is(err, context.Canceled)
 }
 
-func isWithinCommandTTL(at time.Time, now time.Time) bool {
-	return !at.IsZero() && now.Sub(at) <= listenCommandHistoryTTL
+func isAutoListenActive(state *ClientState) bool {
+	if state == nil || state.ListenMode != "auto" {
+		return false
+	}
+	phase := state.GetListenPhase()
+	return phase == ListenPhaseStarting || phase == ListenPhaseListening
 }
 
-func isRecentCommand(prev CommandHistorySnapshot, cmdType string, now time.Time) bool {
-	return prev.LastCmdType == cmdType && isWithinCommandTTL(prev.LastCmdAt, now)
+func shouldIgnoreListenStartDuringWelcome(mode string, welcomePlaying bool) bool {
+	return mode != "realtime" && welcomePlaying
 }
 
-func shouldIgnoreListenStartDuringWelcome(mode string, recentDetect bool, welcomePlaying bool) bool {
-	return recentDetect && welcomePlaying && mode != "realtime"
+func shouldWaitRealtimeListenStartDuringWelcome(mode string, welcomePlaying bool) bool {
+	return false
 }
 
-func resolveDetectAction(text string, enableGreeting bool, welcomeAlreadySpoken bool, recentListenStart bool) detectAction {
+func shouldInterruptOutputOnListenStart(mode string, welcomePlaying bool) bool {
+	if mode == "realtime" && welcomePlaying {
+		return false
+	}
+	return true
+}
+
+func completeWelcomePlaybackWaitCh(ch chan welcomePlaybackResult, natural bool) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- welcomePlaybackResult{natural: natural}:
+	default:
+	}
+	close(ch)
+}
+
+func (s *ChatSession) beginWelcomePlaybackWait() {
+	if s == nil {
+		return
+	}
+
+	s.welcomePlaybackMu.Lock()
+	staleCh := s.welcomePlaybackDoneCh
+	s.welcomePlaybackDoneCh = make(chan welcomePlaybackResult, 1)
+	s.welcomePlaybackMu.Unlock()
+
+	if staleCh != nil {
+		completeWelcomePlaybackWaitCh(staleCh, false)
+	}
+}
+
+func (s *ChatSession) completeWelcomePlaybackWait(natural bool) {
+	if s == nil {
+		return
+	}
+
+	s.welcomePlaybackMu.Lock()
+	ch := s.welcomePlaybackDoneCh
+	s.welcomePlaybackDoneCh = nil
+	s.welcomePlaybackMu.Unlock()
+
+	completeWelcomePlaybackWaitCh(ch, natural)
+}
+
+func (s *ChatSession) currentWelcomePlaybackWaitCh() <-chan welcomePlaybackResult {
+	if s == nil {
+		return nil
+	}
+
+	s.welcomePlaybackMu.Lock()
+	ch := s.welcomePlaybackDoneCh
+	s.welcomePlaybackMu.Unlock()
+	return ch
+}
+
+func (s *ChatSession) waitForWelcomePlaybackCompletion() bool {
+	if s == nil {
+		return true
+	}
+
+	doneCh := s.currentWelcomePlaybackWaitCh()
+	if doneCh == nil {
+		return true
+	}
+
+	var sessionDone <-chan struct{}
+	if s.ctx != nil {
+		sessionDone = s.ctx.Done()
+	}
+
+	log.Infof("设备 %s realtime listen start 等待欢迎语 TTS 结束", s.clientState.DeviceID)
+
+	select {
+	case result, ok := <-doneCh:
+		if !ok {
+			log.Infof("设备 %s 欢迎语等待通道已关闭，取消 realtime listen start", s.clientState.DeviceID)
+			return false
+		}
+		if !result.natural {
+			log.Infof("设备 %s 欢迎语被打断，取消本次 realtime listen start", s.clientState.DeviceID)
+			return false
+		}
+		log.Infof("设备 %s 欢迎语播放完成，继续 realtime listen start", s.clientState.DeviceID)
+		return true
+	case <-s.clientState.Ctx.Done():
+		log.Debugf("设备 %s client ctx 已取消，终止 realtime listen start 等待", s.clientState.DeviceID)
+		return false
+	case <-sessionDone:
+		log.Debugf("设备 %s session ctx 已取消，终止 realtime listen start 等待", s.clientState.DeviceID)
+		return false
+	}
+}
+
+func resolveDetectAction(text string, enableGreeting bool, welcomeAlreadySpoken bool, autoListenActive bool) detectAction {
 	if text == "" {
 		return detectActionSilent
 	}
 	if enableGreeting && isWakeupWord(text) {
-		if welcomeAlreadySpoken {
-			if recentListenStart {
-				return detectActionSilent
-			}
-			return detectActionLLM
+		if !welcomeAlreadySpoken {
+			return detectActionWelcome
 		}
-		return detectActionWelcome
+		if autoListenActive {
+			return detectActionSilent
+		}
+		return detectActionLLM
 	}
 	return detectActionLLM
 }
@@ -600,12 +703,6 @@ func (s *ChatSession) scheduleDetectLLM(text string) {
 			return
 		}
 
-		now := time.Now()
-		history := s.clientState.GetCommandHistorySnapshot()
-		if isRecentCommand(history, CommandTypeListenStart, now) {
-			log.Debugf("Detect LLM debounce canceled by recent listen start: history={%s}", history.DebugString(now))
-			return
-		}
 		if phase := s.clientState.GetListenPhase(); phase != ListenPhaseIdle {
 			log.Debugf("Detect LLM debounce skipped because listen phase=%s", phase)
 			return
@@ -622,37 +719,44 @@ func (s *ChatSession) scheduleDetectLLM(text string) {
 }
 
 func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
+	// 新的 detect 到来时，先取消上一条尚未触发的 detect->LLM debounce，
+	// 避免旧前导文本在稍后被重复送入 LLM 队列。
 	s.cancelPendingDetectLLM()
 
 	// 检查设备激活状态
-	if msg.Text != "" {
-		isActivated, err := s.CheckDeviceActivated()
-		if err != nil {
-			log.Errorf("检查设备激活状态失败: %v", err)
-			return err
-		}
-		if !isActivated {
-			return nil
-		}
+	isActivated, err := s.CheckDeviceActivated()
+	if err != nil {
+		log.Errorf("检查设备激活状态失败: %v", err)
+		return err
+	}
+	if !isActivated {
+		return nil
 	}
 
+	// 先拿“本条 detect 到来前”的命令历史快照，再记录当前 detect，
+	// 这样后续日志里看到的 history 才是上一条命令，而不是当前这条 detect 自己。
 	now := time.Now()
 	prevHistory := s.clientState.GetCommandHistorySnapshot()
 	s.clientState.RecordCommandArrival(CommandTypeDetect, now)
 
-	// 如果有文本，处理
+	// listen detect 代表“设备检测到一段可能可用的前导文本”，
+	// 这里不直接进入正式监听，而是先判断它应该触发欢迎语、静默忽略，还是延迟进入 LLM。
 	if msg.Text != "" {
 		text := removePunctuation(msg.Text)
 		enableGreeting := viper.GetBool("enable_greeting")
-		recentListenStart := isRecentCommand(prevHistory, CommandTypeListenStart, now)
-		action := resolveDetectAction(text, enableGreeting, s.clientState.IsWelcomeSpeaking, recentListenStart)
+		autoListenActive := isAutoListenActive(s.clientState)
+		// 对唤醒词的处理分三类：
+		// 1. 首次唤醒且允许欢迎语：播欢迎语；
+		// 2. 欢迎语播过且当前已在 auto listen：忽略重复唤醒；
+		// 3. 其他情况：按普通文本走 detect -> LLM 的缓冲路径。
+		action := resolveDetectAction(text, enableGreeting, s.clientState.IsWelcomeSpeaking, autoListenActive)
 
 		log.Debugf(
-			"Detect recv: device=%s text=%q action=%s recentListenStart=%v history={%s} welcomeSpeaking=%v welcomePlaying=%v",
+			"Detect recv: device=%s text=%q action=%s autoListenActive=%v history={%s} welcomeSpeaking=%v welcomePlaying=%v",
 			msg.DeviceID,
 			text,
 			action,
-			recentListenStart,
+			autoListenActive,
 			prevHistory.DebugString(now),
 			s.clientState.IsWelcomeSpeaking,
 			s.clientState.IsWelcomePlaying,
@@ -662,7 +766,9 @@ func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
 			return nil
 		}
 
-		s.StopSpeaking(true)
+		// detect 决定要播欢迎语或接管对话时，要先停掉当前残留输出，
+		// 避免旧一轮 TTS/LLM 与新一轮 detect 动作交叉。
+		s.StopSpeakingWithReason(true, fmt.Sprintf("HandleListenDetect action=%s text=%q", action, text))
 
 		if action == detectActionWelcome {
 			s.HandleWelcome()
@@ -670,6 +776,8 @@ func (s *ChatSession) HandleListenDetect(msg *ClientMessage) error {
 		}
 
 		if action == detectActionLLM {
+			// detect 阶段的文本先做一个很短的 debounce；
+			// 如果后面马上收到 listen start，就会由正式监听接管。
 			s.scheduleDetectLLM(text)
 		}
 	}
@@ -691,8 +799,8 @@ func (s *ChatSession) HandleNotActivated() {
 
 	log.Infof("激活码: %s, 挑战码: %s, 消息: %s, 超时时间: %d", code, challenge, message, timeoutMs)
 
-	s.ttsManager.EnqueueTtsStart(s.clientState.Ctx)
-	defer s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
+	s.ttsManager.EnqueueTtsStartWithReason(s.clientState.Ctx, "HandleNotActivated")
+	defer s.ttsManager.EnqueueTtsStopWithReason(s.clientState.Ctx, "HandleNotActivated")
 
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
 	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
@@ -705,34 +813,37 @@ func (s *ChatSession) HandleNotActivated() {
 
 func (s *ChatSession) HandleWelcome() {
 	greetingText := s.GetRandomGreeting()
+
+	s.stopSpeakingMu.Lock()
+	defer s.stopSpeakingMu.Unlock()
+
+	if s.clientState.Ctx.Err() != nil {
+		log.Debugf("HandleWelcome client ctx 已取消，跳过欢迎语")
+		return
+	}
+
 	sessionCtx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
-
-	// 检查 session 是否已被停止（通过尝试获取锁来判断）
-	if !s.stopSpeakingMu.TryLock() {
-		log.Debugf("HandleWelcome 正在执行 StopSpeaking，跳过欢迎语")
-		return
-	}
-	s.stopSpeakingMu.Unlock()
-
-	// 检查 sessionCtx 是否已取消
-	if sessionCtx.Err() != nil {
-		log.Debugf("HandleWelcome sessionCtx 已取消，跳过欢迎语")
-		return
-	}
-
 	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
-	// 检查 afterAsrCtx 是否已取消
 	if ctx.Err() != nil {
-		log.Debugf("HandleWelcome afterAsrCtx 已取消，跳过欢迎语")
+		log.Debugf("HandleWelcome afterAsr ctx 已取消，跳过欢迎语")
 		return
 	}
 
 	s.clientState.IsWelcomeSpeaking = true
 	s.clientState.IsWelcomePlaying = true
-	s.ttsManager.EnqueueTtsStart(s.clientState.Ctx)
-	err := s.ttsManager.handleTts(ctx, s.ttsManager.currentAudioGeneration(), s.ttsManager.currentTtsMetricCycle(), llm_common.LLMResponseStruct{Text: greetingText}, nil, nil)
-	s.ttsManager.RequestTurnEnd(ctx, err)
-	s.ttsManager.EnqueueTtsStop(s.clientState.Ctx)
+	s.beginWelcomePlaybackWait()
+
+	go func(ctx context.Context, greetingText string) {
+		if ctx.Err() != nil || s.clientState.Ctx.Err() != nil {
+			s.completeWelcomePlaybackWait(false)
+			return
+		}
+
+		s.ttsManager.EnqueueTtsStartWithReason(s.clientState.Ctx, "HandleWelcome")
+		err := s.ttsManager.handleTextResponse(ctx, llm_common.LLMResponseStruct{Text: greetingText}, true)
+		s.ttsManager.EnqueueTtsStopWithReason(s.clientState.Ctx, "HandleWelcome natural end")
+		s.ttsManager.RequestTurnEnd(ctx, err)
+	}(ctx, greetingText)
 }
 
 func (a *ChatSession) checkExitWords(text string) bool {
@@ -838,7 +949,7 @@ func (s *ChatSession) getOrCreateOpenClawStream(correlationID string) (chan llm_
 			// 暖场接管了 start，正式 OpenClaw 回复收尾时需要在这里补回 stop；
 			// 不能放在暖场切换点发送，否则会把主回复中途截断。
 			if !s.clientState.IsRealTime() {
-				s.ttsManager.EnqueueTtsStop(ctx)
+				s.ttsManager.EnqueueTtsStopWithReason(ctx, fmt.Sprintf("OpenClaw stream end correlation_id=%s", correlationID))
 			}
 			s.ttsManager.RequestTurnEnd(ctx, err)
 			s.finishOpenClawWarmup(correlationID, false)
@@ -847,7 +958,7 @@ func (s *ChatSession) getOrCreateOpenClawStream(correlationID string) (chan llm_
 	log.Infof("OpenClaw stream created: device=%s correlation_id=%s warmup_attached=%v", s.clientState.DeviceID, correlationID, hasWarmup)
 	if err := s.llmManager.HandleLLMResponseChannelAsyncWithOptions(ctx, nil, streamChan, options); err != nil {
 		if hasWarmup && !s.clientState.IsRealTime() {
-			s.ttsManager.EnqueueTtsStop(ctx)
+			s.ttsManager.EnqueueTtsStopWithReason(ctx, fmt.Sprintf("OpenClaw stream setup failed correlation_id=%s", correlationID))
 		}
 		if hasWarmup {
 			s.ttsManager.RequestTurnEnd(ctx, err)
@@ -960,12 +1071,17 @@ func (s *ChatSession) InjectOpenClawResponse(event openclaw.ResponseDelivery) er
 
 // InterruptAndClearTTSQueue 触发 TTS 打断并清空发送队列（供 realtime 模式 VAD 打断等场景调用）
 func (s *ChatSession) InterruptAndClearTTSQueue() {
+	s.InterruptAndClearTTSQueueWithReason("ChatSession.InterruptAndClearTTSQueue")
+}
+
+func (s *ChatSession) InterruptAndClearTTSQueueWithReason(reason string) {
+	log.Infof("interrupt and clear tts queue requested: device=%s reason=%s state={%s}", s.clientState.DeviceID, normalizeTTSReason(reason), s.ttsManager.debugState())
 	if s.mediaPlayer != nil {
 		if err := s.mediaPlayer.Suspend(); err != nil && !errors.Is(err, context.Canceled) {
 			log.Warnf("挂起媒体播放失败: %v", err)
 		}
 	}
-	s.ttsManager.InterruptAndStop(s.clientState.Ctx, true, context.Canceled)
+	s.ttsManager.InterruptAndStopWithReason(s.clientState.Ctx, true, context.Canceled, reason)
 }
 
 // handleAbortMessage 处理中止消息
@@ -976,9 +1092,9 @@ func (s *ChatSession) HandleAbortMessage(msg *ClientMessage) error {
 	s.clientState.Abort = true
 
 	if s.clientState.IsRealTime() {
-		s.StopSpeakingAfterAsr(true)
+		s.StopSpeakingAfterAsrWithReason(true, "HandleAbortMessage realtime")
 	} else {
-		s.StopSpeaking(true)
+		s.StopSpeakingWithReason(true, "HandleAbortMessage auto")
 	}
 
 	// 记录日志
@@ -1041,25 +1157,27 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 
 	now := time.Now()
 	prevHistory := s.clientState.GetCommandHistorySnapshot()
-	recentDetect := isRecentCommand(prevHistory, CommandTypeDetect, now)
 
-	if shouldIgnoreListenStartDuringWelcome(msg.Mode, recentDetect, s.clientState.IsWelcomePlaying) {
+	// auto/manual 模式下，欢迎语播放期间设备可能会自动补发 listen start；
+	// 这类包不应抢占欢迎语，因此欢迎语仍在播放时直接忽略。
+	if shouldIgnoreListenStartDuringWelcome(msg.Mode, s.clientState.IsWelcomePlaying) {
 		log.Infof("设备 %s 欢迎语播放中，忽略 listen start: history={%s}", msg.DeviceID, prevHistory.DebugString(now))
 		return nil
 	}
 
 	log.Debugf(
-		"ListenStart recv: device=%s mode=%s recentDetect=%v history={%s} welcomeSpeaking=%v welcomePlaying=%v phase=%s",
+		"ListenStart recv: device=%s mode=%s history={%s} welcomeSpeaking=%v welcomePlaying=%v phase=%s",
 		msg.DeviceID,
 		msg.Mode,
-		recentDetect,
 		prevHistory.DebugString(now),
 		s.clientState.IsWelcomeSpeaking,
 		s.clientState.IsWelcomePlaying,
 		s.clientState.GetListenPhase(),
 	)
 
-	// realtime 模式首次启动：跳过欢迎语判断和 Destroy，直接进入监听
+	// realtime 和 auto/manual 的处理目标不同：
+	// realtime 更像“长驻监听会话”，尽量不中断当前链路；
+	// auto/manual 更像“开启一轮新的正式拾音”，会重置当前输出并重启 ASR。
 	if msg.Mode == "realtime" {
 		// 当前 realtime listen 会话尚未走到 listen stop / session cancel / close 时，
 		// 重复 listen start 包统一静默忽略，避免打断当前链路。
@@ -1067,8 +1185,20 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 			return nil
 		}
 
+		// realtime 首次进入时，如果欢迎语还在播，等待它自然结束；
+		// 只有欢迎语完整播完，才继续进入 realtime listen。
+		if shouldWaitRealtimeListenStartDuringWelcome(msg.Mode, s.clientState.IsWelcomePlaying) {
+			if !s.waitForWelcomePlaybackCompletion() {
+				return nil
+			}
+		}
+
 		s.clientState.RecordCommandArrival(CommandTypeListenStart, now)
-		s.StopSpeaking(true)
+		if shouldInterruptOutputOnListenStart(msg.Mode, s.clientState.IsWelcomePlaying) {
+			// 非欢迎语保护场景下，listen start 代表新一轮监听接管，
+			// 需要主动停止当前 TTS/LLM，避免说和听同时进行。
+			s.StopSpeakingWithReason(true, fmt.Sprintf("HandleListenStart mode=%s", msg.Mode))
+		}
 
 		s.clientState.ListenMode = msg.Mode
 		log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
@@ -1090,12 +1220,11 @@ func (s *ChatSession) HandleListenStart(msg *ClientMessage) error {
 
 	s.clientState.RecordCommandArrival(CommandTypeListenStart, now)
 
-	// 处理拾音模式
+	// auto/manual 模式进入这里时，视为显式开启一轮新的拾音流程：
+	// 更新模式、停止旧输出，然后异步拉起 OnListenStart 做 ASR 初始化。
 	s.clientState.ListenMode = msg.Mode
 	log.Infof("设备 %s 拾音模式: %s", msg.DeviceID, msg.Mode)
-	//if s.clientState.ListenMode == "manual" {
-	s.StopSpeaking(true)
-	//}
+	s.StopSpeakingWithReason(true, fmt.Sprintf("HandleListenStart mode=%s", msg.Mode))
 
 	startSeq := s.beginListenStart()
 	go func() {
@@ -1143,25 +1272,43 @@ func (s *ChatSession) OnListenStart(startSeq uint64, shouldStartAudioIdleWindow 
 	}
 
 	// realtime 模式：跳过 Destroy，保持 ASR 持续运行，但清空 AudioBuffer
+	var ctx context.Context
 	if s.clientState.IsRealTime() {
 		s.clientState.AsrAudioBuffer.ClearAsrAudioData()
 	} else {
+		s.stopSpeakingMu.Lock()
+		if !s.isCurrentListenStart(startSeq) {
+			s.stopSpeakingMu.Unlock()
+			log.Debugf("OnListenStart stale before destroy, skip")
+			return nil
+		}
 		s.clientState.Destroy()
 		if !s.isCurrentListenStart(startSeq) {
+			s.stopSpeakingMu.Unlock()
 			log.Debugf("OnListenStart stale after destroy, skip")
 			return nil
 		}
+
+		s.clientState.SetListenPhase(ListenPhaseStarting)
+		s.clientState.SetStatus(ClientStatusListening)
+		ctx = s.clientState.SessionCtx.Get(s.clientState.Ctx)
+
+		// 初始化 ASR 相关状态需要与会话上下文重建保持一致。
+		if s.clientState.ListenMode == "manual" {
+			s.clientState.VoiceStatus.SetClientHaveVoice(true)
+		}
+		s.stopSpeakingMu.Unlock()
 	}
 
-	s.clientState.SetListenPhase(ListenPhaseStarting)
+	if s.clientState.IsRealTime() {
+		s.clientState.SetListenPhase(ListenPhaseStarting)
+		s.clientState.SetStatus(ClientStatusListening)
+		ctx = s.clientState.SessionCtx.Get(s.clientState.Ctx)
 
-	s.clientState.SetStatus(ClientStatusListening)
-
-	ctx := s.clientState.SessionCtx.Get(s.clientState.Ctx)
-
-	//初始化asr相关
-	if s.clientState.ListenMode == "manual" {
-		s.clientState.VoiceStatus.SetClientHaveVoice(true)
+		//初始化asr相关
+		if s.clientState.ListenMode == "manual" {
+			s.clientState.VoiceStatus.SetClientHaveVoice(true)
+		}
 	}
 
 	// 启动asr流式识别，复用 restartAsrRecognition 函数
@@ -1312,7 +1459,7 @@ func (s *ChatSession) DoExitChat() {
 	ctx := s.clientState.AfterAsrSessionCtx.Get(sessionCtx)
 
 	// 发送 TTS 再见语
-	s.ttsManager.EnqueueTtsStart(ctx)
+	s.ttsManager.EnqueueTtsStartWithReason(ctx, "ChatSession.processGoodbye")
 
 	err := s.ttsManager.handleTextResponse(ctx, llm_common.LLMResponseStruct{
 		Text:    goodbyeText,
@@ -1325,7 +1472,7 @@ func (s *ChatSession) DoExitChat() {
 	}
 
 	s.ttsManager.RequestTurnEnd(ctx, err)
-	s.ttsManager.EnqueueTtsStop(ctx)
+	s.ttsManager.EnqueueTtsStopWithReason(ctx, "ChatSession.processGoodbye")
 	// 关闭会话
 	s.CloseWithReason(chatSessionCloseReasonExplicitExit)
 }
@@ -1372,7 +1519,7 @@ func (s *ChatSession) CloseWithReason(reason string) {
 
 		// 停止说话和清理音频相关资源。Close 路径前面已经 DetachSession(true)，
 		// 这里不要再次 Suspend 媒体，否则会把 resumeOnAttach 清掉。
-		s.stopSpeakingWithLock(true, true, false)
+		s.stopSpeakingWithLock(true, true, false, "ChatSession.Close")
 
 		if s.speakerManager != nil {
 			s.speakerManager.Close()

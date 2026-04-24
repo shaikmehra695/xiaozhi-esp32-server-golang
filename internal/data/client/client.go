@@ -493,6 +493,7 @@ func (c *Ctx) ResetWithReason(reason string) {
 	c.Lock()
 	defer c.Unlock()
 	if c.ctx != nil {
+		log.Debugf("Ctx.ResetWithReason: reason=%s", reason)
 		c.cancel()
 		c.ctx = nil
 		c.cancel = nil
@@ -519,6 +520,7 @@ func (c *Ctx) CancelWithReason(reason string) {
 	c.Lock()
 	defer c.Unlock()
 	if c.ctx != nil {
+		log.Debugf("Ctx.CancelWithReason: reason=%s", reason)
 		c.cancel()
 		c.ctx = nil
 		c.cancel = nil
@@ -606,7 +608,6 @@ func (c *ClientState) Destroy() {
 	c.SetStatus(ClientStatusInit)
 	c.SetListenPhase(ListenPhaseIdle)
 	c.SetTtsStart(false)
-	c.IsWelcomePlaying = false
 }
 
 type CommandHistorySnapshot struct {
