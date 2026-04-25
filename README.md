@@ -145,7 +145,6 @@ go build -o xiaozhi_server ./cmd/server/
 
 ## 🛠️ 规划中 | Roadmap
 
-- 与设备建立长连接
 - 主动式ai
 
 ---
