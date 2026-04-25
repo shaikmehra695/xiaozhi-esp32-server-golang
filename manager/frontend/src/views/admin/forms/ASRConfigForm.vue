@@ -265,13 +265,13 @@ defineExpose({ validate, getJsonData, resetFields })
 .form-tip {
   margin-top: 8px;
   font-size: 12px;
-  color: #909399;
+  color: var(--apple-text-secondary);
   display: flex;
   align-items: center;
   gap: 4px;
 }
 .form-tip .el-icon {
   font-size: 14px;
-  color: #409eff;
+  color: var(--apple-primary);
 }
 </style>

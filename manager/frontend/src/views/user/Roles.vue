@@ -1,7 +1,6 @@
 <template>
   <div class="roles-page">
-    <div class="page-header">
-      <h2>我的角色</h2>
+    <div class="page-actions">
       <el-button type="primary" @click="showCreateDialog = true">
         <el-icon><Plus /></el-icon>
         创建角色
@@ -183,7 +182,7 @@
                   :value="voice.value"
                 >
                   <span>{{ voice.label }}</span>
-                  <span style="color: #8492a6; font-size: 13px; margin-left: 8px;">{{ voice.value }}</span>
+                  <span class="apple-option-value">{{ voice.value }}</span>
                 </el-option>
               </el-select>
               <div class="form-tip">
@@ -486,16 +485,10 @@ onMounted(() => {
   padding: 20px;
 }
 
-.page-header {
+.page-actions {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  justify-content: flex-end;
   margin-bottom: 20px;
-}
-
-.page-header h2 {
-  margin: 0;
-  color: #333;
 }
 
 .roles-grid {
@@ -510,7 +503,6 @@ onMounted(() => {
 .role-card {
   margin-bottom: 20px;
   width: 100%;
-  max-width: 440px;
   border-radius: 12px;
   border: 1px solid #ebeef5;
   transition: transform 0.2s ease, box-shadow 0.2s ease;

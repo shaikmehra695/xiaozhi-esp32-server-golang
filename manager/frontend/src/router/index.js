@@ -53,7 +53,7 @@ const routes = [
         path: '/dashboard',
         name: 'Dashboard',
         component: () => import('../views/Dashboard.vue'),
-        meta: { title: '仪表板' }
+        meta: { title: '仪表板', requiresAdmin: true }
       },
       // 管理员路由
       {
@@ -192,9 +192,8 @@ const routes = [
       // 用户路由
       {
         path: '/console',
-        name: 'UserConsole',
-        component: () => import('../views/user/UserConsole.vue'),
-        meta: { title: '用户控制台' }
+        redirect: '/agents',
+        meta: { title: '智能体工作台' }
       },
       {
         path: '/agents',
@@ -225,6 +224,12 @@ const routes = [
         name: 'AgentDevices',
         component: () => import('../views/user/AgentDevices.vue'),
         meta: { title: '智能体设备管理' }
+      },
+      {
+        path: '/user/devices',
+        name: 'UserDevices',
+        component: () => import('../views/user/AgentDevices.vue'),
+        meta: { title: '设备列表' }
       },
       {
         path: '/speakers',
@@ -302,7 +307,7 @@ router.beforeEach(async (to, from, next) => {
         next('/dashboard')
       }
     } else {
-      next('/console')
+      next('/agents')
     }
     return
   }
@@ -359,14 +364,14 @@ router.beforeEach(async (to, from, next) => {
         next('/dashboard')
       }
     } else {
-      next('/console')
+      next('/agents')
     }
     return
   }
   
-  // 如果普通用户访问管理员页面，跳转到用户控制台
+  // 如果普通用户访问管理员页面，跳转到智能体工作台
   if (to.meta.requiresAdmin && authStore.user?.role !== 'admin') {
-    next('/console')
+    next('/agents')
     return
   }
   

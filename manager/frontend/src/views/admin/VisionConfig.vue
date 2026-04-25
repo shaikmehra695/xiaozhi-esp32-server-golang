@@ -1,11 +1,5 @@
 <template>
   <div class="config-page">
-    <div class="page-header">
-      <div class="header-left">
-        <h2>Vision配置管理</h2>
-      </div>
-    </div>
-
     <!-- 基础配置部分 -->
     <el-card class="base-config-card" style="margin-bottom: 20px;">
       <template #header>
@@ -440,21 +434,9 @@ onMounted(() => {
 <style scoped>
 .config-page {
   padding: 20px;
-  background: white;
+  background: rgba(255, 255, 255, 0.88);
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.header-left h2 {
-  margin: 0;
-  color: #333;
 }
 
 .base-config-card {
