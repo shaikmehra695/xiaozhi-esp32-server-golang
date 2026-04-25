@@ -1,508 +1,498 @@
 <template>
   <div class="agent-config">
-    <div class="config-header">
-      <div class="header-left">
-        <el-button 
-          @click="$router.back()" 
-          :icon="ArrowLeft" 
-          circle 
-          size="large"
-        />
-        <h1>智能体配置</h1>
-      </div>
-      <el-button type="primary" @click="handleSave" :loading="saving" size="large">
-        保存配置
-      </el-button>
-    </div>
-
     <div class="config-content">
       <div class="config-form">
-        <!-- 角色快捷选择 -->
-        <div class="form-section quick-config-section" v-if="hasAvailableRoles">
-          <h3 class="section-title">
-            快速配置
-            <el-tooltip content="点击角色可快速应用其配置到智能体" placement="top">
-              <el-icon class="help-icon"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </h3>
-
-          <div class="role-selector role-selector-compact" v-loading="rolesLoading">
-            <div class="role-inline-line role-inline-line-compact">
-              <button
-                v-for="role in allRoles"
-                :key="role.id"
-                type="button"
-                class="role-inline-item"
-                :class="{ active: selectedRoleId === role.id }"
-                @click="applyRoleConfig(role)"
-              >
-                <span class="role-inline-name">{{ role.name }}</span>
-                <span class="role-inline-type" :class="role.role_type === 'global' ? 'global' : 'user'">
-                  {{ role.role_type === 'global' ? '全局' : '我的' }}
-                </span>
-              </button>
-            </div>
-            <div class="form-help quick-config-help">
-              角色名称已平铺展示，点击任意角色会立即填充 Prompt、LLM、TTS 和音色配置（不会自动保存）
-            </div>
-          </div>
-        </div>
-
-        <!-- 基础信息 -->
-        <div class="form-section">
-          <h3 class="section-title">基础信息</h3>
-          
-          <div class="form-group">
-            <label class="form-label">昵称</label>
-            <el-input 
-              v-model="form.name" 
-              placeholder="请输入智能体昵称" 
-              size="large"
-              :maxlength="50"
-              show-word-limit
-            />
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">角色介绍(prompt)</label>
+        <div class="form-section form-section-card">
+          <div class="config-section-header">
             <el-input
-              v-model="form.custom_prompt"
-              type="textarea"
-              :rows="4"
-              placeholder="请输入角色介绍/系统提示词，这将影响AI的回答风格和个性"
-              :maxlength="10000"
-              show-word-limit
+              v-model="form.name"
+              class="agent-title-input"
+              placeholder="未命名智能体"
+              :maxlength="50"
+              aria-label="智能体名称"
             />
+            <div class="section-role-list" v-loading="rolesLoading">
+              <div v-if="hasAvailableRoles" class="role-inline-line role-inline-line-compact">
+                <button
+                  v-for="role in allRoles"
+                  :key="role.id"
+                  type="button"
+                  class="role-inline-item"
+                  :class="{ active: selectedRoleId === role.id }"
+                  @click="applyRoleConfig(role)"
+                >
+                  <span class="role-inline-name">{{ role.name }}</span>
+                  <span class="role-inline-type" :class="role.role_type === 'global' ? 'global' : 'user'">
+                    {{ role.role_type === 'global' ? '全局' : '我的' }}
+                  </span>
+                </button>
+              </div>
+              <span v-else class="role-inline-empty">暂无可用角色</span>
+            </div>
+            <el-button class="section-save-button" type="primary" @click="handleSave" :loading="saving">
+              保存配置
+            </el-button>
+          </div>
+
+          <div class="config-columns">
+            <div class="config-column">
+              <div class="form-group">
+                <label class="form-label">智能体昵称</label>
+                <el-input
+                  v-model="form.nickname"
+                  placeholder="请输入给大模型使用的昵称，例如：小辉"
+                  size="large"
+                  :maxlength="50"
+                  show-word-limit
+                />
+                <div class="form-help">用于替换 Prompt 中的 {{assistant_name}}，让大模型知道自己叫什么。</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">角色介绍(prompt)</label>
+                <el-input
+                  v-model="form.custom_prompt"
+                  type="textarea"
+                  :rows="4"
+                  placeholder="请输入角色介绍/系统提示词，这将影响AI的回答风格和个性"
+                  :maxlength="10000"
+                  show-word-limit
+                />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">关联知识库</label>
+                <el-select
+                  v-model="form.knowledge_base_ids"
+                  multiple
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="请选择要关联的知识库（可多选）"
+                  size="large"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="kb in knowledgeBases"
+                    :key="kb.id"
+                    :label="kb.name"
+                    :value="kb.id"
+                  />
+                </el-select>
+                <div class="form-help">支持多库关联。知识库检索失败时会自动降级为普通LLM对话。</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">记忆</label>
+                <el-select v-model="form.memory_mode" placeholder="请选择记忆模式" size="large" style="width: 100%">
+                  <el-option label="无记忆" value="none" />
+                  <el-option label="短记忆" value="short" />
+                  <el-option label="长记忆" value="long" />
+                </el-select>
+                <div class="form-help">
+                  无记忆: LLM不加载历史；短记忆: 加载历史不加载长记忆；长记忆: 加载历史并加载长记忆。
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">只允许声纹聊天</label>
+                <el-select v-model="form.speaker_chat_mode" placeholder="请选择声纹聊天限制" size="large" style="width: 100%">
+                  <el-option label="关闭" value="off" />
+                  <el-option label="仅命中声纹时允许聊天" value="identified_only" />
+                </el-select>
+                <div class="form-help">
+                  智能体配置了声纹组时，可限制为只有命中已配置声纹的说话人才允许继续聊天。
+                </div>
+              </div>
+            </div>
+
+            <div class="config-column">
+              <div class="form-group">
+                <label class="form-label">语言模型</label>
+                <el-select
+                  v-model="form.llm_config_id"
+                  placeholder="请选择语言模型"
+                  size="large"
+                  style="width: 100%"
+                  clearable
+                >
+                  <el-option
+                    v-for="llmConfig in llmConfigs"
+                    :key="llmConfig.config_id"
+                    :label="llmConfig.is_default ? `${llmConfig.name} (默认)` : llmConfig.name"
+                    :value="llmConfig.config_id"
+                  >
+                    <div class="config-option">
+                      <span class="config-name">
+                        {{ llmConfig.name }}
+                        <el-tag v-if="llmConfig.is_default" type="success" size="small" style="margin-left: 8px;">默认</el-tag>
+                      </span>
+                      <span class="config-desc">{{ llmConfig.provider || '暂无描述' }}</span>
+                    </div>
+                  </el-option>
+                </el-select>
+                <div class="form-help" v-if="getCurrentLlmConfigName()">
+                  {{ getCurrentLlmConfigInfo() }}
+                </div>
+              </div>
+
+              <div class="form-group" v-if="myCloneVoices.length > 0">
+                <label class="form-label">我复刻的音色</label>
+                <div class="clone-voice-line" v-loading="cloneVoicesLoading">
+                  <button
+                    v-for="clone in myCloneVoices"
+                    :key="clone.id"
+                    type="button"
+                    class="clone-voice-item"
+                    :class="{ active: isCloneVoiceSelected(clone) }"
+                    :title="`${clone.tts_config_name || clone.tts_config_id} · ${clone.provider_voice_id}`"
+                    @click="applyCloneVoice(clone)"
+                  >
+                    <span class="clone-voice-name">{{ clone.name || clone.provider_voice_id }}</span>
+                  </button>
+                </div>
+                <div class="form-help">点击后会自动填充 TTS 配置和音色</div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">TTS配置</label>
+                <el-select
+                  v-model="form.tts_config_id"
+                  placeholder="请选择TTS配置"
+                  size="large"
+                  style="width: 100%"
+                  clearable
+                  @change="handleTtsConfigChange"
+                >
+                  <el-option
+                    v-for="ttsConfig in ttsConfigs"
+                    :key="ttsConfig.config_id"
+                    :label="ttsConfig.is_default ? `${ttsConfig.name} (默认)` : ttsConfig.name"
+                    :value="ttsConfig.config_id"
+                  >
+                    <div class="config-option">
+                      <span class="config-name">
+                        {{ ttsConfig.name }}
+                        <el-tag v-if="ttsConfig.is_default" type="success" size="small" style="margin-left: 8px;">默认</el-tag>
+                      </span>
+                      <span class="config-desc">{{ ttsConfig.provider || '暂无描述' }}</span>
+                    </div>
+                  </el-option>
+                </el-select>
+                <div class="form-help" v-if="getCurrentTtsConfigName()">
+                  {{ getCurrentTtsConfigInfo() }}
+                </div>
+              </div>
+
+              <div class="form-group" v-if="form.tts_config_id">
+                <label class="form-label">音色</label>
+                <el-select
+                  v-model="form.voice"
+                  placeholder="请选择或输入音色（支持搜索和自定义输入）"
+                  size="large"
+                  style="width: 100%"
+                  filterable
+                  allow-create
+                  default-first-option
+                  reserve-keyword
+                  clearable
+                  :loading="voiceLoading"
+                  :filter-method="filterVoice"
+                >
+                  <el-option
+                    v-for="voice in filteredVoices"
+                    :key="voice.value"
+                    :label="voice.label"
+                    :value="voice.value"
+                  >
+                    <span>{{ voice.label }}</span>
+                    <span class="apple-option-value">{{ voice.value }}</span>
+                  </el-option>
+                </el-select>
+                <div class="form-help">
+                  当前TTS配置: {{ getCurrentTtsConfigName() }}，可以搜索音色名称或值，也可以手动输入自定义音色值。
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">语音识别速度</label>
+                <el-select v-model="form.asr_speed" placeholder="请选择语音识别速度" size="large" style="width: 100%">
+                  <el-option label="正常" value="normal" />
+                  <el-option label="耐心" value="patient" />
+                  <el-option label="快速" value="fast" />
+                </el-select>
+                <div class="form-help">设置语音识别的响应速度</div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- 配置设置 -->
-        <div class="form-section">
-          <h3 class="section-title">配置设置</h3>
-          
-          <div class="form-group">
-            <label class="form-label">语言模型</label>
-            <el-select 
-              v-model="form.llm_config_id" 
-              placeholder="请选择语言模型" 
-              size="large" 
-              style="width: 100%"
-              clearable
-            >
-              <el-option
-                v-for="llmConfig in llmConfigs"
-                :key="llmConfig.config_id"
-                :label="llmConfig.is_default ? `${llmConfig.name} (默认)` : llmConfig.name"
-                :value="llmConfig.config_id"
-              >
-                <div class="config-option">
-                  <span class="config-name">
-                    {{ llmConfig.name }}
-                    <el-tag v-if="llmConfig.is_default" type="success" size="small" style="margin-left: 8px;">默认</el-tag>
-                  </span>
-                  <span class="config-desc">{{ llmConfig.provider || '暂无描述' }}</span>
+        <div class="form-section form-section-card collapsible-section">
+          <button
+            type="button"
+            class="collapsible-header"
+            :aria-expanded="mcpExpanded"
+            @click="toggleMcpPanel"
+          >
+            <div class="collapsible-heading">
+              <h3 class="section-title section-title-inline">MCP 能力</h3>
+              <div class="collapsible-summary">{{ mcpSummaryText }}</div>
+            </div>
+            <span class="collapsible-indicator" :class="{ expanded: mcpExpanded }">
+              <el-icon><ArrowDown /></el-icon>
+            </span>
+          </button>
+
+          <Transition name="panel-fade">
+            <div v-if="mcpExpanded" class="collapsible-body">
+              <div class="dialog-grid">
+                <div class="form-group form-group-compact" v-loading="mcpServiceOptionsLoading">
+                  <label class="form-label">MCP服务</label>
+                  <el-select
+                    v-model="selectedMcpServices"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    clearable
+                    size="large"
+                    style="width: 100%"
+                    placeholder="留空则使用全部已启用服务"
+                    @change="handleMcpServiceSelectionChange"
+                  >
+                    <el-option
+                      v-for="serviceName in mcpServiceOptions"
+                      :key="serviceName"
+                      :label="serviceName"
+                      :value="serviceName"
+                    />
+                  </el-select>
+                  <div class="form-help">
+                    留空表示使用全部已启用全局MCP服务，当前可选 {{ mcpServiceOptions.length }} 个服务。
+                  </div>
                 </div>
-              </el-option>
-            </el-select>
-            <div class="form-help" v-if="getCurrentLlmConfigName()">
-              {{ getCurrentLlmConfigInfo() }}
-            </div>
-          </div>
 
-          <div class="form-group" v-if="myCloneVoices.length > 0">
-            <label class="form-label">我复刻的音色</label>
-            <div class="clone-voice-line" v-loading="cloneVoicesLoading">
-              <button
-                v-for="clone in myCloneVoices"
-                :key="clone.id"
-                type="button"
-                class="clone-voice-item"
-                :class="{ active: isCloneVoiceSelected(clone) }"
-                :title="`${clone.tts_config_name || clone.tts_config_id} · ${clone.provider_voice_id}`"
-                @click="applyCloneVoice(clone)"
-              >
-                <span class="clone-voice-name">{{ clone.name || clone.provider_voice_id }}</span>
-              </button>
-            </div>
-            <div class="form-help">点击后会自动填充 TTS 配置和音色</div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">TTS配置</label>
-            <el-select 
-              v-model="form.tts_config_id" 
-              placeholder="请选择TTS配置" 
-              size="large" 
-              style="width: 100%"
-              clearable
-              @change="handleTtsConfigChange"
-            >
-              <el-option
-                v-for="ttsConfig in ttsConfigs"
-                :key="ttsConfig.config_id"
-                :label="ttsConfig.is_default ? `${ttsConfig.name} (默认)` : ttsConfig.name"
-                :value="ttsConfig.config_id"
-              >
-                <div class="config-option">
-                  <span class="config-name">
-                    {{ ttsConfig.name }}
-                    <el-tag v-if="ttsConfig.is_default" type="success" size="small" style="margin-left: 8px;">默认</el-tag>
-                  </span>
-                  <span class="config-desc">{{ ttsConfig.provider || '暂无描述' }}</span>
+                <div class="form-group form-group-compact">
+                  <label class="form-label">连接状态</label>
+                  <div class="status-panel-inline">
+                    <el-tag :type="mcpStatusTagType">{{ mcpStatusText }}</el-tag>
+                    <span class="status-panel-text">
+                      {{ mcpEndpointData.status_message || '页内可直接刷新接入点和工具列表。' }}
+                    </span>
+                  </div>
                 </div>
-              </el-option>
-            </el-select>
-            <div class="form-help" v-if="getCurrentTtsConfigName()">
-              {{ getCurrentTtsConfigInfo() }}
+              </div>
+
+              <div class="advanced-card" v-loading="mcpLoading">
+                <div class="advanced-card-header">
+                  <div class="advanced-card-copy">
+                    <strong>MCP 接入点与工具调试</strong>
+                    <p>页内直接查看接入点、刷新工具列表，并手动调试一次工具调用。</p>
+                  </div>
+                  <div class="advanced-card-actions">
+                    <el-button size="small" @click="refreshMcpDebugInfo" :loading="mcpLoading">
+                      刷新数据
+                    </el-button>
+                    <el-button size="small" type="primary" @click="copyMCPEndpoint" :disabled="!mcpEndpointData.endpoint">
+                      复制 URL
+                    </el-button>
+                  </div>
+                </div>
+
+                <div class="advanced-block">
+                  <div class="endpoint-label">MCP 接入点 URL</div>
+                  <div class="endpoint-content">
+                    {{ mcpEndpointData.endpoint || '暂无接入点，请先保存智能体并刷新。' }}
+                  </div>
+                </div>
+
+                <div class="advanced-block">
+                  <div class="tools-header">
+                    <div class="tools-title">MCP 工具列表</div>
+                    <el-button size="small" type="primary" @click="refreshMcpTools" :loading="toolsLoading">
+                      <el-icon><Refresh /></el-icon>
+                      刷新工具列表
+                    </el-button>
+                  </div>
+
+                  <div class="tools-list">
+                    <div v-if="mcpTools.length === 0" class="tools-empty">
+                      <el-tag type="info" size="large" class="tool-tag">
+                        暂无工具数据
+                      </el-tag>
+                    </div>
+
+                    <div v-else class="tools-tags">
+                      <el-tag
+                        v-for="tool in mcpTools"
+                        :key="tool.name"
+                        :type="tool.schema ? 'success' : 'info'"
+                        size="large"
+                        class="tool-tag"
+                        :title="tool.description"
+                      >
+                        {{ tool.name }}
+                        <el-tooltip
+                          v-if="tool.description"
+                          :content="tool.description"
+                          placement="top"
+                          :show-after="500"
+                        >
+                          <el-icon class="tool-info-icon"><InfoFilled /></el-icon>
+                        </el-tooltip>
+                      </el-tag>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="advanced-block">
+                  <el-form label-position="top">
+                    <el-form-item label="工具">
+                      <el-select v-model="mcpCallForm.tool_name" placeholder="请选择工具" style="width: 100%" @change="handleMcpToolChange">
+                        <el-option v-for="tool in mcpTools" :key="tool.name" :label="tool.name" :value="tool.name" />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="参数 JSON">
+                      <el-input v-model="mcpCallForm.argumentsText" type="textarea" :rows="6" placeholder='例如: {"query":"hello"}' />
+                    </el-form-item>
+                  </el-form>
+                  <el-button type="primary" @click="callAgentMcpTool" :loading="callingTool">调用工具</el-button>
+                  <div class="mcp-result-box">{{ mcpCallResult || '暂无调用结果' }}</div>
+                </div>
+              </div>
             </div>
-          </div>
+          </Transition>
+        </div>
 
-          <div class="form-group" v-if="form.tts_config_id">
-            <label class="form-label">音色</label>
-            <el-select 
-              v-model="form.voice" 
-              placeholder="请选择或输入音色（支持搜索和自定义输入）" 
-              size="large" 
-              style="width: 100%"
-              filterable
-              allow-create
-              default-first-option
-              reserve-keyword
-              clearable
-              :loading="voiceLoading"
-              :filter-method="filterVoice"
-            >
-              <el-option
-                v-for="voice in filteredVoices"
-                :key="voice.value"
-                :label="voice.label"
-                :value="voice.value"
-              >
-                <span>{{ voice.label }}</span>
-                <span style="color: #8492a6; font-size: 13px; margin-left: 8px;">{{ voice.value }}</span>
-              </el-option>
-            </el-select>
-            <div class="form-help">
-              当前TTS配置: {{ getCurrentTtsConfigName() }}，可以搜索音色名称或值，也可以手动输入自定义音色值。
+        <div class="form-section form-section-card collapsible-section">
+          <button
+            type="button"
+            class="collapsible-header"
+            :aria-expanded="openClawExpanded"
+            @click="toggleOpenClawPanel"
+          >
+            <div class="collapsible-heading">
+              <h3 class="section-title section-title-inline">OpenClaw</h3>
+              <div class="collapsible-summary">{{ openClawSummaryText }}</div>
             </div>
-          </div>
+            <span class="collapsible-indicator" :class="{ expanded: openClawExpanded }">
+              <el-icon><ArrowDown /></el-icon>
+            </span>
+          </button>
 
-          <div class="form-group">
-            <label class="form-label">关联知识库</label>
-            <el-select
-              v-model="form.knowledge_base_ids"
-              multiple
-              collapse-tags
-              collapse-tags-tooltip
-              placeholder="请选择要关联的知识库（可多选）"
-              size="large"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="kb in knowledgeBases"
-                :key="kb.id"
-                :label="kb.name"
-                :value="kb.id"
-              />
-            </el-select>
-            <div class="form-help">支持多库关联。知识库检索失败时会自动降级为普通LLM对话。</div>
-          </div>
+          <Transition name="panel-fade">
+            <div v-if="openClawExpanded" class="collapsible-body">
+              <div class="advanced-card">
+                <div class="advanced-card-header">
+                  <div class="advanced-card-copy">
+                    <strong>入口词、状态和测试都直接在页内维护</strong>
+                    <p>保存前就能检查关键词、连接状态和角色配置命令，不用再进弹窗。</p>
+                  </div>
+                  <div class="advanced-card-actions">
+                    <el-link :href="openClawDocURL" target="_blank" type="primary" :underline="false">
+                      查看文档
+                    </el-link>
+                    <el-button size="small" @click="fetchOpenClawEndpoint" :loading="openClawEndpointLoading">
+                      刷新状态
+                    </el-button>
+                    <el-button size="small" type="primary" @click="copyOpenClawCommands" :disabled="!openClawCommandData.ready">
+                      复制命令
+                    </el-button>
+                  </div>
+                </div>
 
-          <div class="form-group">
-            <label class="form-label">语音识别速度</label>
-            <el-select v-model="form.asr_speed" placeholder="请选择语音识别速度" size="large" style="width: 100%">
-              <el-option label="正常" value="normal" />
-              <el-option label="耐心" value="patient" />
-              <el-option label="快速" value="fast" />
-            </el-select>
-            <div class="form-help">设置语音识别的响应速度</div>
-          </div>
+                <div class="dialog-grid openclaw-grid">
+                  <div class="form-group form-group-compact">
+                    <label class="form-label">开关</label>
+                    <div class="toggle-row">
+                      <span>允许进入 OpenClaw 模式</span>
+                      <el-switch v-model="form.openclaw_allowed" />
+                    </div>
+                  </div>
 
-          <div class="form-group">
-            <label class="form-label">记忆</label>
-            <el-select v-model="form.memory_mode" placeholder="请选择记忆模式" size="large" style="width: 100%">
-              <el-option label="无记忆" value="none" />
-              <el-option label="短记忆" value="short" />
-              <el-option label="长记忆" value="long" />
-            </el-select>
-            <div class="form-help">
-              无记忆: LLM不加载历史；短记忆: 加载历史不加载长记忆；长记忆: 加载历史并加载长记忆。
+                  <div class="form-group form-group-compact">
+                    <label class="form-label">连接状态</label>
+                    <div class="status-panel-inline">
+                      <el-tag :type="openClawStatusTagType">{{ openClawStatusText }}</el-tag>
+                      <span class="status-panel-text">
+                        {{ openClawEndpointData.status_message || '角色配置命令会在下方实时展示。' }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="dialog-grid openclaw-grid">
+                  <div class="form-group form-group-compact">
+                    <label class="form-label">进入关键词</label>
+                    <el-select
+                      v-model="form.openclaw_enter_keywords"
+                      multiple
+                      filterable
+                      allow-create
+                      default-first-option
+                      clearable
+                      style="width: 100%"
+                      placeholder="输入后回车，可添加多个关键词"
+                    />
+                  </div>
+
+                  <div class="form-group form-group-compact">
+                    <label class="form-label">退出关键词</label>
+                    <el-select
+                      v-model="form.openclaw_exit_keywords"
+                      multiple
+                      filterable
+                      allow-create
+                      default-first-option
+                      clearable
+                      style="width: 100%"
+                      placeholder="输入后回车，可添加多个关键词"
+                    />
+                  </div>
+                </div>
+
+                <div class="advanced-block" v-loading="openClawEndpointLoading">
+                  <div class="endpoint-header">
+                    <div class="endpoint-label">OpenClaw 角色配置命令</div>
+                  </div>
+                  <div v-if="openClawCommandData.ready" class="openclaw-command-hint">在 OpenClaw 控制台角色配置中依次执行以下命令：</div>
+                  <div v-if="openClawCommandData.ready" class="openclaw-command-steps">
+                    <div
+                      v-for="(step, index) in openClawCommandData.steps"
+                      :key="`${step.title}-${index}`"
+                      class="openclaw-command-step"
+                    >
+                      <div class="openclaw-command-step-title">第 {{ index + 1 }} 行：{{ step.title }}</div>
+                      <pre class="openclaw-command-content">{{ step.command }}</pre>
+                    </div>
+                  </div>
+                  <pre v-else class="openclaw-command-content">{{ openClawCommandDisplayText }}</pre>
+                </div>
+
+                <div class="advanced-block">
+                  <div class="endpoint-header">
+                    <div class="endpoint-label">OpenClaw 对话测试</div>
+                  </div>
+                  <el-form label-position="top">
+                    <el-form-item label="测试消息">
+                      <el-input
+                        v-model="openClawChatTestForm.message"
+                        type="textarea"
+                        :rows="3"
+                        placeholder="请输入测试消息"
+                      />
+                    </el-form-item>
+                  </el-form>
+                  <el-button type="primary" @click="testOpenClawChat" :loading="openClawChatTesting">
+                    发送测试
+                  </el-button>
+                  <div class="mcp-result-box">{{ openClawChatTestResult || '暂无测试结果' }}</div>
+                </div>
+              </div>
             </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">只允许声纹聊天</label>
-            <el-select v-model="form.speaker_chat_mode" placeholder="请选择声纹聊天限制" size="large" style="width: 100%">
-              <el-option label="关闭" value="off" />
-              <el-option label="仅命中声纹时允许聊天" value="identified_only" />
-            </el-select>
-            <div class="form-help">
-              智能体配置了声纹组时，可限制为只有命中已配置声纹的说话人才允许继续聊天。
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">OpenClaw</label>
-            <el-button type="primary" size="large" style="width: 100%" @click="showOpenClawSettings">
-              查看openclaw
-            </el-button>
-            <div class="form-help">
-              已配置: {{ form.openclaw_allowed ? '开启' : '关闭' }}，进入词 {{ form.openclaw_enter_keywords.length }} 个，退出词 {{ form.openclaw_exit_keywords.length }} 个。
-            </div>
-          </div>
-
-          <div class="form-group" v-loading="mcpServiceOptionsLoading">
-            <label class="form-label">MCP服务</label>
-            <el-select
-              v-model="selectedMcpServices"
-              multiple
-              filterable
-              collapse-tags
-              collapse-tags-tooltip
-              clearable
-              size="large"
-              style="width: 100%"
-              placeholder="留空则使用全部已启用服务"
-              @change="handleMcpServiceSelectionChange"
-            >
-              <el-option
-                v-for="serviceName in mcpServiceOptions"
-                :key="serviceName"
-                :label="serviceName"
-                :value="serviceName"
-              />
-            </el-select>
-            <div class="form-help">
-              留空表示使用全部已启用全局MCP服务，当前可选 {{ mcpServiceOptions.length }} 个服务。
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">MCP接入点</label>
-            <el-button 
-              type="primary" 
-              @click="showMCPEndpoint" 
-              size="large"
-              style="width: 100%"
-            >
-              查看MCP接入点
-            </el-button>
-            <div class="form-help">获取智能体的MCP WebSocket接入点URL，可用于设备连接</div>
-          </div>
+          </Transition>
         </div>
       </div>
     </div>
-
-    <!-- MCP接入点对话框 -->
-    <el-dialog
-      v-model="showMCPDialog"
-      title="MCP接入点"
-      width="700px"
-    >
-      <div v-loading="mcpLoading">
-        <!-- 工具列表区域 -->
-        <div class="mcp-tools-section">
-          <div class="tools-header">
-            <div class="tools-title">MCP工具列表</div>
-            <el-button 
-              size="small" 
-              type="primary" 
-              @click="refreshMcpTools"
-              :loading="toolsLoading"
-            >
-              <el-icon><Refresh /></el-icon>
-              刷新工具列表
-            </el-button>
-          </div>
-          
-          <div class="tools-list">
-            <div v-if="mcpTools.length === 0" class="tools-empty">
-              <el-tag type="info" size="large" class="tool-tag">
-                暂无工具数据
-              </el-tag>
-            </div>
-            
-            <div v-else class="tools-tags">
-              <el-tag
-                v-for="tool in mcpTools"
-                :key="tool.name"
-                :type="tool.schema ? 'success' : 'info'"
-                size="large"
-                class="tool-tag"
-                :title="tool.description"
-              >
-                {{ tool.name }}
-                <el-tooltip
-                  v-if="tool.description"
-                  :content="tool.description"
-                  placement="top"
-                  :show-after="500"
-                >
-                  <el-icon class="tool-info-icon"><InfoFilled /></el-icon>
-                </el-tooltip>
-              </el-tag>
-            </div>
-          </div>
-        </div>
-
-        <el-alert
-          title="接入点信息"
-          description="这是智能体的MCP WebSocket接入点URL，可用于设备连接"
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 20px; margin-top: 24px;"
-        />
-        
-        <div class="mcp-endpoint-display">
-          <div class="endpoint-header">
-            <div class="endpoint-label">MCP接入点URL：</div>
-            <el-button size="small" type="primary" @click="copyMCPEndpoint">复制URL</el-button>
-          </div>
-          <div class="endpoint-content">
-            {{ mcpEndpointData.endpoint }}
-          </div>
-        </div>
-
-        <el-divider />
-        <el-form :model="mcpCallForm" label-width="90px">
-          <el-form-item label="工具">
-            <el-select v-model="mcpCallForm.tool_name" placeholder="请选择工具" style="width: 100%" @change="handleMcpToolChange">
-              <el-option v-for="tool in mcpTools" :key="tool.name" :label="tool.name" :value="tool.name" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="参数JSON">
-            <el-input v-model="mcpCallForm.argumentsText" type="textarea" :rows="6" placeholder='例如: {"query":"hello"}' />
-          </el-form-item>
-        </el-form>
-        <el-button type="primary" @click="callAgentMcpTool" :loading="callingTool">调用工具</el-button>
-        <div class="mcp-result-box">{{ mcpCallResult || '暂无调用结果' }}</div>
-      </div>
-
-      <template #footer>
-        <el-button @click="showMCPDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="showOpenClawDialog"
-      title="OpenClaw设置"
-      width="680px"
-    >
-      <div>
-        <div class="openclaw-tip-row">
-          <span class="openclaw-tip-title">接入tips</span>
-          <el-tooltip effect="light" placement="top-start" :show-after="200" :enterable="true" popper-class="openclaw-tip-popper">
-            <template #content>
-              <div class="openclaw-tip-content">
-                <div>架构：设备语音 -> 服务端路由 -> OpenClaw 会话 -> xiaozhi 插件。</div>
-                <div>角色配置：在 OpenClaw 控制台角色配置中使用下方四条命令，最后执行 `openclaw gateway restart` 使配置生效。</div>
-                <div>进入逻辑：命中进入词（默认“打开龙虾/进入龙虾”）后进入 OpenClaw 模式，后续文本优先走 OpenClaw。</div>
-                <div>退出逻辑：在 OpenClaw 模式下命中退出词（默认“关闭龙虾/退出龙虾”）即退出，恢复普通 LLM 对话。</div>
-                <el-link :href="openClawDocURL" target="_blank" type="primary" :underline="false">
-                  查看完整文档
-                </el-link>
-              </div>
-            </template>
-            <el-icon class="openclaw-tip-icon"><QuestionFilled /></el-icon>
-          </el-tooltip>
-        </div>
-
-        <el-form label-width="100px">
-          <el-form-item label="开关">
-            <el-switch v-model="form.openclaw_allowed" />
-          </el-form-item>
-          <el-form-item label="进入关键词">
-            <el-select
-              v-model="form.openclaw_enter_keywords"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              clearable
-              style="width: 100%"
-              placeholder="输入后回车，可添加多个关键词"
-            />
-          </el-form-item>
-          <el-form-item label="退出关键词">
-            <el-select
-              v-model="form.openclaw_exit_keywords"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              clearable
-              style="width: 100%"
-              placeholder="输入后回车，可添加多个关键词"
-            />
-          </el-form-item>
-        </el-form>
-
-        <el-divider />
-
-        <div v-loading="openClawEndpointLoading">
-          <div class="openclaw-status-bar">
-            <div class="endpoint-label">连接状态：</div>
-            <el-tag :type="openClawStatusTagType">{{ openClawStatusText }}</el-tag>
-          </div>
-          <div v-if="openClawEndpointData.status_message" class="openclaw-status-message">
-            {{ openClawEndpointData.status_message }}
-          </div>
-          <div class="mcp-endpoint-display">
-            <div class="endpoint-header">
-              <div class="endpoint-label">OpenClaw角色配置命令：</div>
-              <div class="endpoint-actions">
-                <el-button size="small" @click="fetchOpenClawEndpoint" :loading="openClawEndpointLoading">刷新</el-button>
-                <el-button size="small" type="primary" @click="copyOpenClawCommands" :disabled="!openClawCommandData.ready">复制命令</el-button>
-              </div>
-            </div>
-            <div v-if="openClawCommandData.ready" class="openclaw-command-hint">在 OpenClaw 控制台角色配置中依次执行以下命令：</div>
-            <div v-if="openClawCommandData.ready" class="openclaw-command-steps">
-              <div
-                v-for="(step, index) in openClawCommandData.steps"
-                :key="`${step.title}-${index}`"
-                class="openclaw-command-step"
-              >
-                <div class="openclaw-command-step-title">第 {{ index + 1 }} 行：{{ step.title }}</div>
-                <pre class="openclaw-command-content">{{ step.command }}</pre>
-              </div>
-            </div>
-            <pre v-else class="openclaw-command-content">{{ openClawCommandDisplayText }}</pre>
-          </div>
-        </div>
-
-        <el-divider />
-        <el-alert
-          title="对话测试"
-          description="向openclaw发送一条文本，验证连通与回复。"
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 12px"
-        />
-        <el-form label-width="100px">
-          <el-form-item label="测试消息">
-            <el-input
-              v-model="openClawChatTestForm.message"
-              type="textarea"
-              :rows="3"
-              placeholder="请输入测试消息"
-            />
-          </el-form-item>
-        </el-form>
-        <el-button
-          type="primary"
-          @click="testOpenClawChat"
-          :loading="openClawChatTesting"
-        >
-          发送测试
-        </el-button>
-        <div class="mcp-result-box">{{ openClawChatTestResult || '暂无测试结果' }}</div>
-      </div>
-      <template #footer>
-        <el-button @click="showOpenClawDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -510,7 +500,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, VideoPlay, Refresh, InfoFilled, QuestionFilled } from '@element-plus/icons-vue'
+import { ArrowDown, Refresh, InfoFilled } from '@element-plus/icons-vue'
 import api from '@/utils/api'
 import { postJSONWithSSE } from '@/utils/sse'
 import { buildOpenClawCommands } from '@/utils/openclaw'
@@ -535,11 +525,13 @@ const allRoles = computed(() => {
 const hasAvailableRoles = computed(() => allRoles.value.length > 0)
 const OPENCLAW_DEFAULT_ENTER_KEYWORDS = ['打开龙虾', '进入龙虾']
 const OPENCLAW_DEFAULT_EXIT_KEYWORDS = ['关闭龙虾', '退出龙虾']
+const MAX_VISIBLE_VOICE_OPTIONS = 80
 const openClawDocURL = 'https://github.com/hackers365/xiaozhi-esp32-server-golang/blob/main/doc/openclaw_integration.md'
 
 // 表单数据
 const form = reactive({
   name: '',
+  nickname: '',
   custom_prompt: '',
   llm_config_id: null,
   tts_config_id: null,
@@ -585,19 +577,23 @@ const cloneVoicesLoading = ref(false)
 const mcpServiceOptions = ref([])
 const selectedMcpServices = ref([])
 const mcpServiceOptionsLoading = ref(false)
+const mcpExpanded = ref(false)
+const mcpDebugLoaded = ref(false)
+const openClawExpanded = ref(false)
 
 // MCP接入点相关
-const showMCPDialog = ref(false)
 const mcpLoading = ref(false)
 const mcpEndpointData = ref({
-  endpoint: ''
+  endpoint: '',
+  connected: false,
+  status: 'unknown',
+  status_message: ''
 })
 const toolsLoading = ref(false)
 const mcpTools = ref([])
 const callingTool = ref(false)
 const mcpCallResult = ref('')
 const mcpCallForm = ref({ tool_name: '', argumentsText: '{}' })
-const showOpenClawDialog = ref(false)
 const openClawEndpointLoading = ref(false)
 const openClawEndpointData = ref({
   endpoint: '',
@@ -609,6 +605,18 @@ const openClawChatTesting = ref(false)
 const openClawChatTestResult = ref('')
 const openClawChatTestForm = ref({
   message: ''
+})
+const mcpStatusText = computed(() => {
+  const status = String(mcpEndpointData.value.status || '').toLowerCase()
+  if (status === 'online') return '已连接'
+  if (status === 'offline') return '未连接'
+  return '状态未知'
+})
+const mcpStatusTagType = computed(() => {
+  const status = String(mcpEndpointData.value.status || '').toLowerCase()
+  if (status === 'online') return 'success'
+  if (status === 'offline') return 'danger'
+  return 'info'
 })
 const openClawStatusText = computed(() => {
   const status = String(openClawEndpointData.value.status || '').toLowerCase()
@@ -628,6 +636,23 @@ const openClawCommandDisplayText = computed(() => {
     return openClawCommandData.value.copyText
   }
   return '暂无安装命令，请刷新后重试。'
+})
+const mcpSummaryText = computed(() => {
+  const serviceSummary = selectedMcpServices.value.length > 0
+    ? `已选 ${selectedMcpServices.value.length} 个服务`
+    : '使用全局服务'
+  const toolSummary = mcpTools.value.length > 0
+    ? `${mcpTools.value.length} 个工具`
+    : '暂无工具'
+  return `${serviceSummary} · ${toolSummary} · ${mcpStatusText.value}`
+})
+const openClawSummaryText = computed(() => {
+  const keywordCount = normalizeKeywordList([
+    ...(form.openclaw_enter_keywords || []),
+    ...(form.openclaw_exit_keywords || [])
+  ]).length
+  const enabledText = form.openclaw_allowed ? '已开启' : '未开启'
+  return `${enabledText} · ${keywordCount} 个关键词 · ${openClawStatusText.value}`
 })
 
 // 加载LLM配置
@@ -660,10 +685,11 @@ const loadAgent = async () => {
     const response = await api.get(`/user/agents/${route.params.id}`)
     const agent = response.data.data
     const openclawConfig = parseOpenClawConfigFromAgent(agent)
-    
+
     // 映射基本字段
     Object.assign(form, {
       name: agent.name || '',
+      nickname: agent.nickname || '',
       custom_prompt: agent.custom_prompt || '',
       asr_speed: agent.asr_speed || 'normal',
       voice: agent.voice || null,
@@ -677,13 +703,13 @@ const loadAgent = async () => {
     })
     selectedMcpServices.value = normalizeMcpServiceNames((form.mcp_service_names || '').split(','))
     syncMcpServiceNamesToForm()
-    
+
     // 处理LLM配置关联
-    const hasValidLlmConfigId = agent.llm_config_id && 
-                               agent.llm_config_id !== '' && 
-                               agent.llm_config_id !== 'null' && 
+    const hasValidLlmConfigId = agent.llm_config_id &&
+                               agent.llm_config_id !== '' &&
+                               agent.llm_config_id !== 'null' &&
                                agent.llm_config_id !== 'undefined'
-    
+
     if (hasValidLlmConfigId) {
       // 验证config_id是否在可用配置中
       const llmConfig = llmConfigs.value.find(config => config.config_id === agent.llm_config_id)
@@ -709,13 +735,13 @@ const loadAgent = async () => {
         console.warn(`❌ 没有找到默认LLM配置`)
       }
     }
-    
+
     // 处理TTS配置关联
-    const hasValidTtsConfigId = agent.tts_config_id && 
-                               agent.tts_config_id !== '' && 
-                               agent.tts_config_id !== 'null' && 
+    const hasValidTtsConfigId = agent.tts_config_id &&
+                               agent.tts_config_id !== '' &&
+                               agent.tts_config_id !== 'null' &&
                                agent.tts_config_id !== 'undefined'
-    
+
     if (hasValidTtsConfigId) {
       // 验证config_id是否在可用配置中
       const ttsConfig = ttsConfigs.value.find(config => config.config_id === agent.tts_config_id)
@@ -884,12 +910,6 @@ const copyOpenClawCommands = async () => {
     console.error('复制 OpenClaw 角色配置命令失败:', error)
     ElMessage.error('复制失败，请手动复制')
   }
-}
-
-const showOpenClawSettings = async () => {
-  showOpenClawDialog.value = true
-  openClawChatTestResult.value = ''
-  await fetchOpenClawEndpoint()
 }
 
 const formatOpenClawChatResult = (reply, latency) => {
@@ -1115,16 +1135,23 @@ const handleSave = async () => {
   }
 
   if (!form.name.trim()) {
+    ElMessage.error('请输入智能体名称')
+    return
+  }
+
+  if (!form.nickname.trim()) {
     ElMessage.error('请输入智能体昵称')
     return
   }
-  
+
   try {
     saving.value = true
     syncMcpServiceNamesToForm()
 
     const payload = {
       ...form,
+      name: form.name.trim(),
+      nickname: form.nickname.trim(),
       openclaw: {
         allowed: !!form.openclaw_allowed,
         enter_keywords: normalizeKeywordList(form.openclaw_enter_keywords),
@@ -1136,7 +1163,7 @@ const handleSave = async () => {
     delete payload.openclaw_exit_keywords
 
     await api.put(`/user/agents/${route.params.id}`, payload)
-    
+
     ElMessage.success('保存成功')
     router.push('/user/agents')
   } catch (error) {
@@ -1161,7 +1188,7 @@ const getCurrentLlmConfigInfo = () => {
   if (!form.llm_config_id) return ''
   const config = llmConfigs.value.find(c => c.config_id === form.llm_config_id)
   if (!config) return ''
-  
+
   if (config.is_default) {
     return `当前使用默认LLM配置: ${config.name}`
   } else {
@@ -1181,7 +1208,7 @@ const getCurrentTtsConfigInfo = () => {
   if (!form.tts_config_id) return ''
   const config = ttsConfigs.value.find(c => c.config_id === form.tts_config_id)
   if (!config) return ''
-  
+
   if (config.is_default) {
     return `当前使用默认TTS配置: ${config.name}`
   } else {
@@ -1198,7 +1225,7 @@ const autoSelectDefaultConfigs = () => {
       form.llm_config_id = defaultLlmConfig.config_id
     }
   }
-  
+
   // 选择默认TTS配置
   if (!form.tts_config_id && ttsConfigs.value.length > 0) {
     const defaultTtsConfig = ttsConfigs.value.find(config => config.is_default)
@@ -1208,25 +1235,66 @@ const autoSelectDefaultConfigs = () => {
   }
 }
 
-// 显示MCP接入点
-const showMCPEndpoint = async () => {
-  showMCPDialog.value = true
+const loadMcpEndpoint = async ({ showError = false } = {}) => {
+  try {
+    const response = await api.get(`/user/agents/${route.params.id}/mcp-endpoint`)
+    const data = response.data.data || {}
+    const connected = !!data.connected
+    const status = String(data.status || '').trim().toLowerCase()
+    mcpEndpointData.value = {
+      endpoint: data.endpoint || '',
+      connected,
+      status: status || (connected ? 'online' : 'offline'),
+      status_message: typeof data.status_message === 'string' ? data.status_message : ''
+    }
+    return true
+  } catch (error) {
+    if (showError) {
+      ElMessage.error('获取MCP接入点失败')
+    }
+    console.error('Error getting MCP endpoint:', error)
+    mcpEndpointData.value = {
+      endpoint: '',
+      connected: false,
+      status: 'unknown',
+      status_message: error.response?.data?.error || ''
+    }
+    return false
+  }
+}
+
+const refreshMcpDebugInfo = async () => {
   mcpLoading.value = true
   mcpCallResult.value = ""
   mcpCallForm.value = { tool_name: "", argumentsText: "{}" }
-  
+
   try {
-    const response = await api.get(`/user/agents/${route.params.id}/mcp-endpoint`)
-    mcpEndpointData.value = response.data.data
-    
-    // 获取工具列表
-    await refreshMcpTools()
+    const endpointLoaded = await loadMcpEndpoint({ showError: true })
+    if (endpointLoaded) {
+      await refreshMcpTools()
+      mcpDebugLoaded.value = true
+    } else {
+      mcpTools.value = []
+    }
   } catch (error) {
-    ElMessage.error('获取MCP接入点失败')
-    console.error('Error getting MCP endpoint:', error)
-    showMCPDialog.value = false
+    console.error('Error refreshing MCP debug info:', error)
+    mcpTools.value = []
   } finally {
     mcpLoading.value = false
+  }
+}
+
+const toggleMcpPanel = async () => {
+  mcpExpanded.value = !mcpExpanded.value
+  if (mcpExpanded.value && !mcpDebugLoaded.value && route.params.id) {
+    await refreshMcpDebugInfo()
+  }
+}
+
+const toggleOpenClawPanel = async () => {
+  openClawExpanded.value = !openClawExpanded.value
+  if (openClawExpanded.value && route.params.id && !openClawEndpointData.value.endpoint && !openClawEndpointLoading.value) {
+    await fetchOpenClawEndpoint()
   }
 }
 
@@ -1385,6 +1453,10 @@ const callAgentMcpTool = async () => {
 
 // 复制MCP接入点URL
 const copyMCPEndpoint = async () => {
+  if (!mcpEndpointData.value.endpoint) {
+    ElMessage.warning('暂无可复制的 MCP 接入点')
+    return
+  }
   try {
     await navigator.clipboard.writeText(mcpEndpointData.value.endpoint)
     ElMessage.success('MCP接入点URL已复制到剪贴板')
@@ -1402,7 +1474,7 @@ const handleTtsConfigChange = async () => {
     const prevConfig = ttsConfigs.value.find(config => config.config_id === previousTtsConfigId.value)
     previousProvider = prevConfig?.provider
   }
-  
+
   if (!form.tts_config_id) {
     availableVoices.value = []
     filteredVoices.value = []
@@ -1410,7 +1482,7 @@ const handleTtsConfigChange = async () => {
     previousTtsConfigId.value = null
     return
   }
-  
+
   // 获取当前TTS配置的provider
   const ttsConfig = ttsConfigs.value.find(config => config.config_id === form.tts_config_id)
   if (!ttsConfig || !ttsConfig.provider) {
@@ -1420,15 +1492,15 @@ const handleTtsConfigChange = async () => {
     previousTtsConfigId.value = form.tts_config_id
     return
   }
-  
+
   // 如果provider发生变化，清空当前的voice值
   if (previousProvider && previousProvider !== ttsConfig.provider) {
     form.voice = null
   }
-  
+
   // 加载音色列表
   await loadVoices(ttsConfig.provider)
-  
+
   // 如果当前voice值在新列表中不存在，也清空它
   if (form.voice && availableVoices.value.length > 0) {
     const voiceExists = availableVoices.value.some(v => v.value === form.voice)
@@ -1436,25 +1508,38 @@ const handleTtsConfigChange = async () => {
       form.voice = null
     }
   }
-  
+
   // 更新previousTtsConfigId
   previousTtsConfigId.value = form.tts_config_id
 }
 
 // 音色搜索过滤函数
+const limitVoiceOptions = (voices) => {
+  const list = Array.isArray(voices) ? voices : []
+  const visible = list.slice(0, MAX_VISIBLE_VOICE_OPTIONS)
+  if (form.voice && !visible.some(voice => voice.value === form.voice)) {
+    const selected = list.find(voice => voice.value === form.voice)
+    if (selected) {
+      visible.unshift(selected)
+    }
+  }
+  return visible
+}
+
 const filterVoice = (val) => {
   voiceSearchKeyword.value = val
   if (!val) {
-    filteredVoices.value = availableVoices.value
+    filteredVoices.value = limitVoiceOptions(availableVoices.value)
     return
   }
-  
+
   const keyword = val.toLowerCase()
-  filteredVoices.value = availableVoices.value.filter(voice => {
+  const matchedVoices = availableVoices.value.filter(voice => {
     // 同时搜索 label 和 value
-    return voice.label.toLowerCase().includes(keyword) || 
+    return voice.label.toLowerCase().includes(keyword) ||
            voice.value.toLowerCase().includes(keyword)
   })
+  filteredVoices.value = limitVoiceOptions(matchedVoices)
 }
 
 // 加载音色列表
@@ -1464,7 +1549,7 @@ const loadVoices = async (provider) => {
     filteredVoices.value = []
     return
   }
-  
+
   voiceLoading.value = true
   try {
     const params = { provider }
@@ -1474,7 +1559,7 @@ const loadVoices = async (provider) => {
     }
     const response = await api.get('/user/voice-options', { params })
     availableVoices.value = response.data.data || []
-    filteredVoices.value = availableVoices.value
+    filteredVoices.value = limitVoiceOptions(availableVoices.value)
   } catch (error) {
     console.error('加载音色列表失败:', error)
     availableVoices.value = []
@@ -1493,11 +1578,15 @@ onMounted(async () => {
     loadKnowledgeBases(),
     loadMyCloneVoices()
   ])
-  
+
   if (route.params.id) {
     // 编辑现有智能体，加载智能体数据
     await loadAgent()
-    await loadMcpServiceOptions()
+    await Promise.all([
+      loadMcpServiceOptions(),
+      fetchOpenClawEndpoint(),
+      loadMcpEndpoint({ showError: false })
+    ])
     // 如果已有TTS配置，加载对应的音色列表
     if (form.tts_config_id) {
       previousTtsConfigId.value = form.tts_config_id
@@ -1519,87 +1608,105 @@ onMounted(async () => {
 
 <style scoped>
 .agent-config {
-  min-height: 100vh;
-  background: #f8fafc;
-  padding: 24px;
-}
-
-.config-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 32px;
-  background: white;
-  padding: 20px 24px;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.header-left h1 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-  color: #1f2937;
+  min-height: 100%;
+  padding: 8px 0 24px;
+  overscroll-behavior: contain;
 }
 
 .config-content {
-  max-width: 800px;
+  max-width: 1360px;
   margin: 0 auto;
 }
 
 .config-form {
-  background: white;
-  border-radius: 12px;
-  padding: 32px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 4px 0 24px;
 }
 
 .form-section {
   margin-bottom: 40px;
   padding-bottom: 32px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid rgba(229, 229, 234, 0.78);
 }
 
-.quick-config-section {
+.form-section-card {
   margin-bottom: 24px;
-  padding-bottom: 18px;
+  padding: 24px;
+  border: 1px solid rgba(229, 229, 234, 0.78);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
+  border-bottom: none;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
 }
 
-/* 角色选择器相关样式 */
-.help-icon {
-  margin-left: 8px;
-  font-size: 16px;
-  color: #909399;
-  cursor: help;
-}
-
-.role-selector {
+.config-section-header {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 
-.role-selector-compact {
-  gap: 8px;
+.agent-title-input {
+  flex: 0 1 260px;
+  width: min(260px, 28vw);
 }
 
+.agent-title-input :deep(.el-input__wrapper) {
+  min-height: 42px;
+  padding: 0 4px 7px 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  border-bottom: 2px solid rgba(0, 122, 255, 0.36);
+}
+
+.agent-title-input :deep(.el-input__wrapper.is-focus) {
+  box-shadow: none;
+  border-bottom-color: rgba(0, 122, 255, 0.78);
+}
+
+.agent-title-input :deep(.el-input__inner) {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--apple-text);
+  letter-spacing: -0.02em;
+}
+
+.section-role-list {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.section-role-list .role-inline-line {
+  min-width: 0;
+  flex: 1;
+}
+
+.role-inline-empty {
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.section-save-button {
+  flex: none;
+}
+
+/* 角色快捷选择 */
 .role-inline-line {
   display: flex;
   flex-wrap: nowrap;
   gap: 10px;
   overflow-x: auto;
-  padding: 4px 2px 6px;
+  padding: 2px 2px 4px;
 }
 
 .role-inline-line-compact {
   gap: 8px;
-  padding: 2px 0;
+  padding: 0 0 2px;
 }
 
 .role-inline-line::-webkit-scrollbar {
@@ -1607,7 +1714,7 @@ onMounted(async () => {
 }
 
 .role-inline-line::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: rgba(148, 163, 184, 0.72);
   border-radius: 999px;
 }
 
@@ -1617,24 +1724,24 @@ onMounted(async () => {
   gap: 8px;
   white-space: nowrap;
   padding: 6px 10px;
-  border: 1px solid #d1d5db;
+  border: 1px solid rgba(229, 229, 234, 0.9);
   border-radius: 999px;
   background: #fff;
-  color: #374151;
+  color: var(--apple-text);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 .role-inline-item:hover {
-  border-color: #93c5fd;
+  border-color: rgba(0, 122, 255, 0.28);
   background: #f8fbff;
 }
 
 .role-inline-item.active {
-  border-color: #3b82f6;
-  background: #eff6ff;
-  color: #1d4ed8;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15);
+  border-color: rgba(0, 122, 255, 0.42);
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--apple-primary);
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.08);
 }
 
 .role-inline-name {
@@ -1670,11 +1777,26 @@ onMounted(async () => {
 .section-title {
   font-size: 18px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--apple-text);
   margin: 0 0 24px 0;
   padding-bottom: 8px;
-  border-bottom: 2px solid #3b82f6;
+  border-bottom: 2px solid rgba(0, 122, 255, 0.36);
   display: inline-block;
+}
+
+.section-title-inline {
+  margin: 0;
+}
+
+.config-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px;
+  align-items: start;
+}
+
+.config-column {
+  min-width: 0;
 }
 
 .form-group {
@@ -1689,18 +1811,14 @@ onMounted(async () => {
   display: block;
   font-size: 14px;
   font-weight: 600;
-  color: #374151;
+  color: var(--apple-text);
   margin-bottom: 8px;
 }
 
 .form-help {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary);
   margin-top: 4px;
-}
-
-.quick-config-help {
-  margin-top: 2px;
 }
 
 .clone-voice-line {
@@ -1715,26 +1833,26 @@ onMounted(async () => {
   max-width: 220px;
   min-width: 0;
   padding: 4px 10px;
-  border: 1px solid #d1d5db;
+  border: 1px solid rgba(229, 229, 234, 0.9);
   border-radius: 999px;
   background: #f8fafc;
-  color: #374151;
+  color: var(--apple-text);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
   line-height: 1.2;
   outline: none;
 }
 
 .clone-voice-item:hover {
-  border-color: #93c5fd;
+  border-color: rgba(0, 122, 255, 0.28);
   background: #f1f7ff;
 }
 
 .clone-voice-item.active {
-  border-color: #3b82f6;
-  background: #e9f2ff;
-  color: #1d4ed8;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1);
+  border-color: rgba(0, 122, 255, 0.42);
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--apple-primary);
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.08);
 }
 
 .clone-voice-name {
@@ -1746,93 +1864,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.switch-group {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.switch-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  background: #f9fafb;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-}
-
-.switch-item span {
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-}
-
-.template-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-}
-
-.template-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 20px 16px;
-  border: 2px solid #e5e7eb;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  background: #fafafa;
-}
-
-.template-card:hover {
-  border-color: #3b82f6;
-  background: #f0f9ff;
-}
-
-.template-card.active {
-  border-color: #3b82f6;
-  background: #eff6ff;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.template-icon {
-  font-size: 32px;
-  margin-bottom: 8px;
-}
-
-.template-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-  text-align: center;
-}
-
-
-
-.memory-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.memory-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px;
-  background: #f9fafb;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-}
-
-.memory-item span {
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-}
-
 .config-option {
   display: flex;
   flex-direction: column;
@@ -1841,17 +1872,173 @@ onMounted(async () => {
 
 .config-name {
   font-weight: 500;
-  color: #374151;
+  color: var(--apple-text);
 }
 
 .config-desc {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary);
 }
 
-/* MCP工具列表相关样式 */
-.mcp-tools-section {
-  margin-bottom: 24px;
+.form-group-compact {
+  margin-bottom: 0;
+}
+
+.collapsible-section {
+  overflow: hidden;
+  contain: layout paint;
+}
+
+.collapsible-header {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.collapsible-heading {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.collapsible-summary {
+  color: var(--apple-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.collapsible-indicator {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.78);
+  color: var(--apple-text-secondary);
+  transition: transform 0.2s ease, color 0.2s ease, background 0.2s ease;
+  flex-shrink: 0;
+}
+
+.collapsible-indicator.expanded {
+  transform: rotate(180deg);
+  color: var(--apple-primary);
+  background: rgba(0, 122, 255, 0.08);
+}
+
+.collapsible-body {
+  display: grid;
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.panel-fade-enter-active,
+.panel-fade-leave-active {
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.panel-fade-enter-from,
+.panel-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.advanced-card {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(229, 229, 234, 0.78);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 520px;
+}
+
+.advanced-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.advanced-card-copy strong {
+  display: block;
+  color: var(--apple-text);
+  margin-bottom: 6px;
+}
+
+.advanced-card-copy p {
+  margin: 0;
+  color: var(--apple-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.advanced-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.advanced-block {
+  padding-top: 18px;
+  border-top: 1px solid rgba(229, 229, 234, 0.78);
+}
+
+.dialog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.openclaw-grid {
+  align-items: start;
+}
+
+.toggle-row {
+  min-height: 48px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+}
+
+.toggle-row span {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--apple-text);
+}
+
+.status-panel-inline {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+}
+
+.status-panel-text {
+  font-size: 12px;
+  color: var(--apple-text-secondary);
+  line-height: 1.5;
 }
 
 .tools-header {
@@ -1864,7 +2051,7 @@ onMounted(async () => {
 .tools-title {
   font-size: 16px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--apple-text);
 }
 
 .tools-list {
@@ -1895,7 +2082,7 @@ onMounted(async () => {
 .tool-info-icon {
   margin-left: 6px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--apple-text-secondary);
   cursor: help;
 }
 
@@ -1908,86 +2095,6 @@ onMounted(async () => {
   border-radius: 8px;
   padding: 10px;
   min-height: 80px;
-}
-
-.mcp-endpoint-display {
-  margin: 20px 0;
-}
-
-.openclaw-status-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.openclaw-status-message {
-  margin-bottom: 12px;
-  color: #6b7280;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.openclaw-tip-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.openclaw-tip-title {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-.openclaw-tip-icon {
-  font-size: 16px;
-  color: #1d4ed8;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  border-radius: 999px;
-  padding: 2px;
-  cursor: help;
-  transition: all 0.2s ease;
-}
-
-.openclaw-tip-icon:hover {
-  color: #1e40af;
-  background: #dbeafe;
-  border-color: #93c5fd;
-}
-
-.openclaw-tip-content {
-  max-width: 420px;
-  color: #111827;
-  font-size: 12px;
-  line-height: 1.7;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.openclaw-tip-content code {
-  background: #f3f4f6;
-  border-radius: 4px;
-  padding: 0 4px;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-}
-
-:deep(.openclaw-tip-popper) {
-  max-width: 460px;
-  background: #ffffff !important;
-  border: 1px solid #dbeafe !important;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12) !important;
-}
-
-:deep(.openclaw-tip-popper .el-popper__arrow::before) {
-  background: #ffffff !important;
-  border: 1px solid #dbeafe !important;
-}
-
-:deep(.openclaw-tip-popper .el-link) {
-  color: #2563eb !important;
 }
 
 .endpoint-header {
@@ -2003,22 +2110,16 @@ onMounted(async () => {
   margin-bottom: 0;
 }
 
-.endpoint-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .endpoint-label {
   font-size: 14px;
   font-weight: 500;
-  color: #374151;
+  color: var(--apple-text);
   margin-bottom: 8px;
 }
 
 .openclaw-command-hint {
   margin-bottom: 8px;
-  color: #6b7280;
+  color: var(--apple-text-secondary);
   font-size: 12px;
 }
 
@@ -2030,7 +2131,7 @@ onMounted(async () => {
 
 .openclaw-command-step-title {
   margin-bottom: 6px;
-  color: #374151;
+  color: var(--apple-text);
   font-size: 13px;
   font-weight: 500;
 }
@@ -2064,33 +2165,62 @@ onMounted(async () => {
   align-items: center;
 }
 
+@media (max-width: 1080px) {
+  .config-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 768px) {
   .agent-config {
-    padding: 16px;
+    padding: 0 0 16px;
   }
-  
-  .config-header {
-    flex-direction: column;
-    gap: 16px;
-    align-items: stretch;
-  }
-  
-  .header-left {
-    justify-content: center;
-  }
-  
+
   .config-form {
-    padding: 24px 16px;
+    padding: 0 0 16px;
   }
-  
-  .template-grid {
-    grid-template-columns: repeat(2, 1fr);
+
+  .form-section-card {
+    padding: 20px;
+    border-radius: 24px;
   }
-  
-  .memory-item {
+
+  .config-columns {
+    gap: 20px;
+  }
+
+  .config-section-header {
     flex-direction: column;
-    gap: 12px;
     align-items: stretch;
+    gap: 12px;
+  }
+
+  .agent-title-input {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .section-save-button {
+    width: 100%;
+  }
+
+  .advanced-card-header,
+  .endpoint-header,
+  .tools-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .advanced-card-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-fade-enter-active,
+  .panel-fade-leave-active,
+  .collapsible-indicator {
+    transition: none;
   }
 }
 </style>

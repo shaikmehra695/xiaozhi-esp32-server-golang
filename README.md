@@ -145,7 +145,6 @@ go build -o xiaozhi_server ./cmd/server/
 
 ## 🛠️ 规划中 | Roadmap
 
-- 与设备建立长连接
 - 主动式ai
 
 ---
@@ -164,13 +163,17 @@ MIT License
 
 ## 📬 联系方式 | Contact
 
-**交流群**（二维码过期请联系作者）
-
-![群二维码](https://github.com/user-attachments/assets/c1c1c4ab-2567-4a6b-92a2-c8fcde7a5dcb)
-
-**个人微信**：hackers365
+**个人微信**：hackers365 （加微信拉你进交流群）
 
 ![个人微信](https://github.com/user-attachments/assets/6b8d3d11-7bf5-4fa4-a73e-5109019dab85)
+
+
+**开源不易，您的赞助会让项目持续更新**
+
+<img width="250" height="250" alt="eab0f4d3d8b6f977863a7bef36e3d64b" src="https://github.com/user-attachments/assets/9a949cb3-d788-446b-a0b9-8542edbb0842" />
+
+
+
 
 ---
 

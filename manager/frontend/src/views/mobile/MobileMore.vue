@@ -103,17 +103,27 @@ const go = (path) => {
 
 <style scoped>
 .mobile-more-page {
-  padding: 12px 0 24px;
+  padding: 12px 0 96px;
 }
 
 :deep(.van-cell-group) {
-  margin-bottom: 12px;
-  border-radius: 10px;
+  margin-bottom: 14px;
+  border-radius: 20px;
   overflow: hidden;
 }
 
 :deep(.van-cell-group__title) {
-  font-weight: 600;
-  color: #323233;
+  padding: 0 18px 10px;
+  font-weight: 700;
+  color: var(--apple-text);
+}
+
+:deep(.van-cell) {
+  min-height: 62px;
+}
+
+:deep(.van-cell__label) {
+  margin-top: 6px;
+  color: var(--apple-text-secondary);
 }
 </style>

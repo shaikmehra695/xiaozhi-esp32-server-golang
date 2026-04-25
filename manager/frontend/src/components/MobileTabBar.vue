@@ -42,7 +42,6 @@ const tabs = computed(() => {
   } else {
     // 普通用户标签栏
     return [
-      { name: 'console', label: '首页', icon: 'home-o', path: '/console' },
       { name: 'agents', label: '智能体', icon: 'apps-o', path: '/agents' },
       { name: 'speakers', label: '声纹', icon: 'user-o', path: '/user/speakers' },
       { name: 'more', label: '更多', icon: 'ellipsis', path: '/more' }
@@ -93,15 +92,26 @@ onMounted(() => {
 
 <style scoped>
 .mobile-tabbar {
-  border-top: 1px solid #ebedf0;
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+  background: transparent;
 }
 
 :deep(.van-tabbar) {
   z-index: 1200;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: auto;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  box-shadow: var(--apple-shadow-lg);
+  overflow: hidden;
 }
 
 :deep(.van-tabbar-item--active) {
-  color: #409EFF;
+  color: var(--apple-primary);
+}
+
+:deep(.van-tabbar-item) {
+  min-height: 58px;
 }
 </style>

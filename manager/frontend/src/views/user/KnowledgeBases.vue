@@ -1,7 +1,6 @@
 <template>
   <div class="config-page">
-    <div class="page-header">
-      <h2>我的知识库</h2>
+    <div class="page-actions">
       <el-button type="primary" @click="openDialog()">新增知识库</el-button>
     </div>
 
@@ -84,7 +83,7 @@
           <el-input v-model="form.description" />
         </el-form-item>
         <el-form-item label="同步说明">
-          <div style="color: #909399;">保存后会自动异步同步到管理员配置的知识库提供商（如 Dify / RAGFlow / WeKnora）。文档请在“文档管理”中新增。</div>
+          <div class="kb-helper-text">保存后会自动异步同步到管理员配置的知识库提供商（如 Dify / RAGFlow / WeKnora）。文档请在“文档管理”中新增。</div>
         </el-form-item>
         <el-form-item label="检索阈值">
           <el-input
@@ -92,7 +91,7 @@
             placeholder="请输入 0~1 之间的小数，如 0.2"
             clearable
           />
-          <div style="color:#909399; font-size:12px; margin-top:6px;">
+          <div class="kb-helper-text is-spaced">
             默认填充提供商全局阈值。当前提供商：{{ form.threshold_provider || '-' }}，全局阈值：{{ formatKnowledgeThreshold(form.global_threshold) }}。
           </div>
         </el-form-item>
@@ -110,11 +109,11 @@
     </el-dialog>
 
     <el-dialog v-model="documentsVisible" title="文档管理" width="900px">
-      <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+      <div class="dialog-toolbar">
         <div>
           当前知识库: <strong>{{ currentKb?.name || '-' }}</strong>
         </div>
-        <div style="display: flex; gap: 8px;">
+        <div class="dialog-toolbar-actions">
           <el-upload
             :show-file-list="false"
             :http-request="uploadDocumentFile"
@@ -126,7 +125,7 @@
           <el-button type="primary" @click="openDocumentDialog()">新增文档</el-button>
         </div>
       </div>
-      <div style="color:#909399; font-size:12px; margin-bottom: 8px;">
+      <div class="kb-helper-text is-bottom">
         {{ uploadTipText }}
       </div>
       <el-table :data="documentItems" v-loading="documentsLoading" style="width: 100%">
@@ -202,10 +201,10 @@
           <el-button type="primary" :loading="searchTestLoading" @click="runSearchTest">开始测试</el-button>
         </div>
       </div>
-      <div style="color:#909399; font-size:12px; margin-bottom: 8px;">
+      <div class="kb-helper-text is-bottom">
         召回测试会直接调用当前知识库对应 provider 的检索接口（Dify / RAGFlow / WeKnora），用于验证关键词召回效果。
       </div>
-      <div v-if="searchTestElapsedMs !== null" style="color:#606266; font-size:12px; margin-bottom: 8px;">
+      <div v-if="searchTestElapsedMs !== null" class="kb-helper-text is-bottom is-regular">
         响应耗时：{{ searchTestElapsedMs }} ms
       </div>
       <el-table :data="searchTestResult.hits" v-loading="searchTestLoading" style="width: 100%" max-height="420">
@@ -218,13 +217,13 @@
         </el-table-column>
         <el-table-column prop="content" label="命中内容" min-width="480">
           <template #default="scope">
-            <div style="white-space: pre-wrap; line-height: 1.4;">
+            <div class="search-hit-content">
               {{ scope.row.content }}
             </div>
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="!searchTestLoading && hasRunSearchTest && searchTestResult.hits.length === 0" style="color:#909399; margin-top: 10px;">
+      <div v-if="!searchTestLoading && hasRunSearchTest && searchTestResult.hits.length === 0" class="kb-helper-text is-empty">
         未命中内容，可尝试更换关键词或检查该知识库是否已同步完成。
       </div>
     </el-dialog>
@@ -318,11 +317,18 @@ const uploadTipText = computed(() => {
   return `当前提供商 ${currentKBProvider.value} 暂不支持上传建文档。`
 })
 
+const applyKnowledgeGlobalConfig = (knowledge) => {
+  const payload = knowledge && typeof knowledge === 'object' ? knowledge : {}
+  knowledgeGlobalConfig.default_provider = normalizeProvider(payload.default_provider || 'dify')
+  knowledgeGlobalConfig.providers = payload.providers && typeof payload.providers === 'object' ? payload.providers : {}
+}
+
 const loadData = async () => {
   loading.value = true
   try {
     const res = await api.get('/user/knowledge-bases')
     items.value = res.data.data || []
+    applyKnowledgeGlobalConfig(res.data.knowledge)
   } finally {
     loading.value = false
   }
@@ -353,18 +359,6 @@ const getGlobalThresholdByProvider = (provider) => {
     return DEFAULT_WEKNORA_THRESHOLD
   }
   return DEFAULT_DIFY_THRESHOLD
-}
-
-const loadGlobalKnowledgeConfig = async () => {
-  try {
-    const res = await api.get('/system/configs')
-    const knowledge = res?.data?.data?.knowledge || {}
-    knowledgeGlobalConfig.default_provider = normalizeProvider(knowledge.default_provider || 'dify')
-    knowledgeGlobalConfig.providers = (knowledge && typeof knowledge.providers === 'object' && knowledge.providers) ? knowledge.providers : {}
-  } catch {
-    knowledgeGlobalConfig.default_provider = 'dify'
-    knowledgeGlobalConfig.providers = {}
-  }
 }
 
 const openDialog = (row = null) => {
@@ -784,27 +778,15 @@ const formatKnowledgeThreshold = (value) => {
 }
 
 onMounted(async () => {
-  await loadGlobalKnowledgeConfig()
   await loadData()
 })
 </script>
 
 <style scoped>
-.page-header {
+.page-actions {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  justify-content: flex-end;
   margin: 10px 0 14px;
-}
-
-.page-header h2 {
-  margin: 0;
-}
-
-.page-header :deep(.el-button) {
-  margin: 4px 0;
 }
 
 .kb-sync-status-cell {
@@ -849,5 +831,46 @@ onMounted(async () => {
 
 .action-buttons :deep(.el-dropdown) {
   display: inline-flex;
+}
+
+.dialog-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.dialog-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.kb-helper-text {
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.kb-helper-text.is-spaced {
+  margin-top: 6px;
+}
+
+.kb-helper-text.is-bottom {
+  margin-bottom: 8px;
+}
+
+.kb-helper-text.is-empty {
+  margin-top: 10px;
+}
+
+.kb-helper-text.is-regular {
+  color: var(--el-text-color-regular);
+}
+
+.search-hit-content {
+  white-space: pre-wrap;
+  line-height: 1.4;
 }
 </style>

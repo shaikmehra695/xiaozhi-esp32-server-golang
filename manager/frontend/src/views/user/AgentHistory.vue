@@ -8,9 +8,10 @@
           circle 
           size="large"
         />
-        <div class="header-info">
-          <h1>{{ agentName || '聊天历史记录' }}</h1>
-          <p class="page-subtitle" v-if="total > 0">共 {{ total }} 条消息</p>
+        <div class="header-context">
+          <span class="context-label">当前智能体</span>
+          <strong class="context-value">{{ agentName || '未命名智能体' }}</strong>
+          <p class="context-meta" v-if="total > 0">共 {{ total }} 条消息</p>
         </div>
       </div>
       <div class="header-right">
@@ -600,9 +601,9 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .agent-history-page {
-  padding: 20px;
-  background: #f5f5f5;
-  min-height: 100vh;
+  padding: 0;
+  background: transparent;
+  min-height: 100%;
 }
 
 .page-header {
@@ -611,9 +612,10 @@ onBeforeUnmount(() => {
   align-items: center;
   margin-bottom: 20px;
   padding: 20px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: var(--apple-radius-lg);
+  box-shadow: var(--apple-shadow-md);
 }
 
 .header-left {
@@ -622,15 +624,26 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
-.header-info h1 {
-  margin: 0;
-  font-size: 24px;
-  color: #303133;
+.header-context {
+  display: grid;
+  gap: 4px;
 }
 
-.page-subtitle {
-  margin: 4px 0 0 0;
-  color: #909399;
+.context-label {
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.context-value {
+  color: var(--apple-text);
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.context-meta {
+  margin: 0;
+  color: var(--apple-text-secondary);
   font-size: 14px;
 }
 
@@ -647,11 +660,11 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-/* 微信风格聊天容器 */
 .chat-container {
-  background: #ededed;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
   min-height: 500px;
-  border-radius: 8px;
+  border-radius: 22px;
   overflow: hidden;
 }
 
@@ -671,7 +684,7 @@ onBeforeUnmount(() => {
   text-align: center;
   margin: 16px 0;
   font-size: 12px;
-  color: #999;
+  color: var(--apple-text-tertiary);
 }
 
 .message-bubble-wrapper {
@@ -698,21 +711,22 @@ onBeforeUnmount(() => {
 .message-bubble {
   position: relative;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: 18px;
   word-wrap: break-word;
   word-break: break-word;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.05);
   max-width: 100%;
 }
 
 .message-bubble-left {
-  background: white;
-  border-top-left-radius: 0;
+  background: rgba(255, 255, 255, 0.94);
+  border-top-left-radius: 8px;
 }
 
 .message-bubble-right {
-  background: #95ec69;
-  border-top-right-radius: 0;
+  background: rgba(0, 122, 255, 0.12);
+  border: 1px solid rgba(0, 122, 255, 0.16);
+  border-top-right-radius: 8px;
   margin-left: auto;
 }
 
@@ -723,7 +737,7 @@ onBeforeUnmount(() => {
 }
 
 .message-text {
-  color: #333;
+  color: var(--apple-text);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -731,7 +745,7 @@ onBeforeUnmount(() => {
 }
 
 .message-bubble-right .message-text {
-  color: #000;
+  color: var(--apple-text);
 }
 
 /* 音频气泡 */
@@ -760,33 +774,33 @@ onBeforeUnmount(() => {
 
 .message-time-small {
   font-size: 11px;
-  color: #999;
+  color: var(--apple-text-tertiary);
 }
 
 .message-bubble-right .message-time-small {
-  color: #666;
+  color: var(--apple-primary-pressed);
 }
 
 .message-more {
   font-size: 14px;
-  color: #999;
+  color: var(--apple-text-tertiary);
   cursor: pointer;
   padding: 2px;
-  border-radius: 4px;
+  border-radius: 8px;
   transition: all 0.2s;
 }
 
 .message-more:hover {
-  background: rgba(0, 0, 0, 0.1);
-  color: #666;
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--apple-primary);
 }
 
 .message-bubble-right .message-more {
-  color: #666;
+  color: var(--apple-primary-pressed);
 }
 
 .message-bubble-right .message-more:hover {
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 122, 255, 0.12);
 }
 
 /* 分页 */
@@ -795,8 +809,8 @@ onBeforeUnmount(() => {
   padding: 20px;
   display: flex;
   justify-content: center;
-  background: white;
-  border-top: 1px solid #e4e7ed;
+  background: rgba(255, 255, 255, 0.88);
+  border-top: 1px solid rgba(229, 229, 234, 0.72);
 }
 
 /* 滚动条样式 */
@@ -805,17 +819,17 @@ onBeforeUnmount(() => {
 }
 
 .chat-messages::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: rgba(229, 229, 234, 0.52);
   border-radius: 3px;
 }
 
 .chat-messages::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: rgba(142, 142, 147, 0.58);
   border-radius: 3px;
 }
 
 .chat-messages::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  background: rgba(110, 110, 115, 0.68);
 }
 
 /* Element Plus 组件样式覆盖 */
@@ -831,7 +845,7 @@ onBeforeUnmount(() => {
 :deep(.el-slider__button) {
   width: 12px;
   height: 12px;
-  border: 2px solid #409eff;
+  border: 2px solid var(--apple-primary);
 }
 
 :deep(.el-slider__button-wrapper) {

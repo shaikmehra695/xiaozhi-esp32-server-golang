@@ -40,16 +40,18 @@ export default {
 
 <style>
 #app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color: #2c3e50;
   height: 100dvh;
 }
 
 html,
 body {
   height: 100%;
+}
+
+body {
+  margin: 0;
 }
 
 * {
@@ -95,12 +97,13 @@ body {
 /* 全局动画 */
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.3s ease;
+  transition: opacity 0.22s ease, transform 0.22s ease;
 }
 
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+  transform: translateY(4px);
 }
 
 /* 移动端安全区域适配 */

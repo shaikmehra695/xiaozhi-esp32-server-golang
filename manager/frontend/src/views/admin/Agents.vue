@@ -1,10 +1,5 @@
 <template>
   <div class="admin-agents">
-    <div class="page-header">
-      <h2>智能体管理</h2>
-      <p class="page-subtitle">管理系统中的所有智能体</p>
-    </div>
-
     <div class="toolbar">
       <el-button type="primary" @click="showAddDialog = true">
         <el-icon><Plus /></el-icon>
@@ -18,7 +13,12 @@
 
     <el-table :data="agents" v-loading="loading" stripe>
       <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="name" label="昵称" width="150" />
+      <el-table-column prop="name" label="名称" width="150" />
+      <el-table-column label="昵称" width="150">
+        <template #default="{ row }">
+          {{ row.nickname || row.name }}
+        </template>
+      </el-table-column>
       <el-table-column prop="user_id" label="用户ID" width="100" />
       <el-table-column label="角色介绍" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">
@@ -88,8 +88,11 @@
         <el-form-item label="用户ID" prop="user_id">
           <el-input-number v-model="agentForm.user_id" :min="1" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="昵称" prop="name">
-          <el-input v-model="agentForm.name" placeholder="请输入智能体昵称" />
+        <el-form-item label="名称" prop="name">
+          <el-input v-model="agentForm.name" placeholder="请输入管理侧显示的智能体名称" />
+        </el-form-item>
+        <el-form-item label="昵称" prop="nickname">
+          <el-input v-model="agentForm.nickname" placeholder="给大模型使用，例如：小辉" />
         </el-form-item>
         <el-form-item label="角色介绍" prop="custom_prompt">
           <el-input
@@ -460,6 +463,7 @@ const openClawDocURL = 'https://github.com/hackers365/xiaozhi-esp32-server-golan
 const agentForm = ref({
   user_id: null,
   name: '',
+  nickname: '',
   custom_prompt: '',
   llm_config_id: null,
   tts_config_id: null,
@@ -475,7 +479,8 @@ const agentForm = ref({
 
 const agentRules = {
   user_id: [{ required: true, message: '请输入用户ID', trigger: 'blur' }],
-  name: [{ required: true, message: '请输入智能体昵称', trigger: 'blur' }],
+  name: [{ required: true, message: '请输入智能体名称', trigger: 'blur' }],
+  nickname: [{ required: true, message: '请输入智能体昵称', trigger: 'blur' }],
   asr_speed: [{ required: true, message: '请选择语音识别速度', trigger: 'change' }],
   memory_mode: [{ required: true, message: '请选择记忆模式', trigger: 'change' }],
   speaker_chat_mode: [{ required: true, message: '请选择声纹聊天限制', trigger: 'change' }],
@@ -527,6 +532,7 @@ const editAgent = (agent) => {
   agentForm.value = {
     user_id: agent.user_id,
     name: agent.name,
+    nickname: agent.nickname || '',
     custom_prompt: agent.custom_prompt || '',
     llm_config_id: agent.llm_config_id,
     tts_config_id: agent.tts_config_id,
@@ -558,6 +564,8 @@ const saveAgent = async () => {
   try {
     const payload = {
       ...agentForm.value,
+      name: String(agentForm.value.name || '').trim(),
+      nickname: String(agentForm.value.nickname || '').trim(),
       openclaw: {
         allowed: !!agentForm.value.openclaw_allowed,
         enter_keywords: normalizeKeywordList(agentForm.value.openclaw_enter_keywords),
@@ -622,6 +630,7 @@ const resetForm = () => {
   agentForm.value = {
     user_id: null,
     name: '',
+    nickname: '',
     custom_prompt: '',
     llm_config_id: null,
     tts_config_id: null,
@@ -1151,27 +1160,12 @@ onMounted(() => {
   padding: 20px;
 }
 
-.page-header {
-  margin-bottom: 20px;
-}
-
-.page-header h2 {
-  margin: 0 0 8px 0;
-  color: #303133;
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.page-subtitle {
-  margin: 0;
-  color: #909399;
-  font-size: 14px;
-}
-
 .toolbar {
   margin-bottom: 20px;
   display: flex;
   gap: 12px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .mcp-endpoint-display {
@@ -1233,20 +1227,20 @@ onMounted(() => {
 
 .openclaw-tip-content code {
   background: #f3f4f6;
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 0 4px;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
 }
 
 :deep(.openclaw-tip-popper) {
   max-width: 460px;
-  background: #ffffff !important;
+  background: rgba(255, 255, 255, 0.96) !important;
   border: 1px solid #dbeafe !important;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12) !important;
 }
 
 :deep(.openclaw-tip-popper .el-popper__arrow::before) {
-  background: #ffffff !important;
+  background: rgba(255, 255, 255, 0.96) !important;
   border: 1px solid #dbeafe !important;
 }
 

@@ -67,13 +67,14 @@ X-API-Token: &lt;api-token&gt;</code></pre>
         <div class="api-line"><span class="method get">GET</span><code>/api/open/v1/agents</code></div>
         <h4>入参</h4><p>无（仅需认证头）。</p>
         <h4>出参示例</h4>
-        <pre><code>{"data":[{"id":2,"name":"助手A","status":"active","llm_config_id":"llm_default"}]}</code></pre>
+        <pre><code>{"data":[{"id":2,"name":"家庭助手","nickname":"小辉","status":"active","llm_config_id":"llm_default"}]}</code></pre>
 
         <h3>3.2 创建智能体</h3>
         <div class="api-line"><span class="method post">POST</span><code>/api/open/v1/agents</code></div>
         <h4>Body 参数</h4>
         <table><thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
           <tr><td>name</td><td>string</td><td>是</td><td>名称，2-50 字符</td></tr>
+          <tr><td>nickname</td><td>string</td><td>否</td><td>昵称，给大模型/Prompt 使用；空则默认等于 name</td></tr>
           <tr><td>custom_prompt</td><td>string</td><td>否</td><td>提示词</td></tr>
           <tr><td>llm_config_id</td><td>string</td><td>否</td><td>LLM 配置 ID</td></tr>
           <tr><td>tts_config_id</td><td>string</td><td>否</td><td>TTS 配置 ID</td></tr>
@@ -82,7 +83,7 @@ X-API-Token: &lt;api-token&gt;</code></pre>
           <tr><td>memory_mode</td><td>string</td><td>否</td><td>short/long/none</td></tr>
         </tbody></table>
         <h4>出参示例</h4>
-        <pre><code>{"success":true,"data":{"id":3,"name":"助手B","status":"active"}}</code></pre>
+        <pre><code>{"success":true,"data":{"id":3,"name":"客厅助手","nickname":"小辉","status":"active"}}</code></pre>
 
         <h3>3.3 获取智能体详情</h3>
         <div class="api-line"><span class="method get">GET</span><code>/api/open/v1/agents/:id</code></div>
@@ -91,7 +92,7 @@ X-API-Token: &lt;api-token&gt;</code></pre>
           <tr><td>id</td><td>number</td><td>是</td><td>智能体 ID</td></tr>
         </tbody></table>
         <h4>出参示例</h4>
-        <pre><code>{"data":{"id":2,"name":"助手A","custom_prompt":"..."}}</code></pre>
+        <pre><code>{"data":{"id":2,"name":"家庭助手","nickname":"小辉","custom_prompt":"..."}}</code></pre>
 
         <h3>3.4 更新智能体</h3>
         <div class="api-line"><span class="method put">PUT</span><code>/api/open/v1/agents/:id</code></div>
@@ -102,6 +103,7 @@ X-API-Token: &lt;api-token&gt;</code></pre>
         <h4>Body 参数</h4>
         <table><thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
           <tr><td>name</td><td>string</td><td>是</td><td>名称，2-50 字符</td></tr>
+          <tr><td>nickname</td><td>string</td><td>否</td><td>昵称，给大模型/Prompt 使用；空则默认等于 name</td></tr>
           <tr><td>custom_prompt</td><td>string</td><td>否</td><td>提示词</td></tr>
           <tr><td>llm_config_id</td><td>string</td><td>否</td><td>LLM 配置 ID（可置空）</td></tr>
           <tr><td>tts_config_id</td><td>string</td><td>否</td><td>TTS 配置 ID（可置空）</td></tr>
@@ -110,7 +112,7 @@ X-API-Token: &lt;api-token&gt;</code></pre>
           <tr><td>memory_mode</td><td>string</td><td>否</td><td>short/long/none</td></tr>
         </tbody></table>
         <h4>出参示例</h4>
-        <pre><code>{"data":{"id":2,"name":"助手A-更新后"}}</code></pre>
+        <pre><code>{"data":{"id":2,"name":"家庭助手-更新后","nickname":"小辉"}}</code></pre>
 
         <h3>3.5 删除智能体</h3>
         <div class="api-line"><span class="method delete">DELETE</span><code>/api/open/v1/agents/:id</code></div>
@@ -153,17 +155,17 @@ X-API-Token: &lt;api-token&gt;</code></pre>
       </section>
 
       <section id="inject" class="vp-section">
-        <h2>5. 消息注入接口</h2>
+        <h2>5. 语音推送接口</h2>
         <div class="api-line"><span class="method post">POST</span><code>/api/open/v1/devices/inject-message</code></div>
         <h4>Body 参数</h4>
         <table><thead><tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>
           <tr><td>device_id</td><td>string</td><td>是</td><td>设备标识（device_name）</td></tr>
-          <tr><td>message</td><td>string</td><td>是</td><td>消息内容</td></tr>
+          <tr><td>message</td><td>string</td><td>是</td><td>推送内容</td></tr>
           <tr><td>skip_llm</td><td>boolean</td><td>否</td><td>是否跳过 LLM，默认 false</td></tr>
           <tr><td>auto_listen</td><td>boolean</td><td>否</td><td>播报完成后是否自动进入监听，默认 true</td></tr>
         </tbody></table>
         <h4>出参示例</h4>
-        <pre><code>{"success":true,"message":"消息注入请求已发送","data":{"device_id":"bedroom","message":"hello","skip_llm":false,"auto_listen":true}}</code></pre>
+        <pre><code>{"success":true,"message":"语音推送请求已发送","data":{"device_id":"bedroom","message":"hello","skip_llm":false,"auto_listen":true}}</code></pre>
       </section>
 
       <section id="mcp" class="vp-section">
@@ -237,7 +239,7 @@ const nav = [
   { id: 'devices', label: '2. 设备接口' },
   { id: 'agents', label: '3. 智能体接口' },
   { id: 'history', label: '4. 聊天记录' },
-  { id: 'inject', label: '5. 消息注入' },
+  { id: 'inject', label: '5. 语音推送' },
   { id: 'mcp', label: '6. MCP 工具' }
 ]
 </script>
@@ -262,8 +264,8 @@ const nav = [
 .method.post { background: #3b82f6; }
 .method.put { background: #f59e0b; }
 .method.delete { background: #ef4444; }
-pre { margin: 6px 0; background: #ffffff; color: #111827; border: 1px solid #d1d5db; border-radius: 8px; padding: 12px; overflow: auto; font-size: 12px; }
-code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+pre { margin: 6px 0; background: #f6f8fb; color: #111827; border: 1px solid #d1d5db; border-radius: 8px; padding: 12px; overflow: auto; font-size: 12px; }
+code { background: #f3f4f6; padding: 2px 6px; border-radius: 8px; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
 thead { background: #f8fafc; }

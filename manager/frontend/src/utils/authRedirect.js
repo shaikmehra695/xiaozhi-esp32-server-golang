@@ -4,5 +4,5 @@ export const getPostLoginRedirectPath = (user) => {
     return firstLoginDone ? '/dashboard' : '/admin/config-wizard'
   }
 
-  return '/console'
+  return '/agents'
 }

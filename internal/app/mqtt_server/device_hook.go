@@ -195,7 +195,7 @@ func isAdminUser(cl *mqttServer.Client) bool {
 	if cl == nil {
 		return false
 	}
-	return string(cl.Properties.Username) == "admin"
+	return string(cl.Properties.Username) == configuredAdminUsername()
 }
 
 // 解析 clientId，获取 mac 地址

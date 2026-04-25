@@ -220,7 +220,16 @@ func HandleDeviceIotMcpMessage(deviceId string, transportType string, payload []
 	mcpClientSession.iotMux.RLock()
 	iotClient := mcpClientSession.iotOverMcpByTransport[normalizeDeviceTransportType(transportType)]
 	mcpClientSession.iotMux.RUnlock()
-	if iotClient == nil || iotClient.conn == nil {
+	if iotClient == nil {
+		return nil
+	}
+	if iotClient.iotTransport != nil {
+		// 设备侧入站 MCP 消息已经按 device + transportType 路由到了当前 runtime，
+		// 直接注入当前 transport，避免在共享 conn 队列上与历史 runtime 竞争消费。
+		iotClient.iotTransport.handleMessage(payload)
+		return nil
+	}
+	if iotClient.conn == nil {
 		return nil
 	}
 	return iotClient.conn.HandleMcpMessage(payload)
