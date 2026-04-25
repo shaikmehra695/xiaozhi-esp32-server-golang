@@ -1,12 +1,5 @@
 <template>
   <div class="speakers-page">
-    <div class="page-actions">
-      <el-button type="primary" @click="handleAddGroup">
-        <el-icon><Plus /></el-icon>
-        创建声纹组
-      </el-button>
-    </div>
-
     <!-- 筛选栏 -->
     <div class="filter-bar">
       <el-select
@@ -35,7 +28,11 @@
           <el-icon><Search /></el-icon>
         </template>
       </el-input>
-      </div>
+      <el-button class="create-group-button" type="primary" @click="handleAddGroup">
+        <el-icon><Plus /></el-icon>
+        创建声纹组
+      </el-button>
+    </div>
 
     <!-- 声纹组列表 -->
     <div v-loading="loading" class="speakers-content">
@@ -2170,12 +2167,6 @@ onBeforeUnmount(() => {
   padding: 0;
 }
 
-.page-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 20px;
-}
-
 .filter-bar {
   padding: 15px 20px;
   background: rgba(255, 255, 255, 0.88);
@@ -2183,6 +2174,12 @@ onBeforeUnmount(() => {
   margin-bottom: 20px;
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.create-group-button {
+  margin-left: auto;
 }
 
 .speakers-content {

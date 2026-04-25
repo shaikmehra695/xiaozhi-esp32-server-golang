@@ -1,9 +1,9 @@
 <template>
-  <div v-if="!isMobileDevice" class="layout-shell">
+  <div v-if="!isMobileDevice" class="layout-shell" :class="{ 'is-form-heavy-route': isFormHeavyRoute }">
     <aside class="sidebar-shell">
       <div class="sidebar-card apple-surface">
         <div class="brand-panel">
-          <div class="brand-mark">XZ</div>
+          <img class="brand-mark" :src="appLogo" alt="小智管理系统" />
           <div class="brand-copy">
             <p class="brand-eyebrow">Control Center</p>
             <h3>小智管理系统</h3>
@@ -32,6 +32,11 @@
             <el-menu-item v-if="!authStore.isAdmin" index="/agents">
               <el-icon><Connection /></el-icon>
               <span>智能体管理</span>
+            </el-menu-item>
+
+            <el-menu-item v-if="!authStore.isAdmin" index="/user/devices">
+              <el-icon><Iphone /></el-icon>
+              <span>设备列表</span>
             </el-menu-item>
 
             <el-menu-item v-if="!authStore.isAdmin" index="/user/roles">
@@ -63,10 +68,10 @@
               <el-menu-item index="/admin/mqtt-config">MQTT 配置</el-menu-item>
               <el-menu-item index="/admin/mqtt-server-config">MQTT Server 配置</el-menu-item>
               <el-menu-item index="/admin/udp-config">UDP 配置</el-menu-item>
-              <el-sub-menu index="/admin/mcp-config-group">
+              <el-sub-menu index="/admin/mcp-config-group" class="menu-sub-child">
                 <template #title>MCP 配置</template>
-                <el-menu-item index="/admin/mcp-config">配置</el-menu-item>
-                <el-menu-item index="/admin/mcp-market">MCP 市场</el-menu-item>
+                <el-menu-item class="menu-grandchild" index="/admin/mcp-config">配置</el-menu-item>
+                <el-menu-item class="menu-grandchild" index="/admin/mcp-market">MCP 市场</el-menu-item>
               </el-sub-menu>
               <el-menu-item index="/admin/speaker-config">声纹识别配置</el-menu-item>
               <el-menu-item index="/admin/chat-settings">聊天设置</el-menu-item>
@@ -121,65 +126,16 @@
     </aside>
 
     <div class="content-shell">
-      <header class="header-shell">
-        <div class="header-card apple-surface">
-          <div class="header-copy">
-            <p class="header-eyebrow">{{ authStore.isAdmin ? 'Admin Console' : 'User Workspace' }}</p>
-            <div class="header-title-row">
-              <div>
-                <h1 class="header-title">{{ currentPageTitle }}</h1>
-                <p class="header-subtitle">
-                  {{ authStore.isAdmin ? '统一管理 AI 配置、设备连接和运行状态。' : '集中管理您的设备、智能体与语音能力。' }}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div class="header-actions">
-            <template v-if="authStore.isAdmin">
-              <router-link to="/admin/config-wizard" custom v-slot="{ navigate, isActive }">
-                <el-button
-                  class="header-nav-btn"
-                  :class="{ 'is-active': isActive }"
-                  plain
-                  @click="navigate"
-                >
-                  <el-icon><Guide /></el-icon>
-                  <span>配置向导</span>
-                </el-button>
-              </router-link>
-              <router-link to="/admin/ota-config" custom v-slot="{ navigate, isActive }">
-                <el-button
-                  class="header-nav-btn"
-                  :class="{ 'is-active': isActive }"
-                  plain
-                  @click="navigate"
-                >
-                  <el-icon><Upload /></el-icon>
-                  <span>OTA 配置</span>
-                </el-button>
-              </router-link>
-            </template>
-
-            <el-dropdown @command="handleCommand">
-              <button class="profile-button" type="button">
-                <span class="profile-avatar">{{ usernameInitial }}</span>
-                <span class="profile-copy">
-                  <strong>{{ authStore.user?.username }}</strong>
-                  <small>{{ authStore.isAdmin ? '管理员' : '普通用户' }}</small>
-                </span>
-                <el-icon><ArrowDown /></el-icon>
-              </button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item v-if="!authStore.isAdmin" command="api-tokens">API Token</el-dropdown-item>
-                  <el-dropdown-item command="logout">退出登录</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </div>
-        </div>
-      </header>
+      <AppHeader
+        :title="currentPageTitle"
+        :eyebrow="authStore.isAdmin ? 'Admin Console' : 'User Workspace'"
+        :username="authStore.user?.username || ''"
+        :role-label="authStore.isAdmin ? '管理员' : '普通用户'"
+        :initial="usernameInitial"
+        :is-admin="authStore.isAdmin"
+        :show-admin-shortcuts="authStore.isAdmin"
+        @command="handleCommand"
+      />
 
       <main class="main-shell">
         <router-view />
@@ -196,13 +152,13 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import { isMobile } from '../utils/device'
+import AppHeader from './AppHeader.vue'
 import MobileLayout from './MobileLayout.vue'
+import appLogo from '@/assets/brand/app-logo.webp'
 import {
   House,
-  Monitor,
   Setting,
   User,
-  ArrowDown,
   Tools,
   Cpu,
   UserFilled,
@@ -210,8 +166,6 @@ import {
   Connection,
   Microphone,
   DataAnalysis,
-  Guide,
-  Upload,
   Document
 } from '@element-plus/icons-vue'
 
@@ -222,6 +176,7 @@ const authStore = useAuthStore()
 const isMobileDevice = computed(() => isMobile())
 
 const currentPageTitle = computed(() => route.meta?.title || (authStore.isAdmin ? '仪表板' : '我的智能体'))
+const isFormHeavyRoute = computed(() => ['AgentEdit', 'UserAgentEdit'].includes(String(route.name || '')))
 
 const usernameInitial = computed(() => {
   const username = authStore.user?.username || 'U'
@@ -254,11 +209,13 @@ const handleCommand = async (command) => {
 
 <style scoped>
 .layout-shell {
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   padding: 20px;
   display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 16px;
+  overflow: hidden;
 }
 
 .sidebar-shell {
@@ -267,8 +224,8 @@ const handleCommand = async (command) => {
 
 .sidebar-card {
   height: calc(100dvh - 40px);
-  padding: 18px;
-  border-radius: 30px;
+  padding: 12px;
+  border-radius: 26px;
   display: flex;
   flex-direction: column;
 }
@@ -276,41 +233,49 @@ const handleCommand = async (command) => {
 .brand-panel {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 16px;
+  gap: 9px;
+  margin-bottom: 14px;
 }
 
 .brand-mark {
-  width: 46px;
-  height: 46px;
-  border-radius: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  background: linear-gradient(180deg, #2e90ff 0%, #007aff 100%);
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  display: block;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.88);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36), 0 12px 22px rgba(0, 122, 255, 0.24);
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
   flex: none;
 }
 
 .brand-copy h3 {
   margin: 0;
-  font-size: 17px;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.brand-copy {
+  min-width: 0;
+}
+
+.brand-copy h3,
+.brand-copy p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand-copy p {
   margin: 3px 0 0;
   color: var(--apple-text-secondary);
-  font-size: 13px;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .brand-eyebrow {
   margin: 0 0 4px !important;
   color: var(--apple-primary) !important;
-  font-size: 11px !important;
+  font-size: 9px !important;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -319,8 +284,8 @@ const handleCommand = async (command) => {
 .sidebar-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 18px;
+  gap: 6px;
+  margin-bottom: 14px;
 }
 
 .sidebar-scroll {
@@ -338,11 +303,28 @@ const handleCommand = async (command) => {
 
 .sidebar-menu :deep(.el-menu-item),
 .sidebar-menu :deep(.el-sub-menu__title) {
-  height: 46px;
-  margin-bottom: 6px;
-  border-radius: 16px;
+  height: 40px;
+  margin-bottom: 4px;
+  border-radius: 14px;
   color: var(--apple-text-secondary);
   font-weight: 600;
+  padding: 0 12px !important;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sidebar-menu :deep(.el-sub-menu__title) {
+  padding-right: 28px !important;
+}
+
+.sidebar-menu :deep(.el-menu-item span),
+.sidebar-menu :deep(.el-sub-menu__title span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-menu :deep(.el-menu-item:hover),
@@ -358,154 +340,68 @@ const handleCommand = async (command) => {
 }
 
 .sidebar-menu :deep(.el-sub-menu .el-menu-item) {
-  height: 40px;
-  margin: 4px 0 4px 8px;
-  padding-left: 20px !important;
-  border-radius: 14px;
+  height: 36px;
+  margin: 3px 0 3px 6px;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.48);
+  padding-left: 46px !important;
+}
+
+.sidebar-menu :deep(.menu-sub-child > .el-sub-menu__title) {
+  height: 36px;
+  margin: 3px 0 3px 6px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.48);
+  padding-left: 46px !important;
+  padding-right: 28px !important;
+}
+
+.sidebar-menu :deep(.menu-sub-child .menu-grandchild) {
+  margin-left: 24px;
+  padding-left: 46px !important;
+  background: rgba(255, 255, 255, 0.34);
 }
 
 .sidebar-menu :deep(.el-menu-item .el-icon),
 .sidebar-menu :deep(.el-sub-menu__title .el-icon) {
-  margin-right: 12px;
-  font-size: 17px;
+  margin-right: 8px;
+  font-size: 15px;
+  flex: none;
+}
+
+.sidebar-menu :deep(.el-sub-menu__icon-arrow) {
+  right: 8px;
 }
 
 .content-shell {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
-
-.header-shell {
-  padding: 0;
-  height: auto;
-}
-
-.header-card {
-  min-height: 110px;
-  padding: 22px 24px;
-  border-radius: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-}
-
-.header-copy {
-  min-width: 0;
-}
-
-.header-eyebrow {
-  margin: 0 0 8px;
-  color: var(--apple-primary);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.header-title {
-  margin: 0;
-  font-size: 30px;
-  line-height: 1.08;
-  letter-spacing: -0.04em;
-}
-
-.header-subtitle {
-  margin: 8px 0 0;
-  color: var(--apple-text-secondary);
-  font-size: 14px;
-  line-height: 1.7;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.header-nav-btn {
-  min-height: 42px;
-  padding-inline: 16px;
-}
-
-.header-nav-btn.is-active {
-  border-color: transparent;
-  background: rgba(0, 122, 255, 0.1);
-  color: var(--apple-primary);
-}
-
-.profile-button {
-  min-height: 48px;
-  padding: 8px 12px 8px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--apple-line);
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: var(--apple-shadow-sm);
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  color: var(--apple-text);
-}
-
-.profile-button:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--apple-shadow-md);
-}
-
-.profile-avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(180deg, #eff6ff 0%, #dcebff 100%);
-  color: var(--apple-primary);
-  font-size: 13px;
-  font-weight: 700;
-  flex: none;
-}
-
-.profile-copy {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  line-height: 1.2;
-}
-
-.profile-copy strong {
-  font-size: 13px;
-}
-
-.profile-copy small {
-  color: var(--apple-text-secondary);
-  font-size: 11px;
+  overflow: hidden;
 }
 
 .main-shell {
+  flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0 4px 4px 0;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.layout-shell.is-form-heavy-route :deep(.apple-surface) {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--apple-shadow-sm);
 }
 
 @media (max-width: 1360px) {
   .layout-shell {
-    grid-template-columns: 268px minmax(0, 1fr);
-  }
-
-  .header-card {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .header-actions {
-    width: 100%;
-    justify-content: flex-start;
+    grid-template-columns: 208px minmax(0, 1fr);
   }
 }
 </style>

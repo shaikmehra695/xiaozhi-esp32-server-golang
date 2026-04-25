@@ -503,7 +503,6 @@ onMounted(() => {
 .role-card {
   margin-bottom: 20px;
   width: 100%;
-  max-width: 440px;
   border-radius: 12px;
   border: 1px solid #ebeef5;
   transition: transform 0.2s ease, box-shadow 0.2s ease;

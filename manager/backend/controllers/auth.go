@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"xiaozhi/manager/backend/middleware"
@@ -15,6 +16,8 @@ type AuthController struct {
 	DB *gorm.DB
 }
 
+const defaultLoginCaptchaEnabled = true
+
 type LoginRequest struct {
 	Username      string `json:"username" binding:"required"`
 	Password      string `json:"password" binding:"required"`
@@ -28,6 +31,35 @@ type RegisterRequest struct {
 	Email         string `json:"email" binding:"required,email"`
 	CaptchaID     string `json:"captchaId"`
 	CaptchaAnswer string `json:"captchaAnswer"`
+}
+
+func isLoginCaptchaEnabledFromDB(db *gorm.DB) bool {
+	if db == nil {
+		return defaultLoginCaptchaEnabled
+	}
+
+	var authConfig models.Config
+	if err := db.Where("type = ?", "auth").Order("is_default DESC, id ASC").First(&authConfig).Error; err != nil {
+		return defaultLoginCaptchaEnabled
+	}
+
+	var authData map[string]interface{}
+	if authConfig.JsonData == "" || json.Unmarshal([]byte(authConfig.JsonData), &authData) != nil {
+		return defaultLoginCaptchaEnabled
+	}
+
+	if enabled, ok := authData["login_captcha_enabled"].(bool); ok {
+		return enabled
+	}
+
+	return defaultLoginCaptchaEnabled
+}
+
+// 获取登录数字验证开关状态
+func (ac *AuthController) GetCaptchaStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"enabled": isLoginCaptchaEnabledFromDB(ac.DB),
+	})
 }
 
 // 获取简单人机验证码
@@ -52,7 +84,7 @@ func (ac *AuthController) Login(c *gin.Context) {
 		return
 	}
 
-	if !authCaptchaStore.Verify(req.CaptchaID, req.CaptchaAnswer) {
+	if isLoginCaptchaEnabledFromDB(ac.DB) && !authCaptchaStore.Verify(req.CaptchaID, req.CaptchaAnswer) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "人机验证失败，请换一题重试"})
 		return
 	}

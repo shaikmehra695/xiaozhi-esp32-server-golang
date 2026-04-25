@@ -2,14 +2,25 @@
   <div class="login-container">
     <div class="login-shell">
       <section class="login-hero">
-        <p class="login-eyebrow">APPLE LIGHT UI</p>
-        <h1>更干净的控制台入口。</h1>
+        <div class="login-brand">
+          <img class="login-brand-logo" :src="appLogo" alt="小智管理系统" />
+          <div>
+            <strong>小智管理系统</strong>
+            <span>AI 服务与设备管理平台</span>
+          </div>
+        </div>
+        <p class="login-eyebrow">XIAOZHI CONTROL CENTER</p>
+        <h1>小智 AI Go 到起飞。</h1>
         <p>
-          用更轻的留白、磨砂层和清晰的层级打开管理台，桌面与 H5 保持同一套语言。
+          统一管理智能体、声纹、知识库与服务接入，让设备、模型和语音能力在同一个工作台里协同运行。
         </p>
         <div class="login-meta">
-          <span class="apple-chip is-primary">小智管理系统</span>
-          <span class="apple-chip">设备 / 智能体 / 配置</span>
+          <span class="apple-chip is-primary">智能体编排</span>
+          <span class="apple-chip">设备接入</span>
+          <span class="apple-chip">声纹与知识库</span>
+          <span class="apple-chip">MCP / OpenClaw</span>
+          <span class="apple-chip">MCP 远程调用</span>
+          <span class="apple-chip">主动语音下发</span>
         </div>
       </section>
 
@@ -42,7 +53,7 @@
                   @keyup.enter="handleLogin"
                 />
               </el-form-item>
-              <div class="captcha-strip">
+              <div v-if="loginCaptchaEnabled" class="captcha-strip">
                 <div class="captcha-copy">
                   <span class="captcha-label">人机验证</span>
                   <strong>{{ loginCaptchaPrompt || '正在生成题目...' }}</strong>
@@ -57,7 +68,7 @@
                   换一题
                 </el-button>
               </div>
-              <el-form-item label="计算结果" prop="captchaAnswer">
+              <el-form-item v-if="loginCaptchaEnabled" label="计算结果" prop="captchaAnswer">
                 <el-input
                   v-model="loginForm.captchaAnswer"
                   inputmode="numeric"
@@ -69,7 +80,7 @@
                 <el-button
                   type="primary"
                   :loading="loading"
-                  :disabled="loginCaptchaLoading || !loginForm.captchaId"
+                  :disabled="loginCaptchaEnabled && (loginCaptchaLoading || !loginForm.captchaId)"
                   @click="handleLogin"
                   style="width: 100%"
                 >
@@ -157,6 +168,7 @@ import { useAuthStore } from '../stores/auth'
 import api from '../utils/api'
 import { getPostLoginRedirectPath } from '../utils/authRedirect'
 import { checkNeedsSetup } from '../utils/setupStatus'
+import appLogo from '@/assets/brand/app-logo.webp'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -169,6 +181,7 @@ const loginCaptchaPrompt = ref('')
 const registerCaptchaPrompt = ref('')
 const loginCaptchaLoading = ref(false)
 const registerCaptchaLoading = ref(false)
+const loginCaptchaEnabled = ref(true)
 
 const loginForm = reactive({
   username: '',
@@ -189,7 +202,18 @@ const registerForm = reactive({
 const loginRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-  captchaAnswer: [{ required: true, message: '请输入计算结果', trigger: 'blur' }]
+  captchaAnswer: [
+    {
+      validator: (rule, value, callback) => {
+        if (!loginCaptchaEnabled.value || String(value || '').trim()) {
+          callback()
+          return
+        }
+        callback(new Error('请输入计算结果'))
+      },
+      trigger: 'blur'
+    }
+  ]
 }
 
 const registerRules = {
@@ -223,7 +247,7 @@ const registerRules = {
 const fetchCaptcha = async (form, promptRef, loadingRef, formRef) => {
   loadingRef.value = true
   try {
-    const { data } = await api.get('/captcha/challenge')
+    const { data } = await api.get('/captcha/challenge', { silentError: true })
     form.captchaId = data.captchaId
     form.captchaAnswer = ''
     promptRef.value = data.prompt
@@ -237,7 +261,31 @@ const fetchCaptcha = async (form, promptRef, loadingRef, formRef) => {
   }
 }
 
+const clearLoginCaptcha = () => {
+  loginForm.captchaId = ''
+  loginForm.captchaAnswer = ''
+  loginCaptchaPrompt.value = ''
+  loginFormRef.value?.clearValidate?.(['captchaAnswer'])
+}
+
+const loadLoginCaptchaStatus = async () => {
+  try {
+    const { data } = await api.get('/captcha/status', { silentError: true })
+    loginCaptchaEnabled.value = data?.enabled !== false
+  } catch (error) {
+    loginCaptchaEnabled.value = true
+  }
+
+  if (!loginCaptchaEnabled.value) {
+    clearLoginCaptcha()
+  }
+}
+
 const refreshLoginCaptcha = async () => {
+  if (!loginCaptchaEnabled.value) {
+    clearLoginCaptcha()
+    return
+  }
   await fetchCaptcha(loginForm, loginCaptchaPrompt, loginCaptchaLoading, loginFormRef)
 }
 
@@ -254,19 +302,22 @@ const handleLogin = async () => {
     return
   }
 
-  if (!loginForm.captchaId) {
+  if (loginCaptchaEnabled.value && !loginForm.captchaId) {
     ElMessage.error('人机验证加载失败，请换一题重试')
     await refreshLoginCaptcha()
     return
   }
 
   loading.value = true
-  const result = await authStore.login({
+  const credentials = {
     username: loginForm.username,
-    password: loginForm.password,
-    captchaId: loginForm.captchaId,
-    captchaAnswer: loginForm.captchaAnswer.trim()
-  })
+    password: loginForm.password
+  }
+  if (loginCaptchaEnabled.value) {
+    credentials.captchaId = loginForm.captchaId
+    credentials.captchaAnswer = loginForm.captchaAnswer.trim()
+  }
+  const result = await authStore.login(credentials)
   loading.value = false
 
   if (result.success) {
@@ -274,7 +325,9 @@ const handleLogin = async () => {
     router.push(getPostLoginRedirectPath(authStore.user))
   } else {
     ElMessage.error(result.message)
-    await refreshLoginCaptcha()
+    if (loginCaptchaEnabled.value) {
+      await refreshLoginCaptcha()
+    }
   }
 }
 
@@ -314,7 +367,10 @@ const handleRegister = async () => {
       captchaId: '',
       captchaAnswer: ''
     })
-    await Promise.all([refreshLoginCaptcha(), refreshRegisterCaptcha()])
+    await Promise.all([
+      loginCaptchaEnabled.value ? refreshLoginCaptcha() : Promise.resolve(),
+      refreshRegisterCaptcha()
+    ])
   } else {
     ElMessage.error(result.message)
     await refreshRegisterCaptcha()
@@ -332,9 +388,13 @@ const checkSystemStatus = async () => {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   checkSystemStatus()
-  Promise.allSettled([refreshLoginCaptcha(), refreshRegisterCaptcha()])
+  await loadLoginCaptchaStatus()
+  Promise.allSettled([
+    loginCaptchaEnabled.value ? refreshLoginCaptcha() : Promise.resolve(),
+    refreshRegisterCaptcha()
+  ])
 })
 </script>
 
@@ -357,6 +417,43 @@ onMounted(() => {
 
 .login-hero {
   padding: 28px;
+}
+
+.login-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+  padding: 10px 14px 10px 10px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.86);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+}
+
+.login-brand-logo {
+  width: 58px;
+  height: 58px;
+  border-radius: 20px;
+  object-fit: cover;
+  box-shadow: 0 12px 24px rgba(0, 122, 255, 0.18);
+}
+
+.login-brand strong,
+.login-brand span {
+  display: block;
+}
+
+.login-brand strong {
+  color: var(--apple-text);
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.login-brand span {
+  margin-top: 3px;
+  color: var(--apple-text-secondary);
+  font-size: 13px;
 }
 
 .login-eyebrow,

@@ -48,6 +48,17 @@
           />
         </el-form-item>
 
+        <el-form-item label="设备昵称（可选）" prop="nick_name">
+          <el-input
+            v-model="form.nick_name"
+            placeholder="例如：客厅音箱、办公室小智"
+            maxlength="50"
+            show-word-limit
+            clearable
+            autocomplete="off"
+          />
+        </el-form-item>
+
         <div class="form-hint">
           <span>示例：</span>
           <code>123456</code>
@@ -103,7 +114,8 @@ const visible = computed({
 
 const form = reactive({
   agent_id: '',
-  identifier: ''
+  identifier: '',
+  nick_name: ''
 })
 
 const hasFixedAgent = computed(() => props.fixedAgentId !== null && props.fixedAgentId !== undefined && props.fixedAgentId !== '')
@@ -129,6 +141,7 @@ const rules = computed(() => ({
 const resetForm = () => {
   form.agent_id = hasFixedAgent.value ? String(props.fixedAgentId) : ''
   form.identifier = ''
+  form.nick_name = ''
   formRef.value?.clearValidate?.()
 }
 
@@ -156,10 +169,12 @@ const closeDialog = () => {
 
 const buildPayload = (identifier) => {
   const text = identifier.trim()
-  if (/^\d{6}$/.test(text)) {
-    return { code: text }
+  const payload = /^\d{6}$/.test(text) ? { code: text } : { device_mac: text }
+  const nickName = form.nick_name.trim()
+  if (nickName) {
+    payload.nick_name = nickName
   }
-  return { device_mac: text }
+  return payload
 }
 
 const handleSubmit = async () => {

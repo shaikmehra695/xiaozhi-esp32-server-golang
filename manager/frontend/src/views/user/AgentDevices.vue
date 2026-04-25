@@ -1,30 +1,41 @@
 <template>
   <div class="agent-devices-page">
-    <div class="page-header">
-      <div class="header-left">
-        <el-button @click="goBack" type="text" class="back-btn">
+    <div class="devices-filter-bar">
+      <div class="filter-controls">
+        <el-button v-if="showBackButton" @click="goBack" type="text" class="back-btn">
           <el-icon><ArrowLeft /></el-icon>
           返回
         </el-button>
-        <div class="header-context">
-          <span class="context-label">智能体设备</span>
-          <p class="context-meta">绑定、移除并查看当前智能体的设备状态</p>
-        </div>
+        <el-select
+          v-model="filterAgentId"
+          placeholder="按智能体筛选"
+          clearable
+          filterable
+          class="agent-filter-select"
+          @change="handleAgentFilterChange"
+        >
+          <el-option label="全部设备" value="" />
+          <el-option
+            v-for="agent in agents"
+            :key="agent.id"
+            :label="agent.name"
+            :value="String(agent.id)"
+          />
+        </el-select>
+        <span class="devices-count">共 {{ filteredDevices.length }} 台设备</span>
       </div>
-      <div class="header-right">
-        <el-button type="primary" @click="showAddDeviceDialog = true">
-          <el-icon><Plus /></el-icon>
-          添加设备
-        </el-button>
-      </div>
+      <el-button class="add-device-button" type="primary" @click="showAddDeviceDialog = true">
+        <el-icon><Plus /></el-icon>
+        添加设备
+      </el-button>
     </div>
 
-    <div v-if="devices.length === 0" class="empty-section">
+    <div v-if="filteredDevices.length === 0" class="empty-section">
       <el-card class="empty-card">
         <div class="empty-content">
           <el-icon size="64" color="var(--apple-text-tertiary)"><Monitor /></el-icon>
           <h3>暂无设备</h3>
-          <p>该智能体还没有关联任何设备。</p>
+          <p>{{ emptyDescription }}</p>
           <div class="empty-actions">
             <el-button type="primary" size="large" @click="showAddDeviceDialog = true">
               <el-icon><Plus /></el-icon>
@@ -36,15 +47,65 @@
     </div>
 
     <div v-else class="devices-grid">
-      <div v-for="device in devices" :key="device.id" class="device-item">
+      <div v-for="device in filteredDevices" :key="device.id" class="device-item">
         <div class="device-card">
           <div class="device-header">
             <div class="device-icon">
               <el-icon size="28"><Monitor /></el-icon>
             </div>
             <div class="device-info">
-              <h3 class="device-name">{{ device.device_name || '未命名设备' }}</h3>
-              <p class="device-code">{{ device.device_code }}</p>
+              <div class="device-name-row">
+	                <el-input
+	                  v-if="editingDeviceId === device.id"
+	                  ref="deviceNameInputRef"
+	                  v-model="editingDeviceName"
+	                  class="device-name-input"
+	                  size="small"
+                  maxlength="50"
+                  show-word-limit
+                  placeholder="请输入设备昵称"
+	                  @keydown.enter.prevent="saveDeviceName(device)"
+	                  @keydown.esc.prevent="cancelDeviceNameEdit"
+	                />
+	                <button
+	                  v-else
+	                  type="button"
+	                  class="device-name-button"
+	                  :title="`点击修改设备昵称：${getDeviceDisplayName(device)}`"
+	                  @click="startDeviceNameEdit(device)"
+	                >
+	                  <span class="device-name">{{ getDeviceDisplayName(device) }}</span>
+	                </button>
+	                <div class="device-name-actions">
+	                  <template v-if="editingDeviceId === device.id">
+	                    <el-button
+	                      class="name-action-button"
+	                      type="primary"
+	                      :icon="Check"
+	                      circle
+	                      :loading="renamingDeviceId === device.id"
+	                      title="保存昵称"
+	                      @click="saveDeviceName(device)"
+	                    />
+	                    <el-button
+	                      class="name-action-button"
+	                      :icon="Close"
+	                      circle
+	                      title="取消修改"
+	                      @click="cancelDeviceNameEdit"
+	                    />
+	                  </template>
+	                  <el-button
+	                    v-else
+	                    class="rename-icon-button"
+	                    :icon="EditPen"
+	                    circle
+	                    title="修改设备昵称"
+	                    @click="startDeviceNameEdit(device)"
+	                  />
+	                </div>
+              </div>
+              <p class="device-identity" :title="getDeviceIdentityText(device)">{{ getDeviceIdentityText(device) }}</p>
             </div>
             <div class="device-status">
               <span :class="['status-dot', isDeviceOnline(device.last_active_at) ? 'online' : 'offline']"></span>
@@ -53,6 +114,10 @@
           </div>
           
           <div class="device-meta">
+            <div class="meta-row">
+              <span class="meta-label">关联智能体</span>
+              <span class="meta-value">{{ getDeviceAgentName(device) }}</span>
+            </div>
             <div class="meta-row">
               <span class="meta-label">设备类型</span>
               <span class="meta-value">ESP32设备</span>
@@ -84,9 +149,17 @@
               <el-icon><Setting /></el-icon>
               MCP
             </el-button>
-            <el-button size="small" type="danger" @click="handleRemoveDevice(device.id)">
+            <el-button class="voice-push-button" size="small" plain @click="handleVoicePush(device)">
+              <el-icon><ChatDotRound /></el-icon>
+              语音通知
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              @click="handleDeleteDevice(device)"
+            >
               <el-icon><Delete /></el-icon>
-              移除
+              删除
             </el-button>
           </div>
         </div>
@@ -95,9 +168,18 @@
 
     <DeviceBindingDialog
       v-model="showAddDeviceDialog"
-      :fixed-agent-id="agentId"
+      :agents="agents"
+      :fixed-agent-id="bindingAgentId"
       title="绑定设备"
       @success="handleDeviceBound"
+    />
+
+    <MessageInjectDialog
+      v-model="showVoicePushDialog"
+      :devices="devices"
+      :default-device-id="voicePushDeviceId"
+      :lock-device="Boolean(voicePushDeviceId)"
+      @success="handleVoicePushSuccess"
     />
 
     <!-- 设备MCP弹窗 -->
@@ -231,19 +313,30 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { computed, nextTick, ref, reactive, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Plus, Monitor, Setting, Delete, User } from '@element-plus/icons-vue'
+import { ArrowLeft, Plus, Monitor, Setting, Delete, User, ChatDotRound, EditPen, Check, Close } from '@element-plus/icons-vue'
 import api from '../../utils/api'
 import DeviceBindingDialog from '../../components/user/DeviceBindingDialog.vue'
+import MessageInjectDialog from '../../components/user/MessageInjectDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
 
-const agentId = route.params.id
+const routeAgentId = computed(() => route.params.id ? String(route.params.id) : '')
+const showBackButton = computed(() => !!routeAgentId.value)
+const filterAgentId = ref(String(route.params.id || route.query.agent_id || ''))
+const bindingAgentId = computed(() => filterAgentId.value || null)
+const agents = ref([])
 const devices = ref([])
 const showAddDeviceDialog = ref(false)
+const showVoicePushDialog = ref(false)
+const voicePushDeviceId = ref('')
+const editingDeviceId = ref(null)
+const editingDeviceName = ref('')
+const renamingDeviceId = ref(null)
+const deviceNameInputRef = ref(null)
 
 const showMcpDialog = ref(false)
 const mcpLoading = ref(false)
@@ -262,10 +355,39 @@ const selectedRoleId = ref(null)
 const selectedRole = ref(null)
 const availableRoles = ref([])
 const isRoleActive = (role) => role?.status === 'active' || !role?.status
+const agentNameMap = computed(() => {
+  const map = new Map()
+  for (const agent of agents.value) {
+    map.set(String(agent.id), agent.name || `智能体 #${agent.id}`)
+  }
+  return map
+})
+const selectedAgentName = computed(() => {
+  if (!filterAgentId.value) return ''
+  return agentNameMap.value.get(String(filterAgentId.value)) || `智能体 #${filterAgentId.value}`
+})
+const filteredDevices = computed(() => {
+  if (!filterAgentId.value) return devices.value
+  return devices.value.filter(device => String(device.agent_id || '') === String(filterAgentId.value))
+})
+const emptyDescription = computed(() => {
+  if (selectedAgentName.value) return '该智能体还没有关联任何设备。'
+  return '当前账号还没有绑定任何设备。'
+})
+
+const loadAgents = async () => {
+  try {
+    const response = await api.get('/user/agents')
+    agents.value = response.data.data || []
+  } catch (error) {
+    agents.value = []
+    ElMessage.error('加载智能体列表失败')
+  }
+}
 
 const loadDevices = async () => {
   try {
-    const response = await api.get(`/user/agents/${agentId}/devices`)
+    const response = await api.get('/user/devices')
     devices.value = response.data.data || []
   } catch (error) {
     ElMessage.error('加载设备列表失败')
@@ -274,6 +396,81 @@ const loadDevices = async () => {
 
 const handleDeviceBound = async () => {
   await loadDevices()
+}
+
+const handleVoicePush = (device) => {
+  if (!device?.device_name) {
+    ElMessage.warning('设备缺少设备标识，无法进行语音通知')
+    return
+  }
+  voicePushDeviceId.value = device.device_name
+  showVoicePushDialog.value = true
+}
+
+const handleVoicePushSuccess = () => {
+  voicePushDeviceId.value = ''
+}
+
+const handleAgentFilterChange = (value) => {
+  const query = value ? { agent_id: value } : {}
+  router.replace({ path: '/user/devices', query })
+}
+
+const getDeviceAgentName = (device) => {
+  if (!device?.agent_id) return '未绑定'
+  return device.agent_name || agentNameMap.value.get(String(device.agent_id)) || `智能体 #${device.agent_id}`
+}
+
+const getDeviceDisplayName = (device) => {
+  const nickName = String(device?.nick_name || '').trim()
+  if (nickName) return nickName
+  return String(device?.device_name || '').trim() || '未命名设备'
+}
+
+const getDeviceIdentityText = (device) => {
+  const deviceId = String(device?.device_name || '').trim() || '-'
+  return `设备ID: ${deviceId}`
+}
+
+const startDeviceNameEdit = (device) => {
+  editingDeviceId.value = device.id
+  editingDeviceName.value = String(device.nick_name || '').trim() || getDeviceDisplayName(device)
+  nextTick(() => {
+    deviceNameInputRef.value?.focus?.()
+  })
+}
+
+const cancelDeviceNameEdit = () => {
+  editingDeviceId.value = null
+  editingDeviceName.value = ''
+}
+
+const saveDeviceName = async (device) => {
+  const name = editingDeviceName.value.trim()
+  if (!name) {
+    ElMessage.warning('设备昵称不能为空')
+    return
+  }
+  if (name === String(device.nick_name || '').trim()) {
+    cancelDeviceNameEdit()
+    return
+  }
+
+  renamingDeviceId.value = device.id
+  try {
+    const response = await api.put(`/user/devices/${device.id}`, { nick_name: name })
+    const updatedDevice = response.data?.data || {}
+    const target = devices.value.find(item => item.id === device.id)
+    if (target) {
+      target.nick_name = updatedDevice.nick_name || name
+    }
+    ElMessage.success('设备昵称已更新')
+    cancelDeviceNameEdit()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.error || '更新设备昵称失败')
+  } finally {
+    renamingDeviceId.value = null
+  }
 }
 
 const handleDeviceMcp = async (device) => {
@@ -518,26 +715,30 @@ const handleCloseRoleConfig = () => {
   selectedRole.value = null
 }
 
-const handleRemoveDevice = async (deviceId) => {
-  try {
-    await ElMessageBox.confirm(
-      '确定要移除这个设备吗？',
-      '确认移除',
+const handleDeleteDevice = async (device) => {
+  if (!device?.id) {
+    return
+  }
+
+	  try {
+	    await ElMessageBox.confirm(
+	      `确定要从系统中删除「${getDeviceDisplayName(device)}」吗？删除后设备需要重新激活，才能再次进入系统。`,
+	      '确认删除设备',
       {
-        confirmButtonText: '确定',
+        confirmButtonText: '删除',
         cancelButtonText: '取消',
         type: 'warning',
       }
     )
-    
-    const response = await api.delete(`/user/agents/${agentId}/devices/${deviceId}`)
+
+    const response = await api.delete(`/user/devices/${device.id}`)
     if (response.data.success) {
-      ElMessage.success('设备移除成功')
+      ElMessage.success(response.data.message || '设备已从系统删除')
       await loadDevices()
     }
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('移除设备失败')
+      ElMessage.error(error.response?.data?.error || '删除设备失败')
     }
   }
 }
@@ -561,9 +762,17 @@ const isDeviceOnline = (lastActiveAt) => {
 }
 
 onMounted(() => {
+  loadAgents()
   loadDevices()
   loadRoles()
 })
+
+watch(
+  () => [route.params.id, route.query.agent_id],
+  () => {
+    filterAgentId.value = String(route.params.id || route.query.agent_id || '')
+  }
+)
 </script>
 
 <style scoped>
@@ -571,45 +780,9 @@ onMounted(() => {
   padding: 0;
 }
 
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding: 20px;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  border-radius: var(--apple-radius-lg);
-  box-shadow: var(--apple-shadow-md);
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-}
-
 .back-btn {
   padding: 8px;
   color: var(--apple-primary);
-}
-
-.header-context {
-  display: grid;
-  gap: 4px;
-}
-
-.context-label {
-  color: var(--apple-text);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.context-meta {
-  margin: 0;
-  color: var(--apple-text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
 }
 
 .empty-section {
@@ -631,12 +804,47 @@ onMounted(() => {
   margin-bottom: 30px;
 }
 
+.devices-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: var(--apple-shadow-sm);
+}
+
+.filter-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.agent-filter-select {
+  width: 240px;
+}
+
+.devices-count {
+  color: var(--apple-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.add-device-button {
+  flex: none;
+  margin-left: auto;
+}
+
 .devices-grid {
   margin-top: 20px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 440px));
-  gap: 20px 12px;
-  justify-content: flex-start;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
 }
 
 .device-item {
@@ -645,8 +853,8 @@ onMounted(() => {
 
 .device-card {
   background: rgba(255, 255, 255, 0.88);
-  border-radius: 22px;
-  padding: 20px;
+  border-radius: 20px;
+  padding: 16px;
   border: 1px solid rgba(229, 229, 234, 0.72);
   box-shadow: var(--apple-shadow-md);
   transition: all 0.3s ease;
@@ -654,7 +862,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 440px;
   min-width: 0;
 }
 
@@ -672,8 +879,8 @@ onMounted(() => {
 }
 
 .device-icon {
-  width: 48px;
-  height: 48px;
+  width: 42px;
+  height: 42px;
   background: linear-gradient(180deg, #2e90ff 0%, #007aff 100%);
   border-radius: 12px;
   display: flex;
@@ -688,21 +895,99 @@ onMounted(() => {
   min-width: 0;
 }
 
+.device-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  min-width: 0;
+}
+
 .device-name {
-  margin: 0 0 4px 0;
+  margin: 0;
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--apple-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.device-code {
+.device-name-button {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: text;
+}
+
+.device-name-button:hover .device-name,
+.device-name-button:focus-visible .device-name {
+  color: var(--apple-primary);
+}
+
+.device-name-button:focus-visible {
+  outline: 2px solid rgba(0, 122, 255, 0.22);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
+.device-name-input {
+  min-width: 0;
+}
+
+.device-name-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.device-name-actions :deep(.el-button) {
+  min-height: auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   margin: 0;
   font-size: 12px;
+  border-radius: 9px;
+}
+
+.rename-icon-button {
+  opacity: 0.28;
   color: var(--apple-text-tertiary);
+  border-color: rgba(229, 229, 234, 0.78);
+  background: rgba(255, 255, 255, 0.7);
+  transition: opacity 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.device-name-row:hover .rename-icon-button,
+.device-card:hover .rename-icon-button,
+.rename-icon-button:focus-visible {
+  opacity: 1;
+  color: var(--apple-primary);
+  border-color: rgba(0, 122, 255, 0.28);
+  transform: translateY(-1px);
+}
+
+.name-action-button {
+  box-shadow: none;
+}
+
+.device-identity {
+  margin: 0;
+  font-size: 11px;
+  color: rgba(107, 114, 128, 0.74);
   font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .device-status {
@@ -774,7 +1059,7 @@ onMounted(() => {
 
 .device-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: auto;
 }
@@ -782,13 +1067,41 @@ onMounted(() => {
 .device-actions .el-button {
   min-width: 0;
   width: 100%;
+  height: 34px;
+  min-height: 34px;
+  margin: 0;
   padding: 0 8px;
+  justify-content: center;
+  border-radius: 12px;
 }
 
 .device-actions :deep(.el-button > span) {
+  min-width: 0;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.device-actions :deep(.el-icon) {
+  flex: none;
+}
+
+.voice-push-button {
+  color: #0f6f8f;
+  background: rgba(8, 145, 178, 0.08);
+  border-color: rgba(8, 145, 178, 0.22);
+}
+
+.voice-push-button:hover,
+.voice-push-button:focus {
+  color: #075985;
+  background: rgba(8, 145, 178, 0.14);
+  border-color: rgba(8, 145, 178, 0.34);
 }
 
 .dialog-footer {
@@ -868,18 +1181,27 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
-  .page-header {
-    flex-direction: column;
+  .devices-filter-bar {
     align-items: stretch;
-    gap: 15px;
+    flex-direction: column;
   }
-  
-  .header-left {
-    justify-content: flex-start;
+
+  .filter-controls {
+    align-items: stretch;
+    flex-direction: column;
   }
-  
-  .header-right {
-    align-self: flex-end;
+
+  .agent-filter-select {
+    width: 100%;
+  }
+
+  .devices-count {
+    align-self: flex-start;
+  }
+
+  .add-device-button {
+    width: 100%;
+    margin-left: 0;
   }
 
   .devices-grid {
@@ -887,12 +1209,12 @@ onMounted(() => {
     gap: 12px;
   }
 
-.device-actions {
+  .device-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .device-actions .el-button:last-child {
-    grid-column: 1 / -1;
+  .rename-icon-button {
+    opacity: 1;
   }
 }
 
@@ -901,8 +1223,14 @@ onMounted(() => {
     gap: 10px;
   }
 
-.device-actions {
+  .device-actions {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1180px) {
+  .devices-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

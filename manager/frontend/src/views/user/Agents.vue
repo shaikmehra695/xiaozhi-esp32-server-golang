@@ -2,9 +2,9 @@
   <div class="agents-page">
     <section class="page-toolbar apple-surface">
       <div class="toolbar-chips">
-        <span class="apple-chip is-primary">智能体 {{ agents.length }}</span>
-        <span class="apple-chip is-success">设备 {{ allDevices.length }}</span>
-        <span class="apple-chip">在线 {{ onlineDevicesCount }}</span>
+        <span class="apple-chip is-primary">智能体 {{ agentsCountText }}</span>
+        <span class="apple-chip is-success">设备 {{ devicesCountText }}</span>
+        <span class="apple-chip">在线 {{ onlineDevicesCountText }}</span>
       </div>
 
       <div class="toolbar-actions">
@@ -18,30 +18,40 @@
         </el-button>
         <el-button plain @click="openInjectMessageDialog">
           <el-icon><ChatDotRound /></el-icon>
-          消息注入
+          语音推送
         </el-button>
       </div>
     </section>
 
-    <section class="stats-grid">
-      <article class="metric-card">
-        <span class="metric-label">活跃智能体</span>
-        <strong>{{ activeAgentsCount }}</strong>
-        <p>当前可直接响应的智能体数量</p>
-      </article>
-      <article class="metric-card">
-        <span class="metric-label">已绑定设备</span>
-        <strong>{{ allDevices.length }}</strong>
-        <p>已归属到当前账号的设备总数</p>
-      </article>
-      <article class="metric-card">
-        <span class="metric-label">在线设备</span>
-        <strong>{{ onlineDevicesCount }}</strong>
-        <p>最近 5 分钟有心跳的设备</p>
+    <section v-if="initialLoading" class="agents-grid agents-grid-loading" aria-label="智能体加载中">
+      <article v-for="index in 3" :key="index" class="agent-card agent-card-skeleton apple-surface">
+        <div class="skeleton-card-header">
+          <div class="skeleton-avatar skeleton-shimmer"></div>
+          <div class="skeleton-title-block">
+            <div class="skeleton-line skeleton-line-title skeleton-shimmer"></div>
+            <div class="skeleton-line skeleton-line-subtitle skeleton-shimmer"></div>
+          </div>
+          <div class="skeleton-icons">
+            <span class="skeleton-icon skeleton-shimmer"></span>
+            <span class="skeleton-icon skeleton-shimmer"></span>
+            <span class="skeleton-icon skeleton-shimmer"></span>
+            <span class="skeleton-icon skeleton-shimmer"></span>
+          </div>
+        </div>
+        <div class="skeleton-summary">
+          <div class="skeleton-line skeleton-shimmer"></div>
+          <div class="skeleton-line skeleton-shimmer"></div>
+          <div class="skeleton-line skeleton-line-short skeleton-shimmer"></div>
+        </div>
+        <div class="skeleton-actions">
+          <span class="skeleton-button skeleton-shimmer"></span>
+          <span class="skeleton-button skeleton-shimmer"></span>
+          <span class="skeleton-button skeleton-shimmer"></span>
+        </div>
       </article>
     </section>
 
-    <div v-if="agents.length === 0" class="welcome-section">
+    <div v-else-if="agents.length === 0" class="welcome-section">
       <el-card class="welcome-card apple-surface">
         <div class="welcome-content">
           <el-icon size="64" color="var(--apple-primary)"><Monitor /></el-icon>
@@ -60,52 +70,57 @@
     <section v-else class="agents-grid">
       <article v-for="agent in agents" :key="agent.id" class="agent-card apple-surface">
         <div class="agent-header">
-          <div class="agent-avatar">
-            <el-icon><Monitor /></el-icon>
+          <div class="agent-heading">
+            <div class="agent-avatar">
+              <el-icon><Monitor /></el-icon>
+            </div>
+            <div class="agent-info">
+              <h3 class="agent-name">{{ agent.name }}</h3>
+              <p class="agent-desc">昵称：{{ agent.nickname || agent.name }}</p>
+            </div>
           </div>
-          <div class="agent-info">
-            <h3 class="agent-name">{{ agent.name }}</h3>
-            <p class="agent-desc">{{ agent.custom_prompt ? '已配置角色 Prompt' : '尚未填写角色 Prompt' }}</p>
-          </div>
-          <div class="agent-status" :class="agent.status === 'active' ? 'active' : 'idle'">
-            <span class="status-dot"></span>
-            <span class="status-text">{{ agent.status === 'active' ? '活跃' : '待机' }}</span>
+
+          <div class="agent-state-grid">
+            <el-tooltip :content="`记忆类型：${getMemoryModeText(agent)}`" placement="top" :show-after="200">
+              <div class="agent-state-badge is-icon-only" :class="`is-memory-${getMemoryModeKey(agent)}`">
+                <img class="state-image-icon state-image-icon--memory" :src="memoryStatusIcon" alt="" />
+              </div>
+            </el-tooltip>
+
+            <el-tooltip :content="getKnowledgeBaseTooltip(agent)" placement="top" :show-after="200">
+              <div class="agent-state-badge is-icon-only is-counter-badge" :class="{ 'is-active': getKnowledgeBaseCount(agent) > 0 }">
+                <img class="state-image-icon state-image-icon--knowledge" :src="knowledgeBaseStatusIcon" alt="" />
+                <span class="state-counter">{{ getKnowledgeBaseBadgeText(agent) }}</span>
+              </div>
+            </el-tooltip>
+
+            <el-tooltip :content="getMcpStatusTooltip(agent)" placement="top" :show-after="200" @show="ensureMcpConnectionStatus(agent.id)">
+              <div class="agent-state-badge is-icon-only" :class="`is-mcp-${getMcpStatusKey(agent)}`">
+                <img class="state-image-icon state-image-icon--mcp" :src="mcpStatusIcon" alt="" />
+              </div>
+            </el-tooltip>
+
+            <el-tooltip :content="getOpenClawStatusTooltip(agent)" placement="top" :show-after="200" @show="ensureOpenClawConnectionStatus(agent.id)">
+              <div class="agent-state-badge is-icon-only" :class="`is-openclaw-${getOpenClawStatusKey(agent)}`">
+                <img class="state-image-icon state-image-icon--openclaw" :src="openClawStatusIcon" alt="" />
+              </div>
+            </el-tooltip>
           </div>
         </div>
 
-        <div class="agent-meta">
-          <div class="meta-row">
-            <span class="meta-label">TTS 配置</span>
-            <span class="meta-value">{{ getVoiceType(agent) }}</span>
+        <div class="agent-summary">
+          <div class="summary-row" :title="`音色模型：${getVoiceModelText(agent)}`">
+            <span class="summary-label">音色模型：</span>
+            <span class="summary-text">{{ truncateText(getVoiceModelText(agent), 18) }}</span>
           </div>
-          <div class="meta-row">
-            <span class="meta-label">语言模型</span>
-            <span class="meta-value">{{ getLLMProvider(agent) }}</span>
+          <div class="summary-row" :title="`语言模型：${getLLMModelText(agent)}`">
+            <span class="summary-label">语言模型：</span>
+            <span class="summary-text">{{ truncateText(getLLMModelText(agent), 16) }}</span>
           </div>
-          <div class="meta-row">
-            <span class="meta-label">关联设备</span>
-            <span class="meta-value">{{ getAgentDeviceCount(agent.id) }} 台</span>
+          <div class="summary-row" :title="`设备数量：${getDeviceCountText(agent)}`">
+            <span class="summary-label">设备数量：</span>
+            <span class="summary-text is-count">{{ getDeviceCountText(agent) }}</span>
           </div>
-          <div class="meta-row">
-            <span class="meta-label">最近更新</span>
-            <span class="meta-value">{{ formatDate(agent.updated_at) }}</span>
-          </div>
-        </div>
-
-        <div v-if="getAgentDevices(agent.id).length > 0" class="device-preview">
-          <span
-            v-for="device in getAgentDevices(agent.id).slice(0, 3)"
-            :key="device.id"
-            class="device-chip"
-          >
-            {{ device.device_name || device.device_code }}
-          </span>
-          <span v-if="getAgentDevices(agent.id).length > 3" class="device-chip subtle">
-            +{{ getAgentDevices(agent.id).length - 3 }}
-          </span>
-        </div>
-        <div v-else class="device-empty">
-          还没有绑定设备，可以直接从本页添加。
         </div>
 
         <div class="agent-actions">
@@ -146,6 +161,15 @@
             :maxlength="50"
             show-word-limit
           />
+        </el-form-item>
+        <el-form-item label="智能体昵称" prop="nickname">
+          <el-input
+            v-model="agentForm.nickname"
+            placeholder="给大模型使用，例如：小辉"
+            :maxlength="50"
+            show-word-limit
+          />
+          <div class="form-tip">用于替换 Prompt 中的 {{assistant_name}}，不是列表里的管理名称。</div>
         </el-form-item>
         <el-form-item label="角色介绍" prop="custom_prompt">
           <el-input
@@ -202,10 +226,14 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Setting, ChatDotRound, Monitor, Connection } from '@element-plus/icons-vue'
+import { Plus, Setting, ChatDotRound, Monitor } from '@element-plus/icons-vue'
 import api from '../../utils/api'
 import DeviceBindingDialog from '../../components/user/DeviceBindingDialog.vue'
 import MessageInjectDialog from '../../components/user/MessageInjectDialog.vue'
+import mcpStatusIcon from '../../assets/agent-status-icons/mcp.png'
+import openClawStatusIcon from '../../assets/agent-status-icons/openclaw.png'
+import memoryStatusIcon from '../../assets/agent-status-icons/memory.png'
+import knowledgeBaseStatusIcon from '../../assets/agent-status-icons/knowledge-base.png'
 
 const router = useRouter()
 
@@ -213,6 +241,7 @@ const DEFAULT_PROMPT = '我是一个叫{{assistant_name}}的台湾女孩，说�
 
 const agents = ref([])
 const allDevices = ref([])
+const knowledgeBases = ref([])
 
 const showAddAgentDialog = ref(false)
 const showAddDeviceDialog = ref(false)
@@ -220,9 +249,11 @@ const showInjectMessageDialog = ref(false)
 
 const adding = ref(false)
 const agentFormRef = ref()
+const initialLoading = ref(true)
 
 const agentForm = reactive({
   name: '',
+  nickname: '',
   custom_prompt: DEFAULT_PROMPT,
   memory_mode: 'short',
   speaker_chat_mode: 'off'
@@ -233,6 +264,10 @@ const agentRules = {
     { required: true, message: '请输入智能体名称', trigger: 'blur' },
     { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
   ],
+  nickname: [
+    { required: true, message: '请输入智能体昵称', trigger: 'blur' },
+    { min: 1, max: 50, message: '长度在 1 到 50 个字符', trigger: 'blur' }
+  ],
   memory_mode: [
     { required: true, message: '请选择记忆模式', trigger: 'change' }
   ],
@@ -241,8 +276,19 @@ const agentRules = {
   ]
 }
 
-const activeAgentsCount = computed(() => agents.value.filter(agent => agent.status === 'active').length)
 const onlineDevicesCount = computed(() => allDevices.value.filter(device => isDeviceOnline(device.last_active_at)).length)
+const agentsCountText = computed(() => initialLoading.value ? '--' : agents.value.length)
+const devicesCountText = computed(() => initialLoading.value ? '--' : allDevices.value.length)
+const onlineDevicesCountText = computed(() => initialLoading.value ? '--' : onlineDevicesCount.value)
+const knowledgeBaseNameMap = computed(() => {
+  const map = new Map()
+  for (const kb of knowledgeBases.value) {
+    map.set(Number(kb.id), kb.name || `知识库 #${kb.id}`)
+  }
+  return map
+})
+const mcpConnectionStatusMap = reactive({})
+const openClawConnectionStatusMap = reactive({})
 
 const isDeviceOnline = (lastActiveAt) => {
   if (!lastActiveAt) return false
@@ -275,6 +321,16 @@ const loadDevices = async () => {
   }
 }
 
+const loadKnowledgeBases = async () => {
+  try {
+    const response = await api.get('/user/knowledge-bases')
+    knowledgeBases.value = response.data.data || []
+  } catch (error) {
+    knowledgeBases.value = []
+    console.error('加载知识库列表失败:', error)
+  }
+}
+
 const handleAddAgent = async () => {
   if (!agentFormRef.value) return
 
@@ -297,7 +353,8 @@ const handleAddAgent = async () => {
     const defaultTtsConfig = ttsConfigs.find(config => config.is_default)
 
     const agentData = {
-      name: agentForm.name,
+      name: agentForm.name.trim(),
+      nickname: agentForm.nickname.trim(),
       custom_prompt: agentForm.custom_prompt,
       memory_mode: agentForm.memory_mode,
       speaker_chat_mode: agentForm.speaker_chat_mode
@@ -333,7 +390,7 @@ const openAddDeviceDialog = () => {
 
 const openInjectMessageDialog = () => {
   if (!allDevices.value.length) {
-    ElMessage.warning('请先绑定设备，再进行消息注入')
+    ElMessage.warning('请先绑定设备，再进行语音推送')
     return
   }
   showInjectMessageDialog.value = true
@@ -352,6 +409,7 @@ const handleCloseAddAgent = () => {
   agentFormRef.value?.resetFields?.()
   Object.assign(agentForm, {
     name: '',
+    nickname: '',
     custom_prompt: DEFAULT_PROMPT,
     memory_mode: 'short',
     speaker_chat_mode: 'off'
@@ -367,24 +425,209 @@ const handleChatHistory = (id) => {
 }
 
 const handleManageDevices = (id) => {
-  router.push(`/user/agents/${id}/devices`)
+  router.push({ path: '/user/devices', query: { agent_id: id } })
 }
 
-const getVoiceType = (agent) => {
-  return agent.tts_config?.name || '未设置'
+const truncateText = (value, maxLength = 14) => {
+  const text = String(value || '').trim() || '未设置'
+  if (text.length <= maxLength) {
+    return text
+  }
+  return `${text.slice(0, maxLength)}...`
 }
 
-const getLLMProvider = (agent) => {
-  return agent.llm_config?.name || '未设置'
+const getVoiceModelText = (agent) => {
+  const ttsType = agent.tts_config?.name?.trim() || agent.tts_config?.provider?.trim() || ''
+  const voiceName = typeof agent.voice === 'string' ? agent.voice.trim() : ''
+
+  if (ttsType && voiceName) {
+    return `${ttsType} · ${voiceName}`
+  }
+  if (ttsType) {
+    return `${ttsType} · 默认音色`
+  }
+  if (voiceName) {
+    return voiceName
+  }
+  return '未设置'
 }
 
-const formatDate = (dateString) => {
-  if (!dateString) return '--'
-  return new Date(dateString).toLocaleString('zh-CN')
+const getLLMModelText = (agent) => {
+  return agent.llm_config?.name?.trim() || agent.llm_config?.provider?.trim() || '未设置'
+}
+
+const getDeviceCountText = (agent) => {
+  return `${getAgentDeviceCount(agent.id)} 台`
+}
+
+const getMemoryModeKey = (agent) => {
+  const mode = String(agent.memory_mode || 'short').trim().toLowerCase()
+  if (mode === 'none') return 'none'
+  if (mode === 'long') return 'long'
+  return 'short'
+}
+
+const getMemoryModeText = (agent) => {
+  const key = getMemoryModeKey(agent)
+  if (key === 'none') return '无记忆'
+  if (key === 'long') return '长记忆'
+  return '短记忆'
+}
+
+const getKnowledgeBaseIds = (agent) => {
+  return Array.isArray(agent.knowledge_base_ids) ? agent.knowledge_base_ids : []
+}
+
+const getKnowledgeBaseCount = (agent) => {
+  return getKnowledgeBaseIds(agent).length
+}
+
+const getKnowledgeBaseBadgeText = (agent) => {
+  const count = getKnowledgeBaseCount(agent)
+  return count > 99 ? '99+' : String(count)
+}
+
+const getKnowledgeBaseNames = (agent) => {
+  return getKnowledgeBaseIds(agent).map((id) => knowledgeBaseNameMap.value.get(Number(id)) || `知识库 #${id}`)
+}
+
+const getKnowledgeBaseTooltip = (agent) => {
+  const names = getKnowledgeBaseNames(agent)
+  if (names.length === 0) {
+    return '关联知识库：未关联'
+  }
+  return `关联知识库：${names.join('、')}`
+}
+
+const normalizeMcpServiceNames = (raw) => {
+  return String(raw || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+const getConnectionStatusText = (state) => {
+  if (!state || state.loading) return '检测中'
+  if (state.connected || state.status === 'online') return '已连接'
+  if (state.status === 'offline') return '未连接'
+  if (state.status_message) return '连接未知'
+  return '未连接'
+}
+
+const getMcpStatusKey = (agent) => {
+  return normalizeMcpServiceNames(agent.mcp_service_names).length > 0 ? 'custom' : 'global'
+}
+
+const getMcpStatusTooltip = (agent) => {
+  const connection = mcpConnectionStatusMap[String(agent.id)]
+  const count = normalizeMcpServiceNames(agent.mcp_service_names).length
+  const connectionText = getConnectionStatusText(connection)
+  if (count > 0) {
+    return `MCP状态：已配置 ${count} 项｜连接状态：${connectionText}`
+  }
+  return `MCP状态：跟随全局配置｜连接状态：${connectionText}`
+}
+
+const parseOpenClawConfig = (agent) => {
+  if (agent?.openclaw && typeof agent.openclaw === 'object') {
+    return { allowed: !!agent.openclaw.allowed }
+  }
+
+  if (typeof agent?.openclaw_config === 'string' && agent.openclaw_config.trim()) {
+    try {
+      const parsed = JSON.parse(agent.openclaw_config)
+      return { allowed: !!parsed?.allowed }
+    } catch {}
+  }
+
+  return { allowed: false }
+}
+
+const getOpenClawStatusKey = (agent) => {
+  return parseOpenClawConfig(agent).allowed ? 'enabled' : 'disabled'
+}
+
+const getOpenClawStatusTooltip = (agent) => {
+  const connection = openClawConnectionStatusMap[String(agent.id)]
+  const configText = parseOpenClawConfig(agent).allowed ? '已启用' : '未启用'
+  return `OpenClaw状态：${configText}｜连接状态：${getConnectionStatusText(connection)}`
+}
+
+const ensureMcpConnectionStatus = async (agentId) => {
+  const key = String(agentId)
+  const current = mcpConnectionStatusMap[key]
+  if (current?.loading || current?.loaded) return
+
+  mcpConnectionStatusMap[key] = {
+    loading: true,
+    loaded: false,
+    connected: false,
+    status: 'unknown',
+    status_message: ''
+  }
+
+  try {
+    const response = await api.get(`/user/agents/${agentId}/mcp-endpoint`)
+    const data = response.data.data || {}
+    mcpConnectionStatusMap[key] = {
+      loading: false,
+      loaded: true,
+      connected: !!data.connected,
+      status: String(data.status || 'unknown').toLowerCase(),
+      status_message: String(data.status_message || '')
+    }
+  } catch (error) {
+    mcpConnectionStatusMap[key] = {
+      loading: false,
+      loaded: true,
+      connected: false,
+      status: 'unknown',
+      status_message: error.response?.data?.error || error.message || '状态获取失败'
+    }
+  }
+}
+
+const ensureOpenClawConnectionStatus = async (agentId) => {
+  const key = String(agentId)
+  const current = openClawConnectionStatusMap[key]
+  if (current?.loading || current?.loaded) return
+
+  openClawConnectionStatusMap[key] = {
+    loading: true,
+    loaded: false,
+    connected: false,
+    status: 'unknown',
+    status_message: ''
+  }
+
+  try {
+    const response = await api.get(`/user/agents/${agentId}/openclaw-endpoint`)
+    const data = response.data.data || {}
+    openClawConnectionStatusMap[key] = {
+      loading: false,
+      loaded: true,
+      connected: !!data.connected,
+      status: String(data.status || 'unknown').toLowerCase(),
+      status_message: String(data.status_message || '')
+    }
+  } catch (error) {
+    openClawConnectionStatusMap[key] = {
+      loading: false,
+      loaded: true,
+      connected: false,
+      status: 'unknown',
+      status_message: error.response?.data?.error || error.message || '状态获取失败'
+    }
+  }
 }
 
 onMounted(async () => {
-  await Promise.all([loadAgents(), loadDevices()])
+  initialLoading.value = true
+  try {
+    await Promise.all([loadAgents(), loadDevices(), loadKnowledgeBases()])
+  } finally {
+    initialLoading.value = false
+  }
 })
 </script>
 
@@ -416,45 +659,6 @@ onMounted(async () => {
   justify-content: flex-end;
 }
 
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.metric-card {
-  padding: 20px;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  box-shadow: var(--apple-shadow-md);
-}
-
-.metric-label {
-  display: inline-block;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--apple-primary);
-  margin-bottom: 10px;
-}
-
-.metric-card strong {
-  display: block;
-  font-size: 32px;
-  line-height: 1;
-  color: var(--apple-text);
-  margin-bottom: 8px;
-}
-
-.metric-card p {
-  margin: 0;
-  font-size: 13px;
-  color: var(--apple-text-secondary);
-  line-height: 1.6;
-}
-
 .welcome-card {
   border-radius: 28px;
 }
@@ -483,23 +687,122 @@ onMounted(async () => {
 
 .agents-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 360px));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
-  justify-content: flex-start;
   align-content: flex-start;
 }
 
 .agent-card {
-  padding: 22px;
+  padding: 20px;
   border-radius: 28px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
+}
+
+.agent-card-skeleton {
+  min-height: 220px;
+  pointer-events: none;
+}
+
+.skeleton-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.skeleton-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  flex: none;
+}
+
+.skeleton-title-block {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.skeleton-icons {
+  display: grid;
+  grid-template-columns: repeat(2, 30px);
+  gap: 8px;
+}
+
+.skeleton-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+}
+
+.skeleton-summary {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.skeleton-line {
+  height: 18px;
+  border-radius: 999px;
+}
+
+.skeleton-line-title {
+  width: 46%;
+  height: 20px;
+}
+
+.skeleton-line-subtitle {
+  width: 64%;
+  height: 14px;
+}
+
+.skeleton-line-short {
+  width: 52%;
+}
+
+.skeleton-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.skeleton-button {
+  width: 70px;
+  height: 32px;
+  border-radius: 10px;
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, rgba(226, 232, 240, 0.62) 0%, rgba(248, 250, 252, 0.94) 50%, rgba(226, 232, 240, 0.62) 100%);
+  background-size: 220% 100%;
+  animation: agents-skeleton-shimmer 1.15s ease-in-out infinite;
+}
+
+@keyframes agents-skeleton-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+
+  100% {
+    background-position: -120% 0;
+  }
 }
 
 .agent-header {
   display: flex;
   align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.agent-heading {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
   gap: 14px;
 }
 
@@ -534,99 +837,138 @@ onMounted(async () => {
   line-height: 1.6;
 }
 
-.agent-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.agent-status .status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.agent-status.active {
-  background: var(--apple-success-soft);
-  color: #176a31;
-}
-
-.agent-status.active .status-dot {
-  background: var(--apple-success);
-}
-
-.agent-status.idle {
-  background: rgba(255, 159, 10, 0.12);
-  color: #8a5b00;
-}
-
-.agent-status.idle .status-dot {
-  background: var(--apple-warning);
-}
-
-.agent-meta {
+.agent-state-grid {
+  flex: none;
   display: grid;
-  gap: 10px;
-}
-
-.meta-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(248, 250, 252, 0.9);
-  border: 1px solid rgba(229, 229, 234, 0.72);
-}
-
-.meta-label {
-  font-size: 12px;
-  color: var(--apple-text-secondary);
-}
-
-.meta-value {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--apple-text);
-  text-align: right;
-}
-
-.device-preview {
-  display: flex;
-  flex-wrap: wrap;
+  grid-template-columns: repeat(2, minmax(0, auto));
   gap: 8px;
 }
 
-.device-chip {
+.agent-state-badge {
+  min-width: 36px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
+  justify-content: center;
+  gap: 5px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+  color: var(--apple-text-secondary);
+  position: relative;
+}
+
+.agent-state-badge.is-icon-only {
+  min-width: 30px;
+  width: 30px;
+  min-height: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.state-image-icon {
+  width: 15px;
+  height: 15px;
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.state-image-icon--memory {
+  width: 14px;
+  height: 14px;
+}
+
+.state-image-icon--knowledge {
+  width: 15px;
+  height: 15px;
+}
+
+.state-image-icon--mcp {
+  width: 15px;
+  height: 15px;
+}
+
+.state-image-icon--openclaw {
+  width: 16px;
+  height: 16px;
+}
+
+.state-counter {
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
   border-radius: 999px;
-  background: rgba(0, 122, 255, 0.08);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: currentColor;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.agent-state-badge.is-memory-short,
+.agent-state-badge.is-active,
+.agent-state-badge.is-mcp-custom {
   color: var(--apple-primary);
-  font-size: 12px;
-  font-weight: 600;
+  background: rgba(0, 122, 255, 0.08);
+  border-color: rgba(0, 122, 255, 0.12);
 }
 
-.device-chip.subtle {
-  background: rgba(229, 229, 234, 0.72);
-  color: var(--apple-text-secondary);
+.agent-state-badge.is-memory-long,
+.agent-state-badge.is-openclaw-enabled {
+  color: #176a31;
+  background: rgba(52, 199, 89, 0.12);
+  border-color: rgba(52, 199, 89, 0.16);
 }
 
-.device-empty {
+.agent-state-badge.is-memory-none,
+.agent-state-badge.is-mcp-global,
+.agent-state-badge.is-openclaw-disabled {
+  color: var(--apple-text-tertiary);
+  background: rgba(248, 250, 252, 0.92);
+  border-color: rgba(229, 229, 234, 0.72);
+}
+
+.agent-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   font-size: 13px;
-  color: var(--apple-text-secondary);
   line-height: 1.6;
-  padding: 12px 14px;
-  border-radius: 16px;
-  background: rgba(248, 250, 252, 0.8);
-  border: 1px dashed rgba(229, 229, 234, 0.9);
+}
+
+.summary-label {
+  flex: none;
+  color: var(--apple-text-secondary);
+}
+
+.summary-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--apple-text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary-text.is-count {
+  font-weight: 700;
 }
 
 .agent-actions {
@@ -654,6 +996,13 @@ onMounted(async () => {
   gap: 14px;
 }
 
+.form-tip {
+  margin-top: 6px;
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
@@ -671,8 +1020,11 @@ onMounted(async () => {
     justify-content: flex-start;
   }
 
-  .stats-grid {
-    grid-template-columns: 1fr;
+}
+
+@media (min-width: 769px) and (max-width: 1180px) {
+  .agents-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -682,7 +1034,6 @@ onMounted(async () => {
   }
 
   .page-toolbar,
-  .metric-card,
   .agent-card {
     border-radius: 24px;
   }

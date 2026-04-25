@@ -26,11 +26,12 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
+    const silentError = error.config?.silentError === true
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       window.location.href = '/login'
-    } else {
+    } else if (!silentError) {
       ElMessage.error(error.response?.data?.error || '请求失败')
     }
     return Promise.reject(error)

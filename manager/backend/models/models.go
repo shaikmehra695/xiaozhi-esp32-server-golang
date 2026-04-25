@@ -38,11 +38,12 @@ type Device struct {
 	UserID       uint       `json:"user_id" gorm:"not null"`
 	AgentID      uint       `json:"agent_id" gorm:"not null;default:0"`                                       // 智能体ID，一台设备只能属于一个智能体
 	RoleID       *uint      `json:"role_id" gorm:"index"`                                                     // 角色ID（可选，覆盖智能体配置）
+	NickName     string     `json:"nick_name" gorm:"type:varchar(100)"`                                       // 设备昵称，用户可修改
 	DeviceCode   string     `json:"device_code" gorm:"type:varchar(100);uniqueIndex:idx_devices_device_code"` // 6位激活码
-	DeviceName   string     `json:"device_name" gorm:"type:varchar(100)"`
-	Challenge    string     `json:"challenge" gorm:"type:varchar(128)"`      // 激活挑战码
-	PreSecretKey string     `json:"pre_secret_key" gorm:"type:varchar(128)"` // 预激活密钥
-	Activated    bool       `json:"activated" gorm:"default:false"`          // 设备是否已激活
+	DeviceName   string     `json:"device_name" gorm:"type:varchar(100)"`                                     // 设备标识/Device-ID，设备端上报使用
+	Challenge    string     `json:"challenge" gorm:"type:varchar(128)"`                                       // 激活挑战码
+	PreSecretKey string     `json:"pre_secret_key" gorm:"type:varchar(128)"`                                  // 预激活密钥
+	Activated    bool       `json:"activated" gorm:"default:false"`                                           // 设备是否已激活
 	LastActiveAt *time.Time `json:"last_active_at"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
@@ -52,7 +53,8 @@ type Device struct {
 type Agent struct {
 	ID              uint    `json:"id" gorm:"primarykey"`
 	UserID          uint    `json:"user_id" gorm:"not null"`
-	Name            string  `json:"name" gorm:"type:varchar(100);not null"`                  // 昵称
+	Name            string  `json:"name" gorm:"type:varchar(100);not null"`                  // 名称，管理侧识别用
+	Nickname        string  `json:"nickname" gorm:"type:varchar(100)"`                       // 昵称，给大模型/Prompt 使用
 	CustomPrompt    string  `json:"custom_prompt" gorm:"type:text"`                          // 角色介绍(prompt)
 	LLMConfigID     *string `json:"llm_config_id" gorm:"type:varchar(100)"`                  // 语言模型配置ID
 	TTSConfigID     *string `json:"tts_config_id" gorm:"type:varchar(100)"`                  // 音色配置ID

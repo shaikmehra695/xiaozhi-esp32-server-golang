@@ -83,7 +83,7 @@ func normalizeMemoryMode(mode string) string {
 	}
 }
 
-// 注入消息到设备
+// 语音推送到设备
 func (uc *UserController) InjectMessage(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 
@@ -113,17 +113,17 @@ func (uc *UserController) InjectMessage(c *gin.Context) {
 		autoListen = *req.AutoListen
 	}
 
-	// 通过WebSocket发送消息注入请求到主服务器
+	// 通过WebSocket发送语音推送请求到主服务器
 	ctx := context.Background()
 	err := uc.WebSocketController.InjectMessageToDevice(ctx, device.DeviceName, req.Message, req.SkipLlm, autoListen)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "消息注入失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "语音推送失败: " + err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "消息注入请求已发送",
+		"message": "语音推送请求已发送",
 		"data": gin.H{
 			"device_id":   req.DeviceID,
 			"message":     req.Message,
@@ -138,6 +138,7 @@ func (uc *UserController) CreateDevice(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 
 	var req struct {
+		NickName   string `json:"nick_name"`
 		DeviceName string `json:"device_name" binding:"required,min=2,max=50"`
 		AgentID    uint   `json:"agent_id" binding:"required"`
 	}
@@ -152,6 +153,14 @@ func (uc *UserController) CreateDevice(c *gin.Context) {
 	if err := uc.DB.Where("id = ? AND user_id = ?", req.AgentID, userID).First(&agent).Error; err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体不存在或不属于当前用户"})
 		return
+	}
+	nickName, err := normalizeDeviceNickName(req.NickName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if nickName == "" {
+		nickName = strings.TrimSpace(req.DeviceName)
 	}
 
 	// 生成6位随机设备代码，确保不重复
@@ -176,6 +185,7 @@ func (uc *UserController) CreateDevice(c *gin.Context) {
 	device := models.Device{
 		UserID:     userID.(uint),
 		AgentID:    req.AgentID,
+		NickName:   nickName,
 		DeviceCode: deviceCode,
 		DeviceName: req.DeviceName,
 		Activated:  true, // 新创建的设备默认未激活
@@ -219,16 +229,26 @@ func normalizeDeviceNameCandidate(value string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", ":"))
 }
 
+func normalizeDeviceNickName(value string) (string, error) {
+	nickName := strings.TrimSpace(value)
+	if len([]rune(nickName)) > 50 {
+		return "", fmt.Errorf("设备昵称最多 50 个字符")
+	}
+	return nickName, nil
+}
+
 // 获取用户所有设备概览（只读）
 func (uc *UserController) GetMyDevices(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 
 	type DeviceOverview struct {
 		ID           uint       `json:"id"`
+		NickName     string     `json:"nick_name"`
 		DeviceName   string     `json:"device_name"`
 		DeviceCode   string     `json:"device_code"`
 		AgentID      uint       `json:"agent_id"`
 		AgentName    string     `json:"agent_name,omitempty"`
+		RoleID       *uint      `json:"role_id,omitempty"`
 		Activated    bool       `json:"activated"`
 		LastActiveAt *time.Time `json:"last_active_at"`
 		CreatedAt    time.Time  `json:"created_at"`
@@ -245,9 +265,11 @@ func (uc *UserController) GetMyDevices(c *gin.Context) {
 	for _, device := range devices {
 		overview := DeviceOverview{
 			ID:           device.ID,
+			NickName:     device.NickName,
 			DeviceName:   device.DeviceName,
 			DeviceCode:   device.DeviceCode,
 			AgentID:      device.AgentID,
+			RoleID:       device.RoleID,
 			Activated:    device.Activated,
 			LastActiveAt: device.LastActiveAt,
 			CreatedAt:    device.CreatedAt,
@@ -265,6 +287,63 @@ func (uc *UserController) GetMyDevices(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// UpdateDevice 更新当前用户自己的设备昵称。device_name 是设备端标识，不在这里修改。
+func (uc *UserController) UpdateDevice(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	deviceID := c.Param("id")
+
+	var req struct {
+		NickName string `json:"nick_name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
+		return
+	}
+
+	nickName, err := normalizeDeviceNickName(req.NickName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if nickName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "设备昵称不能为空"})
+		return
+	}
+
+	var device models.Device
+	if err := uc.DB.Where("id = ? AND user_id = ?", deviceID, userID).First(&device).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "设备不存在或不属于当前用户"})
+		return
+	}
+
+	device.NickName = nickName
+	if err := uc.DB.Save(&device).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新设备昵称失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": device})
+}
+
+// DeleteDevice 从系统中删除当前用户自己的设备。删除后设备需要重新走激活流程才能再次进入系统。
+func (uc *UserController) DeleteDevice(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	deviceID := c.Param("id")
+
+	var device models.Device
+	if err := uc.DB.Where("id = ? AND user_id = ?", deviceID, userID).First(&device).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "设备不存在或不属于当前用户"})
+		return
+	}
+
+	if err := uc.DB.Where("id = ? AND user_id = ?", device.ID, userID).Delete(&models.Device{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除设备失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "设备已从系统删除，需要重新激活后才能再次使用"})
 }
 
 // 智能体管理
@@ -319,6 +398,7 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 
 	var req struct {
 		Name             string                  `json:"name" binding:"required,min=2,max=50"`
+		Nickname         string                  `json:"nickname"`
 		CustomPrompt     string                  `json:"custom_prompt"`
 		LLMConfigID      *string                 `json:"llm_config_id"`
 		TTSConfigID      *string                 `json:"tts_config_id"`
@@ -337,6 +417,15 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 	}
 
 	// 设置默认值
+	req.Nickname = strings.TrimSpace(req.Nickname)
+	if req.Nickname == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入智能体昵称"})
+		return
+	}
+	if len([]rune(req.Nickname)) > 50 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体昵称不能超过50个字符"})
+		return
+	}
 	if req.ASRSpeed == "" {
 		req.ASRSpeed = "normal"
 	}
@@ -355,7 +444,8 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 
 	agent := models.Agent{
 		UserID:          userID.(uint),
-		Name:            req.Name,
+		Name:            strings.TrimSpace(req.Name),
+		Nickname:        req.Nickname,
 		CustomPrompt:    req.CustomPrompt,
 		LLMConfigID:     req.LLMConfigID,
 		TTSConfigID:     req.TTSConfigID,
@@ -438,6 +528,7 @@ func (uc *UserController) UpdateAgent(c *gin.Context) {
 
 	var req struct {
 		Name             string                  `json:"name" binding:"required,min=2,max=50"`
+		Nickname         *string                 `json:"nickname"`
 		CustomPrompt     string                  `json:"custom_prompt"`
 		LLMConfigID      *string                 `json:"llm_config_id"`
 		TTSConfigID      *string                 `json:"tts_config_id"`
@@ -454,9 +545,21 @@ func (uc *UserController) UpdateAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误"})
 		return
 	}
+	if req.Nickname != nil {
+		nickname := strings.TrimSpace(*req.Nickname)
+		if nickname == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请输入智能体昵称"})
+			return
+		}
+		if len([]rune(nickname)) > 50 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "智能体昵称不能超过50个字符"})
+			return
+		}
+		agent.Nickname = nickname
+	}
 
 	// 更新字段
-	agent.Name = req.Name
+	agent.Name = strings.TrimSpace(req.Name)
 	agent.CustomPrompt = req.CustomPrompt
 	agent.LLMConfigID = req.LLMConfigID
 	agent.TTSConfigID = req.TTSConfigID
@@ -555,6 +658,7 @@ func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 		Code       string `json:"code"`
 		DeviceMAC  string `json:"device_mac"`
 		DeviceName string `json:"device_name"`
+		NickName   string `json:"nick_name"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -573,6 +677,11 @@ func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 	}
 	if code != "" && !isSixDigitCode(code) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码格式错误"})
+		return
+	}
+	nickName, err := normalizeDeviceNickName(req.NickName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -612,6 +721,11 @@ func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 
 	// 自动激活设备
 	device.Activated = true
+	if nickName != "" {
+		device.NickName = nickName
+	} else if strings.TrimSpace(device.NickName) == "" {
+		device.NickName = strings.TrimSpace(device.DeviceName)
+	}
 
 	if err := uc.DB.Save(&device).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "设备绑定失败"})
@@ -1028,8 +1142,29 @@ func (uc *UserController) GetAgentMCPEndpoint(c *gin.Context) {
 		return
 	}
 
-	// 返回单个endpoint字符串
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"endpoint": endpoint}})
+	data := gin.H{
+		"endpoint":    endpoint,
+		"status":      "unknown",
+		"connected":   false,
+		"tools_count": 0,
+	}
+	if uc.WebSocketController == nil {
+		data["status_message"] = "websocket controller unavailable"
+		c.JSON(http.StatusOK, gin.H{"data": data})
+		return
+	}
+
+	tools, toolsErr := uc.WebSocketController.RequestMcpToolDetailsFromClient(context.Background(), agentID)
+	if toolsErr != nil {
+		data["status_message"] = toolsErr.Error()
+		c.JSON(http.StatusOK, gin.H{"data": data})
+		return
+	}
+
+	data["connected"] = true
+	data["status"] = "online"
+	data["tools_count"] = len(tools)
+	c.JSON(http.StatusOK, gin.H{"data": data})
 }
 
 // GetAgentOpenClawEndpoint 获取智能体的OpenClaw接入点URL（用户版本）

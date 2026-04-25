@@ -11,6 +11,16 @@
         <el-form-item label="启用设备激活验证" prop="auth.enable">
           <el-switch v-model="form.auth.enable" />
         </el-form-item>
+        <el-form-item label="登录数字验证" prop="auth.login_captcha_enabled">
+          <el-switch
+            v-model="form.auth.login_captcha_enabled"
+            active-text="开启"
+            inactive-text="关闭"
+          />
+          <div class="form-help">
+            开启后登录页需要完成数字算术题；关闭后登录只校验用户名和密码。默认开启。
+          </div>
+        </el-form-item>
 
         <el-divider content-position="left">聊天参数</el-divider>
         <el-form-item label="会话最大空闲时间(ms)" prop="chat.max_idle_duration">
@@ -62,7 +72,8 @@ const formRef = ref()
 
 const form = reactive({
   auth: {
-    enable: false
+    enable: false,
+    login_captcha_enabled: true
   },
   chat: {
     max_idle_duration: 30000,
@@ -93,6 +104,7 @@ const loadSettings = async () => {
     const res = await api.get('/admin/chat-settings')
     const data = res.data?.data || {}
     form.auth.enable = !!data.auth?.enable
+    form.auth.login_captcha_enabled = data.auth?.login_captcha_enabled !== false
     form.chat.max_idle_duration = Number(data.chat?.max_idle_duration ?? 30000)
     form.chat.chat_max_silence_duration = Number(data.chat?.chat_max_silence_duration ?? 400)
     form.chat.realtime_mode = Number(data.chat?.realtime_mode ?? 4)
@@ -114,7 +126,8 @@ const saveSettings = async () => {
   try {
     await api.put('/admin/chat-settings', {
       auth: {
-        enable: !!form.auth.enable
+        enable: !!form.auth.enable,
+        login_captcha_enabled: form.auth.login_captcha_enabled !== false
       },
       chat: {
         max_idle_duration: Number(form.chat.max_idle_duration),

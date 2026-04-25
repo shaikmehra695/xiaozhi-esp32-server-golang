@@ -226,6 +226,12 @@ const routes = [
         meta: { title: '智能体设备管理' }
       },
       {
+        path: '/user/devices',
+        name: 'UserDevices',
+        component: () => import('../views/user/AgentDevices.vue'),
+        meta: { title: '设备列表' }
+      },
+      {
         path: '/speakers',
         name: 'Speakers',
         component: () => import('../views/user/Speakers.vue'),

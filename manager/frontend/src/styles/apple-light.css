@@ -383,7 +383,7 @@ body :is(
   .test-route,
   .simple-login-page
 ) :is(.page-header, .config-description, .form-container) {
-  max-width: 1240px;
+  max-width: 1360px;
   margin-left: auto !important;
   margin-right: auto !important;
 }

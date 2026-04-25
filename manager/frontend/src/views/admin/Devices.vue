@@ -13,8 +13,17 @@
 
     <el-table :data="devices" v-loading="loading" stripe>
       <el-table-column prop="id" label="ID" width="80" />
+      <el-table-column label="设备昵称" min-width="170">
+        <template #default="{ row }">
+          <span class="device-nick-name">{{ getDeviceDisplayName(row) }}</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="device_code" label="激活码" width="150" />
-      <el-table-column prop="device_name" label="设备名称" width="150" />
+      <el-table-column label="设备ID" width="190">
+        <template #default="{ row }">
+          <span class="device-id-text">{{ row.device_name || '-' }}</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="user_id" label="用户ID" width="100" />
       <el-table-column label="关联智能体" width="150">
         <template #default="{ row }">
@@ -105,16 +114,26 @@
         <el-form-item label="用户ID" prop="user_id">
           <el-input-number v-model="deviceForm.user_id" :min="1" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="激活码" prop="device_code">
-          <el-input 
-            v-model="deviceForm.device_code" 
-            :placeholder="editingDevice ? '请输入激活码' : '请输入激活码（与设备名称二选一）'" 
+        <el-form-item label="设备昵称" prop="nick_name">
+          <el-input
+            v-model="deviceForm.nick_name"
+            placeholder="例如：客厅音箱、办公室小智"
+            maxlength="50"
+            show-word-limit
+            clearable
           />
         </el-form-item>
-        <el-form-item label="设备名称" prop="device_name">
-          <el-input 
-            v-model="deviceForm.device_name" 
-            :placeholder="editingDevice ? '请输入设备名称' : '请输入设备名称（与设备代码二选一）'" 
+        <el-form-item label="设备标识" prop="device_name">
+          <el-input
+            v-model="deviceForm.device_name"
+            :placeholder="editingDevice ? '请输入设备标识' : '请输入设备标识（与设备代码二选一）'"
+          />
+          <div class="form-tip">设备端上报的 Device-ID，用于在线状态、MCP 和语音推送，不建议随意修改。</div>
+        </el-form-item>
+        <el-form-item label="激活码" prop="device_code">
+          <el-input
+            v-model="deviceForm.device_code"
+            :placeholder="editingDevice ? '请输入激活码' : '请输入激活码（与设备标识二选一）'"
           />
         </el-form-item>
         <el-form-item label="激活状态" prop="activated">
@@ -169,6 +188,7 @@ const authStore = useAuthStore()
 
 const deviceForm = ref({
   user_id: authStore.user?.id || null,
+  nick_name: '',
   device_code: '',
   device_name: '',
   activated: true,
@@ -190,9 +210,9 @@ const deviceRules = {
           return
         }
         
-        // 如果是新增模式，激活码和设备名称至少填一个
+        // 如果是新增模式，激活码和设备标识至少填一个
         if (!value && !deviceForm.value.device_name) {
-          callback(new Error('激活码和设备名称至少填写一个'))
+          callback(new Error('激活码和设备标识至少填写一个'))
         } else {
           callback()
         }
@@ -203,19 +223,19 @@ const deviceRules = {
   device_name: [
     {
       validator: (rule, value, callback) => {
-        // 如果是编辑模式，设备名称必填
+        // 如果是编辑模式，设备标识必填
         if (editingDevice.value) {
           if (!value) {
-            callback(new Error('请输入设备名称'))
+            callback(new Error('请输入设备标识'))
           } else {
             callback()
           }
           return
         }
         
-        // 如果是新增模式，激活码和设备名称至少填一个
+        // 如果是新增模式，激活码和设备标识至少填一个
         if (!value && !deviceForm.value.device_code) {
-          callback(new Error('激活码和设备名称至少填写一个'))
+          callback(new Error('激活码和设备标识至少填写一个'))
         } else {
           callback()
         }
@@ -248,10 +268,17 @@ const loadAgents = async () => {
   }
 }
 
+const getDeviceDisplayName = (device) => {
+  const nickName = String(device?.nick_name || '').trim()
+  if (nickName) return nickName
+  return String(device?.device_name || '').trim() || '未命名设备'
+}
+
 const openAddDialog = () => {
   editingDevice.value = null
   deviceForm.value = {
     user_id: authStore.user?.id || null,
+    nick_name: '',
     device_code: '',
     device_name: '',
     activated: true,
@@ -277,6 +304,7 @@ const editDevice = (device) => {
   editingDevice.value = device
   deviceForm.value = {
     user_id: device.user_id,
+    nick_name: device.nick_name || '',
     device_code: device.device_code,
     device_name: device.device_name,
     activated: device.activated,
@@ -317,7 +345,7 @@ const saveDevice = async () => {
 const deleteDevice = async (device) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除设备 "${device.device_name}" 吗？`,
+      `确定要删除设备 "${getDeviceDisplayName(device)}" 吗？`,
       '确认删除',
       {
         confirmButtonText: '确定',
@@ -507,6 +535,7 @@ const resetForm = () => {
   editingDevice.value = null
   deviceForm.value = {
     user_id: authStore.user?.id || null,
+    nick_name: '',
     device_code: '',
     device_name: '',
     activated: true,
@@ -543,6 +572,24 @@ onMounted(() => {
   gap: 12px;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+.device-nick-name {
+  font-weight: 700;
+  color: var(--apple-text, #1d1d1f);
+}
+
+.device-id-text {
+  color: rgba(107, 114, 128, 0.72);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.form-tip {
+  margin-top: 6px;
+  color: rgba(107, 114, 128, 0.78);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .tools-tags { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
