@@ -62,6 +62,32 @@ func normalizeAgentSpeakerChatMode(mode string) string {
 	}
 }
 
+func findActiveCloneForVoiceModelOverride(base *gorm.DB, provider, ttsConfigID, voiceID string, clone *models.VoiceClone) error {
+	query := base.Where(
+		"voice_clones.tts_config_id = ? AND voice_clones.provider_voice_id = ? AND voice_clones.status = ?",
+		ttsConfigID,
+		voiceID,
+		voiceCloneStatusActive,
+	)
+	if provider == "doubao" {
+		query = query.Where("voice_clones.provider IN ?", []string{"doubao", "doubao_ws"})
+	} else {
+		query = query.Where("voice_clones.provider = ?", provider)
+	}
+	result := query.
+		Order("voice_clones.updated_at DESC, voice_clones.created_at DESC").
+		Order("voice_clones.id").
+		Limit(1).
+		Find(clone)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 func getAgentAssistantName(agent models.Agent) string {
 	if nickname := strings.TrimSpace(agent.Nickname); nickname != "" {
 		return nickname
@@ -209,24 +235,23 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 		}
 
 		var clone models.VoiceClone
-		findCloneByScope := func(base *gorm.DB) error {
-			query := base.Where("tts_config_id = ? AND provider_voice_id = ? AND status = ?",
-				ttsConfigID, voiceID, voiceCloneStatusActive)
-			if provider == "doubao" {
-				query = query.Where("provider IN ?", []string{"doubao", "doubao_ws"})
-			} else {
-				query = query.Where("provider = ?", provider)
-			}
-			return query.Order("updated_at DESC, created_at DESC").First(&clone).Error
-		}
-
-		err := findCloneByScope(ac.DB.Model(&models.VoiceClone{}).Where("user_id = ?", device.UserID))
+		err := findActiveCloneForVoiceModelOverride(
+			ac.DB.Model(&models.VoiceClone{}).Where("voice_clones.user_id = ?", device.UserID),
+			provider,
+			ttsConfigID,
+			voiceID,
+			&clone,
+		)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// 回退：允许命中管理员共享给所有人的复刻音色，解决普通用户使用共享音色时模型覆盖缺失问题。
-			err = findCloneByScope(
+			err = findActiveCloneForVoiceModelOverride(
 				ac.DB.Model(&models.VoiceClone{}).
 					Joins("JOIN users ON users.id = voice_clones.user_id").
 					Where("voice_clones.shared_to_all = ? AND users.role = ?", true, "admin"),
+				provider,
+				ttsConfigID,
+				voiceID,
+				&clone,
 			)
 		}
 		if err != nil {
@@ -474,7 +499,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 	}
 
 	// 获取Memory默认配置
-	if err := ac.DB.Where("type = ? AND is_default = ? AND enabled = ?", "memory", true, true).First(&response.Memory).Error; err != nil {
+	if result := ac.DB.Where("type = ? AND is_default = ? AND enabled = ?", "memory", true, true).Limit(1).Find(&response.Memory); result.Error != nil || result.RowsAffected == 0 {
 		// 允许没有默认 Memory 配置：显式回退为 nomemo（不启用长记忆）。
 		response.Memory = models.Config{
 			Type:     "memory",
@@ -484,8 +509,8 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 			JsonData: "{}",
 			Enabled:  true,
 		}
-		if err != gorm.ErrRecordNotFound {
-			log.Printf("加载默认Memory配置失败，已回退nomemo: %v", err)
+		if result.Error != nil {
+			log.Printf("加载默认Memory配置失败，已回退nomemo: %v", result.Error)
 		}
 	}
 
