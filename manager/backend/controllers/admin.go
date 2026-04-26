@@ -101,6 +101,9 @@ func ensureAgentNickname(agent *models.Agent) {
 	}
 	agent.Name = strings.TrimSpace(agent.Name)
 	agent.Nickname = strings.TrimSpace(agent.Nickname)
+	if agent.Nickname == "" {
+		agent.Nickname = agent.Name
+	}
 }
 
 type AdminController struct {
@@ -2881,6 +2884,7 @@ func (ac *AdminController) GetAgents(c *gin.Context) {
 	var result []AgentWithConfigs
 	for _, agent := range agents {
 		agentWithConfig := AgentWithConfigs{Agent: agent}
+		ensureAgentNickname(&agentWithConfig.Agent)
 
 		// 加载LLM配置
 		if agent.LLMConfigID != nil && *agent.LLMConfigID != "" {
@@ -3042,17 +3046,20 @@ func (ac *AdminController) GetAgentOpenClawEndpoint(c *gin.Context) {
 		return
 	}
 
-	endpoint, err := GenerateAgentOpenClawEndpoint(ac.DB, agentID, userID, ac.EndpointAuthToken)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	data := gin.H{
-		"endpoint":  endpoint,
+		"endpoint":  "",
 		"status":    "unknown",
 		"connected": false,
 	}
+
+	endpoint, err := GenerateAgentOpenClawEndpoint(ac.DB, agentID, userID, ac.EndpointAuthToken)
+	if err != nil {
+		data["status_message"] = err.Error()
+		c.JSON(http.StatusOK, gin.H{"data": data})
+		return
+	}
+	data["endpoint"] = endpoint
+
 	if ac.WebSocketController == nil {
 		data["status_message"] = "websocket controller unavailable"
 		c.JSON(http.StatusOK, gin.H{"data": data})

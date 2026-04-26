@@ -272,11 +272,11 @@
                 </div>
 
                 <div class="form-group form-group-compact">
-                  <label class="form-label">连接状态</label>
+                  <label class="form-label">智能体WebSocket</label>
                   <div class="status-panel-inline">
                     <el-tag :type="mcpStatusTagType">{{ mcpStatusText }}</el-tag>
                     <span class="status-panel-text">
-                      {{ mcpEndpointData.status_message || '页内可直接刷新接入点和工具列表。' }}
+                      {{ mcpStatusDetailText }}
                     </span>
                   </div>
                 </div>
@@ -546,6 +546,8 @@ const form = reactive({
   openclaw_exit_keywords: [...OPENCLAW_DEFAULT_EXIT_KEYWORDS]
 })
 
+const getAgentNickname = (agent) => String(agent?.nickname || '').trim() || String(agent?.name || '').trim()
+
 // LLM配置数据
 const llmConfigs = ref([])
 
@@ -587,7 +589,8 @@ const mcpEndpointData = ref({
   endpoint: '',
   connected: false,
   status: 'unknown',
-  status_message: ''
+  status_message: '',
+  client_count: 0
 })
 const toolsLoading = ref(false)
 const mcpTools = ref([])
@@ -618,6 +621,16 @@ const mcpStatusTagType = computed(() => {
   if (status === 'offline') return 'danger'
   return 'info'
 })
+const mcpStatusDetailText = computed(() => {
+  if (mcpEndpointData.value.status_message) return mcpEndpointData.value.status_message
+  const status = String(mcpEndpointData.value.status || '').toLowerCase()
+  const clientCount = Number(mcpEndpointData.value.client_count || 0)
+  if (status === 'online') {
+    return clientCount > 0 ? `已连接 ${clientCount} 个客户端` : '已连接'
+  }
+  if (status === 'offline') return '暂无客户端连接'
+  return '状态未知'
+})
 const openClawStatusText = computed(() => {
   const status = String(openClawEndpointData.value.status || '').toLowerCase()
   if (status === 'online') return '已连接'
@@ -641,10 +654,10 @@ const mcpSummaryText = computed(() => {
   const serviceSummary = selectedMcpServices.value.length > 0
     ? `已选 ${selectedMcpServices.value.length} 个服务`
     : '使用全局服务'
-  const toolSummary = mcpTools.value.length > 0
-    ? `${mcpTools.value.length} 个工具`
-    : '暂无工具'
-  return `${serviceSummary} · ${toolSummary} · ${mcpStatusText.value}`
+  const globalServiceSummary = mcpServiceOptionsLoading.value
+    ? '全局服务检测中'
+    : `全局服务 ${mcpServiceOptions.value.length} 个`
+  return `${globalServiceSummary} · ${serviceSummary} · WebSocket ${mcpStatusText.value}`
 })
 const openClawSummaryText = computed(() => {
   const keywordCount = normalizeKeywordList([
@@ -689,7 +702,7 @@ const loadAgent = async () => {
     // 映射基本字段
     Object.assign(form, {
       name: agent.name || '',
-      nickname: agent.nickname || '',
+      nickname: getAgentNickname(agent),
       custom_prompt: agent.custom_prompt || '',
       asr_speed: agent.asr_speed || 'normal',
       voice: agent.voice || null,
@@ -874,7 +887,7 @@ const loadMcpServiceOptions = async () => {
   }
 }
 
-const fetchOpenClawEndpoint = async () => {
+const fetchOpenClawEndpoint = async ({ showError = true } = {}) => {
   openClawEndpointLoading.value = true
   try {
     const response = await api.get(`/user/agents/${route.params.id}/openclaw-endpoint`)
@@ -891,7 +904,9 @@ const fetchOpenClawEndpoint = async () => {
     openClawEndpointData.value.connected = false
     openClawEndpointData.value.status = 'unknown'
     openClawEndpointData.value.status_message = error.response?.data?.error || ''
-    ElMessage.error('获取OpenClaw接入点失败')
+    if (showError) {
+      ElMessage.error('获取OpenClaw接入点失败')
+    }
   } finally {
     openClawEndpointLoading.value = false
   }
@@ -1022,7 +1037,7 @@ const testOpenClawChat = async () => {
     ElMessage.error(msg)
   } finally {
     openClawChatTesting.value = false
-    await fetchOpenClawEndpoint()
+    await fetchOpenClawEndpoint({ showError: false })
   }
 }
 
@@ -1139,19 +1154,16 @@ const handleSave = async () => {
     return
   }
 
-  if (!form.nickname.trim()) {
-    ElMessage.error('请输入智能体昵称')
-    return
-  }
-
   try {
     saving.value = true
     syncMcpServiceNamesToForm()
+    const name = form.name.trim()
+    const nickname = form.nickname.trim() || name
 
     const payload = {
       ...form,
-      name: form.name.trim(),
-      nickname: form.nickname.trim(),
+      name,
+      nickname,
       openclaw: {
         allowed: !!form.openclaw_allowed,
         enter_keywords: normalizeKeywordList(form.openclaw_enter_keywords),
@@ -1245,7 +1257,8 @@ const loadMcpEndpoint = async ({ showError = false } = {}) => {
       endpoint: data.endpoint || '',
       connected,
       status: status || (connected ? 'online' : 'offline'),
-      status_message: typeof data.status_message === 'string' ? data.status_message : ''
+      status_message: typeof data.status_message === 'string' ? data.status_message : '',
+      client_count: Number(data.client_count || 0)
     }
     return true
   } catch (error) {
@@ -1257,7 +1270,8 @@ const loadMcpEndpoint = async ({ showError = false } = {}) => {
       endpoint: '',
       connected: false,
       status: 'unknown',
-      status_message: error.response?.data?.error || ''
+      status_message: error.response?.data?.error || '',
+      client_count: 0
     }
     return false
   }
@@ -1584,7 +1598,7 @@ onMounted(async () => {
     await loadAgent()
     await Promise.all([
       loadMcpServiceOptions(),
-      fetchOpenClawEndpoint(),
+      fetchOpenClawEndpoint({ showError: false }),
       loadMcpEndpoint({ showError: false })
     ])
     // 如果已有TTS配置，加载对应的音色列表

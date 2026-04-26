@@ -24,6 +24,7 @@ type UserController struct {
 	EndpointAuthToken   string
 	WebSocketController interface {
 		RequestMcpToolDetailsFromClient(ctx context.Context, agentID string) ([]MCPTool, error)
+		RequestMcpEndpointStatusFromClient(ctx context.Context, agentID string) (map[string]interface{}, error)
 		RequestDeviceMcpToolDetailsFromClient(ctx context.Context, deviceID string) ([]MCPTool, error)
 		CallMcpToolFromClient(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error)
 		RequestOpenClawStatusFromClient(ctx context.Context, agentID string) (map[string]interface{}, error)
@@ -367,6 +368,7 @@ func (uc *UserController) GetAgents(c *gin.Context) {
 	var result []AgentWithConfigs
 	for _, agent := range agents {
 		agentWithConfig := AgentWithConfigs{Agent: agent}
+		ensureAgentNickname(&agentWithConfig.Agent)
 
 		// 加载LLM配置
 		if agent.LLMConfigID != nil && *agent.LLMConfigID != "" {
@@ -417,12 +419,16 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 	}
 
 	// 设置默认值
-	req.Nickname = strings.TrimSpace(req.Nickname)
-	if req.Nickname == "" {
+	name := strings.TrimSpace(req.Name)
+	nickname := strings.TrimSpace(req.Nickname)
+	if nickname == "" {
+		nickname = name
+	}
+	if nickname == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入智能体昵称"})
 		return
 	}
-	if len([]rune(req.Nickname)) > 50 {
+	if len([]rune(nickname)) > 50 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体昵称不能超过50个字符"})
 		return
 	}
@@ -444,8 +450,8 @@ func (uc *UserController) CreateAgent(c *gin.Context) {
 
 	agent := models.Agent{
 		UserID:          userID.(uint),
-		Name:            strings.TrimSpace(req.Name),
-		Nickname:        req.Nickname,
+		Name:            name,
+		Nickname:        nickname,
 		CustomPrompt:    req.CustomPrompt,
 		LLMConfigID:     req.LLMConfigID,
 		TTSConfigID:     req.TTSConfigID,
@@ -493,6 +499,7 @@ func (uc *UserController) GetAgent(c *gin.Context) {
 	}
 
 	result := AgentWithConfigs{Agent: agent}
+	ensureAgentNickname(&result.Agent)
 
 	// 加载LLM配置
 	if agent.LLMConfigID != nil && *agent.LLMConfigID != "" {
@@ -545,21 +552,20 @@ func (uc *UserController) UpdateAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误"})
 		return
 	}
-	if req.Nickname != nil {
-		nickname := strings.TrimSpace(*req.Nickname)
-		if nickname == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "请输入智能体昵称"})
-			return
-		}
-		if len([]rune(nickname)) > 50 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "智能体昵称不能超过50个字符"})
-			return
-		}
-		agent.Nickname = nickname
-	}
-
 	// 更新字段
 	agent.Name = strings.TrimSpace(req.Name)
+	if req.Nickname != nil {
+		agent.Nickname = strings.TrimSpace(*req.Nickname)
+	}
+	ensureAgentNickname(&agent)
+	if agent.Nickname == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入智能体昵称"})
+		return
+	}
+	if len([]rune(agent.Nickname)) > 50 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体昵称不能超过50个字符"})
+		return
+	}
 	agent.CustomPrompt = req.CustomPrompt
 	agent.LLMConfigID = req.LLMConfigID
 	agent.TTSConfigID = req.TTSConfigID
@@ -1085,6 +1091,18 @@ func (uc *UserController) GetAgentMCPServiceOptions(c *gin.Context) {
 	}})
 }
 
+func (uc *UserController) GetMCPServiceOptions(c *gin.Context) {
+	options, err := listEnabledGlobalMCPServiceNames(uc.DB)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("获取MCP服务选项失败: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"options": options,
+	}})
+}
+
 // CallDeviceMcpTool 调用设备维度MCP工具（用户版本）
 func (uc *UserController) CallDeviceMcpTool(c *gin.Context) {
 	userID, _ := c.Get("user_id")
@@ -1154,16 +1172,29 @@ func (uc *UserController) GetAgentMCPEndpoint(c *gin.Context) {
 		return
 	}
 
-	tools, toolsErr := uc.WebSocketController.RequestMcpToolDetailsFromClient(context.Background(), agentID)
-	if toolsErr != nil {
-		data["status_message"] = toolsErr.Error()
+	statusResult, statusErr := uc.WebSocketController.RequestMcpEndpointStatusFromClient(context.Background(), agentID)
+	if statusErr != nil {
+		data["status_message"] = statusErr.Error()
 		c.JSON(http.StatusOK, gin.H{"data": data})
 		return
 	}
 
-	data["connected"] = true
-	data["status"] = "online"
-	data["tools_count"] = len(tools)
+	connected, _ := statusResult["connected"].(bool)
+	status, _ := statusResult["status"].(string)
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status == "" {
+		if connected {
+			status = "online"
+		} else {
+			status = "offline"
+		}
+	}
+
+	data["connected"] = connected
+	data["status"] = status
+	if clientCount, ok := statusResult["client_count"]; ok {
+		data["client_count"] = clientCount
+	}
 	c.JSON(http.StatusOK, gin.H{"data": data})
 }
 
@@ -1182,17 +1213,20 @@ func (uc *UserController) GetAgentOpenClawEndpoint(c *gin.Context) {
 		return
 	}
 
-	endpoint, err := GenerateAgentOpenClawEndpoint(uc.DB, agentID, userID.(uint), uc.EndpointAuthToken)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	data := gin.H{
-		"endpoint":  endpoint,
+		"endpoint":  "",
 		"status":    "unknown",
 		"connected": false,
 	}
+
+	endpoint, err := GenerateAgentOpenClawEndpoint(uc.DB, agentID, userID.(uint), uc.EndpointAuthToken)
+	if err != nil {
+		data["status_message"] = err.Error()
+		c.JSON(http.StatusOK, gin.H{"data": data})
+		return
+	}
+	data["endpoint"] = endpoint
+
 	if uc.WebSocketController == nil {
 		data["status_message"] = "websocket controller unavailable"
 		c.JSON(http.StatusOK, gin.H{"data": data})
