@@ -218,6 +218,25 @@ func TestRealtimeLLMNaturalEndEnqueuesTtsStop(t *testing.T) {
 	}
 }
 
+func TestFinishTTSTurnSendsProtocolStopForMediaOutput(t *testing.T) {
+	session, conn, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+
+	session.ttsManager.EnqueueTtsStart(context.Background())
+
+	startMsg := waitForServerMessage(t, conn, 0)
+	if startMsg.Type != msgdata.ServerMessageTypeTts || startMsg.State != msgdata.MessageStateStart {
+		t.Fatalf("expected first server message to be tts start, got type=%s state=%s", startMsg.Type, startMsg.State)
+	}
+
+	session.llmManager.finishTTSTurn(context.Background(), nil, llmHandleResult{suppressProtocolTtsStop: true})
+
+	stopMsg := waitForServerMessage(t, conn, 1)
+	if stopMsg.Type != msgdata.ServerMessageTypeTts || stopMsg.State != msgdata.MessageStateStop {
+		t.Fatalf("expected media-output turn cleanup to send tts stop, got type=%s state=%s", stopMsg.Type, stopMsg.State)
+	}
+}
+
 func TestFinishTtsWithoutProtocolStopClearsLocalTTSState(t *testing.T) {
 	manager := newTestTTSManager(false)
 	manager.clientState.ListenMode = "realtime"
