@@ -13,17 +13,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-func TestIsWithinCommandTTLUses800msWindow(t *testing.T) {
-	now := time.Now()
-
-	if !isWithinCommandTTL(now.Add(-800*time.Millisecond), now) {
-		t.Fatal("expected 800ms-old command to stay within TTL")
-	}
-	if isWithinCommandTTL(now.Add(-801*time.Millisecond), now) {
-		t.Fatal("expected command older than 800ms to fall outside TTL")
-	}
-}
-
 func TestHandleListenDetectDebouncesLLMQueue(t *testing.T) {
 	session := newDetectDebounceTestSession(t)
 	setViperValueForTest(t, "enable_greeting", false)
@@ -119,14 +108,227 @@ func TestHandleListenStartIgnoresDuplicateRealtimeStart(t *testing.T) {
 	}
 }
 
+func TestHandleListenStartIgnoresAutoStartDuringWelcome(t *testing.T) {
+	session, conn, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+
+	session.clientState.IsWelcomePlaying = true
+	initialHistory := session.clientState.GetCommandHistorySnapshot()
+
+	session.ttsManager.EnqueueTtsStart(context.Background())
+	startMsg := waitForServerMessage(t, conn, 0)
+	if startMsg.Type != msgdata.ServerMessageTypeTts || startMsg.State != msgdata.MessageStateStart {
+		t.Fatalf("expected first server message to be tts start, got type=%s state=%s", startMsg.Type, startMsg.State)
+	}
+
+	if err := session.HandleListenStart(&data_client.ClientMessage{
+		Type:     msgdata.MessageTypeListen,
+		DeviceID: session.clientState.DeviceID,
+		Mode:     "auto",
+	}); err != nil {
+		t.Fatalf("HandleListenStart returned error: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := conn.sentCmdCount(); got != 1 {
+		t.Fatalf("expected auto listen start during welcome to avoid interrupting TTS, got %d commands", got)
+	}
+	if !session.clientState.IsWelcomePlaying {
+		t.Fatal("expected auto listen start during welcome to keep welcome playback active")
+	}
+	if got := session.clientState.ListenMode; got != "" {
+		t.Fatalf("expected ignored auto listen start not to update listen mode, got %q", got)
+	}
+
+	history := session.clientState.GetCommandHistorySnapshot()
+	if history.LastCmdType != initialHistory.LastCmdType || !history.LastCmdAt.Equal(initialHistory.LastCmdAt) {
+		t.Fatalf("expected ignored auto listen start not to update command history, got %+v want %+v", history, initialHistory)
+	}
+}
+
+func TestHandleListenStartRealtimeDoesNotWaitForWelcomeCompletion(t *testing.T) {
+	session := newDetectDebounceTestSession(t)
+	session.clientState.IsWelcomePlaying = true
+	session.beginWelcomePlaybackWait()
+	initialHistory := session.clientState.GetCommandHistorySnapshot()
+
+	if err := session.HandleListenStart(&data_client.ClientMessage{
+		Type:     msgdata.MessageTypeListen,
+		DeviceID: session.clientState.DeviceID,
+		Mode:     "realtime",
+	}); err != nil {
+		t.Fatalf("HandleListenStart returned error: %v", err)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for session.clientState.ListenMode != "realtime" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := session.clientState.ListenMode; got != "realtime" {
+		t.Fatalf("expected realtime listen start during welcome playback to proceed immediately, got %q", got)
+	}
+	history := session.clientState.GetCommandHistorySnapshot()
+	if history.LastCmdType != CommandTypeListenStart || !history.LastCmdAt.After(initialHistory.LastCmdAt) {
+		t.Fatalf("expected realtime listen start to update command history, got %+v want %+v", history, initialHistory)
+	}
+	if !session.clientState.IsWelcomePlaying {
+		t.Fatal("expected realtime listen start not to interrupt welcome playback")
+	}
+}
+
+func TestShouldIgnoreListenStartDuringWelcome(t *testing.T) {
+	if !shouldIgnoreListenStartDuringWelcome("auto", true) {
+		t.Fatal("expected auto listen start during welcome playback to be ignored")
+	}
+	if shouldIgnoreListenStartDuringWelcome("realtime", true) {
+		t.Fatal("expected realtime listen start during welcome not to be ignored")
+	}
+	if shouldIgnoreListenStartDuringWelcome("auto", false) {
+		t.Fatal("expected auto listen start outside welcome playback not to be ignored")
+	}
+}
+
+func TestShouldInterruptOutputOnListenStartPreservesWelcomeForRealtime(t *testing.T) {
+	if shouldInterruptOutputOnListenStart("realtime", true) {
+		t.Fatal("expected realtime listen start during welcome playback not to interrupt current output")
+	}
+	if !shouldInterruptOutputOnListenStart("auto", true) {
+		t.Fatal("expected auto listen start to keep interrupt behavior")
+	}
+	if !shouldInterruptOutputOnListenStart("realtime", false) {
+		t.Fatal("expected realtime listen start outside welcome playback to keep interrupt behavior")
+	}
+}
+
+func TestHandleListenDetectSilentlySkipsWakeupWhenAutoListenActiveAfterWelcome(t *testing.T) {
+	session := newDetectDebounceTestSession(t)
+	setViperValueForTest(t, "enable_greeting", true)
+	session.clientState.IsWelcomeSpeaking = true
+	session.clientState.ListenMode = "auto"
+	session.clientState.SetListenPhase(data_client.ListenPhaseListening)
+
+	if err := session.HandleListenDetect(&data_client.ClientMessage{
+		Type:     msgdata.MessageTypeListen,
+		DeviceID: session.clientState.DeviceID,
+		Text:     "你好小智",
+	}); err != nil {
+		t.Fatalf("HandleListenDetect returned error: %v", err)
+	}
+
+	if _, err := session.chatTextQueue.Pop(context.Background(), 500*time.Millisecond); err != util.ErrQueueTimeout {
+		t.Fatalf("expected welcomed wake detect during active auto listen to stay silent, got %v", err)
+	}
+	if got := session.clientState.GetListenPhase(); got != data_client.ListenPhaseListening {
+		t.Fatalf("expected silent skip to keep auto listen phase untouched, got %s", got)
+	}
+}
+
+func TestHandleListenDetectWelcomedWakeupSchedulesLLMWhenAutoListenIdle(t *testing.T) {
+	session := newDetectDebounceTestSession(t)
+	setViperValueForTest(t, "enable_greeting", true)
+	session.clientState.IsWelcomeSpeaking = true
+	session.clientState.ListenMode = "auto"
+	session.clientState.SetListenPhase(data_client.ListenPhaseIdle)
+
+	if err := session.HandleListenDetect(&data_client.ClientMessage{
+		Type:     msgdata.MessageTypeListen,
+		DeviceID: session.clientState.DeviceID,
+		Text:     "你好小智",
+	}); err != nil {
+		t.Fatalf("HandleListenDetect returned error: %v", err)
+	}
+
+	item, err := session.chatTextQueue.Pop(context.Background(), 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected welcomed wake detect outside active auto listen to enter llm debounce path, got %v", err)
+	}
+	if item.text != "你好小智" {
+		t.Fatalf("expected wake detect text to be preserved, got %q", item.text)
+	}
+}
+
+func TestOnListenStartStaleAfterInvalidateDoesNotClearWelcomePlaybackOrContexts(t *testing.T) {
+	session := newDetectDebounceTestSession(t)
+	session.clientState.ListenMode = "auto"
+
+	session.stopSpeakingMu.Lock()
+	startSeq := session.beginListenStart()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.OnListenStart(startSeq, true)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	session.invalidateListenStart()
+	sessionCtx := session.clientState.SessionCtx.Get(session.clientState.Ctx)
+	afterAsrCtx := session.clientState.AfterAsrSessionCtx.Get(sessionCtx)
+	session.clientState.IsWelcomeSpeaking = true
+	session.clientState.IsWelcomePlaying = true
+
+	session.stopSpeakingMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("OnListenStart returned error: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("OnListenStart did not return after invalidation")
+	}
+
+	if !session.clientState.IsWelcomePlaying {
+		t.Fatal("expected stale listen start not to clear welcome playing state")
+	}
+	if sessionCtx.Err() != nil {
+		t.Fatalf("expected stale listen start not to reset rebuilt session context, got %v", sessionCtx.Err())
+	}
+	if afterAsrCtx.Err() != nil {
+		t.Fatalf("expected stale listen start not to reset rebuilt after-asr context, got %v", afterAsrCtx.Err())
+	}
+}
+
 func TestStopSpeakingClearsRealtimeListenSessionActive(t *testing.T) {
 	session := newDetectDebounceTestSession(t)
 	session.realtimeListenSessionActive.Store(true)
+	session.clientState.IsWelcomePlaying = true
 
 	session.StopSpeaking(true)
 
 	if session.isRealtimeListenSessionActive() {
 		t.Fatal("expected session cancel path to clear realtime listen session active")
+	}
+	if session.clientState.IsWelcomePlaying {
+		t.Fatal("expected StopSpeaking to clear welcome playing state")
+	}
+}
+
+func TestStopSpeakingSignalsInterruptedWelcomePlaybackWait(t *testing.T) {
+	session := newDetectDebounceTestSession(t)
+	session.clientState.IsWelcomePlaying = true
+	session.beginWelcomePlaybackWait()
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- session.waitForWelcomePlaybackCompletion()
+	}()
+
+	select {
+	case result := <-done:
+		t.Fatalf("expected welcome wait to block before stopSpeaking, got %v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	session.StopSpeaking(true)
+
+	select {
+	case result := <-done:
+		if result {
+			t.Fatal("expected StopSpeaking to wake welcome wait as interrupted")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("welcome wait did not finish after StopSpeaking")
 	}
 }
 

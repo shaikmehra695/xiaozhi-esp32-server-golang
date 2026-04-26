@@ -192,6 +192,61 @@ func TestRealtimeStopSpeakingSendsTtsStopForActiveTTS(t *testing.T) {
 	}
 }
 
+func TestTtsStopClearsWelcomePlaybackState(t *testing.T) {
+	session, conn, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+	session.clientState.IsWelcomePlaying = true
+
+	session.ttsManager.EnqueueTtsStart(context.Background())
+
+	startMsg := waitForServerMessage(t, conn, 0)
+	if startMsg.Type != msgdata.ServerMessageTypeTts || startMsg.State != msgdata.MessageStateStart {
+		t.Fatalf("expected first server message to be tts start, got type=%s state=%s", startMsg.Type, startMsg.State)
+	}
+
+	session.ttsManager.EnqueueTtsStop(context.Background())
+
+	stopMsg := waitForServerMessage(t, conn, 1)
+	if stopMsg.Type != msgdata.ServerMessageTypeTts || stopMsg.State != msgdata.MessageStateStop {
+		t.Fatalf("expected second server message to be tts stop, got type=%s state=%s", stopMsg.Type, stopMsg.State)
+	}
+	if session.clientState.IsWelcomePlaying {
+		t.Fatal("expected tts stop to clear welcome playing state")
+	}
+}
+
+func TestFinishTtsStopSignalsNaturalWelcomePlaybackCompletion(t *testing.T) {
+	session, _, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+
+	session.beginWelcomePlaybackWait()
+	session.ttsManager.ttsActive.Store(true)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- session.waitForWelcomePlaybackCompletion()
+	}()
+
+	select {
+	case result := <-done:
+		t.Fatalf("expected welcome wait to block before natural stop, got %v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if !session.ttsManager.finishTtsStop(context.Background(), false, nil) {
+		t.Fatal("expected active TTS turn to finish")
+	}
+
+	select {
+	case result := <-done:
+		if !result {
+			t.Fatal("expected natural tts stop to resume welcome wait")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("welcome wait did not finish after natural tts stop")
+	}
+}
+
 func TestRealtimeLLMNaturalEndEnqueuesTtsStop(t *testing.T) {
 	session, conn, cleanup := newStartedTTSControlTestSession(t)
 	defer cleanup()

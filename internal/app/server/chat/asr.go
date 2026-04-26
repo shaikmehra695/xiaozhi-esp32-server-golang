@@ -327,7 +327,7 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context) {
 							log.Debugf("realtime模式vad打断下 && 语音时长超过%d ms 如果此时有正在进行的llm和tts则取消掉", continuousVoiceDuration)
 							state.AfterAsrSessionCtx.CancelWithReason("ASRManager.ProcessVadAudio: realtime_mode=1 VAD interrupt")
 							if a.session != nil {
-								a.session.InterruptAndClearTTSQueue()
+								a.session.InterruptAndClearTTSQueueWithReason("ASRManager.ProcessVadAudio realtime_mode=1 VAD interrupt")
 							}
 							hasTriggeredCancel = true // 标记为已触发
 						}
@@ -433,7 +433,7 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context) {
 										)
 										a.session.MarkTurnSpeakerInterrupted()
 										state.AfterAsrSessionCtx.CancelWithReason("ASRManager.ProcessVadAudio: realtime_mode=3 speaker peek interrupt")
-										a.session.InterruptAndClearTTSQueue()
+										a.session.InterruptAndClearTTSQueueWithReason("ASRManager.ProcessVadAudio realtime_mode=3 speaker peek interrupt")
 									}(requestID)
 								}
 							}
@@ -776,7 +776,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 						log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
 						state.AfterAsrSessionCtx.CancelWithReason("ASRManager.StartAsrRecognitionLoop: realtime_mode=2 ASR result interrupt")
 						if a.session != nil {
-							a.session.InterruptAndClearTTSQueue()
+							a.session.InterruptAndClearTTSQueueWithReason("ASRManager.StartAsrRecognitionLoop realtime_mode=2 ASR result interrupt")
 						}
 					}
 				}

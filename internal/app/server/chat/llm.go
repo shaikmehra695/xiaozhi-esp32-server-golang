@@ -86,6 +86,10 @@ func llmHandleResultFromArgs(args []any) llmHandleResult {
 }
 
 func (l *LLMManager) finishTTSTurn(ctx context.Context, stopErr error, result llmHandleResult) {
+	l.finishTTSTurnWithReason(ctx, stopErr, result, "LLMManager.finishTTSTurn")
+}
+
+func (l *LLMManager) finishTTSTurnWithReason(ctx context.Context, stopErr error, result llmHandleResult, reason string) {
 	if l == nil || l.ttsManager == nil {
 		return
 	}
@@ -96,7 +100,7 @@ func (l *LLMManager) finishTTSTurn(ctx context.Context, stopErr error, result ll
 		log.Debugf("媒体输出已完成，沿用常规 TTS 收尾发送 tts stop")
 	}
 
-	l.ttsManager.EnqueueTtsStop(ctx)
+	l.ttsManager.EnqueueTtsStopWithReason(ctx, reason)
 	l.ttsManager.RequestTurnEnd(ctx, stopErr)
 }
 
@@ -684,7 +688,7 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 				l.ttsManager.ClearAudioHistory()
 				log.Debugf("onStartFunc 首次调用，已清空TTS音频缓存")
 			}
-			l.ttsManager.EnqueueTtsStart(ctx)
+			l.ttsManager.EnqueueTtsStartWithReason(ctx, "LLMManager.handleLLMResponseChannelAsync onStart")
 		}
 		onEndFunc = func(err error, args ...any) {
 			handleResult := llmHandleResultFromArgs(args)
@@ -694,7 +698,7 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 			}
 			strFullText := fullText.String()
 
-			l.finishTTSTurn(ctx, err, handleResult)
+			l.finishTTSTurnWithReason(ctx, err, handleResult, "LLMManager.handleLLMResponseChannelAsync onEnd")
 
 			// 从 closure 中获取 fullText
 			audioData := l.ttsManager.GetAndClearAudioHistory()
@@ -784,7 +788,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 			l.ttsManager.ClearAudioHistory()
 			log.Debugf("HandleLLMResponseChannelSync 首次调用，已清空TTS音频缓存")
 		}
-		l.ttsManager.EnqueueTtsStart(ctx)
+		l.ttsManager.EnqueueTtsStartWithReason(ctx, "LLMManager.HandleLLMResponseChannelSync start")
 	}
 
 	result, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
@@ -798,7 +802,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 	strFullText := fullText.String()
 
 	if needSendTtsCmd {
-		l.finishTTSTurn(ctx, err, result)
+		l.finishTTSTurnWithReason(ctx, err, result, "LLMManager.HandleLLMResponseChannelSync end")
 
 		// 收集TTS音频并发送聊天历史事件
 		// 注意：工具调用后的LLM响应（nest > 1）也会累积音频到缓存中，但不会清空
