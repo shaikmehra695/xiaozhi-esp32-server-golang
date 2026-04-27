@@ -751,6 +751,9 @@ func (c *WebSocketClient) handleDefaultRequest(request *WebSocketRequest) {
 		// 处理MCP工具列表请求
 		c.handleMcpToolListRequest(request)
 
+	case "/api/mcp/status":
+		c.handleMcpStatusRequest(request)
+
 	case "/api/mcp/call":
 		// 处理MCP工具调用请求
 		c.handleMcpToolCallRequest(request)
@@ -1129,6 +1132,34 @@ func (c *WebSocketClient) handleMcpToolListRequest(request *WebSocketRequest) {
 	if err := c.SendResponse(request.ID, 200, response, ""); err != nil {
 		log.Errorf("发送MCP工具列表响应失败: %v", err)
 	}
+}
+
+func (c *WebSocketClient) handleMcpStatusRequest(request *WebSocketRequest) {
+	agentID := ""
+	if request.Body != nil {
+		if id, ok := request.Body["agent_id"].(string); ok {
+			agentID = strings.TrimSpace(id)
+		}
+	}
+
+	if agentID == "" {
+		_ = c.SendResponse(request.ID, 400, nil, "缺少agent_id参数")
+		return
+	}
+
+	connected, clientCount := mcp.GetWsEndpointConnectionStatus(agentID)
+	status := "offline"
+	if connected {
+		status = "online"
+	}
+
+	response := map[string]interface{}{
+		"agent_id":     agentID,
+		"connected":    connected,
+		"status":       status,
+		"client_count": clientCount,
+	}
+	_ = c.SendResponse(request.ID, 200, response, "")
 }
 
 // 全局便捷方法（异步版本）

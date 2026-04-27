@@ -95,8 +95,9 @@
             </el-tooltip>
 
             <el-tooltip :content="getMcpStatusTooltip(agent)" placement="top" :show-after="200" @show="ensureMcpConnectionStatus(agent.id)">
-              <div class="agent-state-badge is-icon-only" :class="`is-mcp-${getMcpStatusKey(agent)}`">
+              <div class="agent-state-badge is-icon-only is-counter-badge" :class="`is-mcp-${getMcpStatusKey(agent)}`">
                 <img class="state-image-icon state-image-icon--mcp" :src="mcpStatusIcon" alt="" />
+                <span class="state-counter">{{ getMcpServiceCountBadgeText() }}</span>
               </div>
             </el-tooltip>
 
@@ -289,6 +290,8 @@ const knowledgeBaseNameMap = computed(() => {
 })
 const mcpConnectionStatusMap = reactive({})
 const openClawConnectionStatusMap = reactive({})
+const globalMcpServiceCount = ref(null)
+const globalMcpServiceCountError = ref('')
 
 const isDeviceOnline = (lastActiveAt) => {
   if (!lastActiveAt) return false
@@ -515,17 +518,40 @@ const getConnectionStatusText = (state) => {
 }
 
 const getMcpStatusKey = (agent) => {
-  return normalizeMcpServiceNames(agent.mcp_service_names).length > 0 ? 'custom' : 'global'
+  const state = mcpConnectionStatusMap[String(agent.id)]
+  if (!state || state.loading) return 'checking'
+  if (state.connected || state.status === 'online') return 'online'
+  if (state.status === 'offline') return 'offline'
+  return 'unknown'
+}
+
+const getGlobalMcpServiceCountText = () => {
+  if (globalMcpServiceCountError.value) return '检测失败'
+  if (globalMcpServiceCount.value === null) return '检测中'
+  return `${globalMcpServiceCount.value} 个`
+}
+
+const getMcpServiceCountBadgeText = () => {
+  if (globalMcpServiceCount.value === null) return '?'
+  if (globalMcpServiceCount.value > 99) return '99+'
+  return String(globalMcpServiceCount.value)
+}
+
+const getMcpServiceScopeText = (agent) => {
+  const count = normalizeMcpServiceNames(agent.mcp_service_names).length
+  return count > 0 ? `已选择 ${count} 个服务` : '跟随全局配置'
+}
+
+const getMcpClientCountText = (connection) => {
+  const count = Number(connection?.client_count || 0)
+  if (count <= 0) return ''
+  return `（${count} 个客户端）`
 }
 
 const getMcpStatusTooltip = (agent) => {
   const connection = mcpConnectionStatusMap[String(agent.id)]
-  const count = normalizeMcpServiceNames(agent.mcp_service_names).length
   const connectionText = getConnectionStatusText(connection)
-  if (count > 0) {
-    return `MCP状态：已配置 ${count} 项｜连接状态：${connectionText}`
-  }
-  return `MCP状态：跟随全局配置｜连接状态：${connectionText}`
+  return `智能体WebSocket：${connectionText}${getMcpClientCountText(connection)}｜全局MCP服务：${getGlobalMcpServiceCountText()}｜服务范围：${getMcpServiceScopeText(agent)}`
 }
 
 const parseOpenClawConfig = (agent) => {
@@ -563,7 +589,8 @@ const ensureMcpConnectionStatus = async (agentId) => {
     loaded: false,
     connected: false,
     status: 'unknown',
-    status_message: ''
+    status_message: '',
+    client_count: 0
   }
 
   try {
@@ -574,7 +601,8 @@ const ensureMcpConnectionStatus = async (agentId) => {
       loaded: true,
       connected: !!data.connected,
       status: String(data.status || 'unknown').toLowerCase(),
-      status_message: String(data.status_message || '')
+      status_message: String(data.status_message || ''),
+      client_count: Number(data.client_count || 0)
     }
   } catch (error) {
     mcpConnectionStatusMap[key] = {
@@ -582,9 +610,27 @@ const ensureMcpConnectionStatus = async (agentId) => {
       loaded: true,
       connected: false,
       status: 'unknown',
-      status_message: error.response?.data?.error || error.message || '状态获取失败'
+      status_message: error.response?.data?.error || error.message || '状态获取失败',
+      client_count: 0
     }
   }
+}
+
+const loadGlobalMcpServiceCount = async () => {
+  globalMcpServiceCountError.value = ''
+  try {
+    const response = await api.get('/user/mcp-services/options')
+    const options = response.data.data?.options
+    globalMcpServiceCount.value = Array.isArray(options) ? options.length : 0
+  } catch (error) {
+    globalMcpServiceCount.value = null
+    globalMcpServiceCountError.value = error.response?.data?.error || error.message || '加载失败'
+    console.error('加载全局MCP服务数量失败:', error)
+  }
+}
+
+const loadMcpConnectionStatuses = async () => {
+  await Promise.all(agents.value.map(agent => ensureMcpConnectionStatus(agent.id)))
 }
 
 const ensureOpenClawConnectionStatus = async (agentId) => {
@@ -625,6 +671,8 @@ onMounted(async () => {
   initialLoading.value = true
   try {
     await Promise.all([loadAgents(), loadDevices(), loadKnowledgeBases()])
+    void loadGlobalMcpServiceCount()
+    void loadMcpConnectionStatuses()
   } finally {
     initialLoading.value = false
   }
@@ -917,21 +965,28 @@ onMounted(async () => {
 
 .agent-state-badge.is-memory-short,
 .agent-state-badge.is-active,
-.agent-state-badge.is-mcp-custom {
+.agent-state-badge.is-mcp-checking {
   color: var(--apple-primary);
   background: rgba(0, 122, 255, 0.08);
   border-color: rgba(0, 122, 255, 0.12);
 }
 
 .agent-state-badge.is-memory-long,
+.agent-state-badge.is-mcp-online,
 .agent-state-badge.is-openclaw-enabled {
   color: #176a31;
   background: rgba(52, 199, 89, 0.12);
   border-color: rgba(52, 199, 89, 0.16);
 }
 
+.agent-state-badge.is-mcp-offline {
+  color: #b42318;
+  background: rgba(255, 59, 48, 0.1);
+  border-color: rgba(255, 59, 48, 0.16);
+}
+
 .agent-state-badge.is-memory-none,
-.agent-state-badge.is-mcp-global,
+.agent-state-badge.is-mcp-unknown,
 .agent-state-badge.is-openclaw-disabled {
   color: var(--apple-text-tertiary);
   background: rgba(248, 250, 252, 0.92);

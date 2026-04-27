@@ -225,7 +225,7 @@ const vadFormRules = {
 }
 
 const asrForm = reactive({
-  name: '默认ASR',
+  name: 'FunASR ASR',
   config_id: 'funasr_default',
   provider: 'funasr',
   funasr: {
@@ -273,6 +273,18 @@ const asrForm = reactive({
     vad_threshold: 0.0,
     vad_silence_ms: 400,
     timeout: 30
+  },
+  xunfei: {
+    appid: '',
+    api_key: '',
+    api_secret: '',
+    host: 'iat-api.xfyun.cn',
+    path: '/v2/iat',
+    domain: 'iat',
+    language: 'zh_cn',
+    accent: 'mandarin',
+    sample_rate: 16000,
+    timeout: 30
   }
 })
 const asrFormRef = ref()
@@ -316,7 +328,17 @@ const asrFormRules = {
   'aliyun_qwen3.format': [{ required: true, message: '请选择音频格式', trigger: 'change' }],
   'aliyun_qwen3.sample_rate': [{ required: true, message: '请选择采样率', trigger: 'change' }],
   'aliyun_qwen3.language': [{ required: true, message: '请输入语言', trigger: 'blur' }],
-  'aliyun_qwen3.timeout': [{ required: true, message: '请输入超时时间', trigger: 'blur' }]
+  'aliyun_qwen3.timeout': [{ required: true, message: '请输入超时时间', trigger: 'blur' }],
+  'xunfei.appid': [{ required: true, message: '请输入应用ID', trigger: 'blur' }],
+  'xunfei.api_key': [{ required: true, message: '请输入API Key', trigger: 'blur' }],
+  'xunfei.api_secret': [{ required: true, message: '请输入API Secret', trigger: 'blur' }],
+  'xunfei.host': [{ required: true, message: '请输入Host', trigger: 'blur' }],
+  'xunfei.path': [{ required: true, message: '请输入Path', trigger: 'blur' }],
+  'xunfei.domain': [{ required: true, message: '请输入业务领域', trigger: 'blur' }],
+  'xunfei.language': [{ required: true, message: '请输入语言', trigger: 'blur' }],
+  'xunfei.accent': [{ required: true, message: '请输入方言', trigger: 'blur' }],
+  'xunfei.sample_rate': [{ required: true, message: '请选择采样率', trigger: 'change' }],
+  'xunfei.timeout': [{ required: true, message: '请输入超时时间', trigger: 'blur' }]
 }
 
 const llmForm = reactive({
@@ -905,6 +927,8 @@ async function loadAsrIfExists() {
       Object.assign(asrForm.aliyun_funasr, data.aliyun_funasr || data)
     } else if (config.provider === 'aliyun_qwen3') {
       Object.assign(asrForm.aliyun_qwen3, data.aliyun_qwen3 || data)
+    } else if (config.provider === 'xunfei') {
+      Object.assign(asrForm.xunfei, data.xunfei || data)
     } else {
       const obj = data.funasr || data
       const funasr = { ...asrForm.funasr }

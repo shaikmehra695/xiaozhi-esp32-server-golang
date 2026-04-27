@@ -477,6 +477,8 @@ const agentForm = ref({
   status: 'active'
 })
 
+const getAgentNickname = (agent) => String(agent?.nickname || '').trim() || String(agent?.name || '').trim()
+
 const agentRules = {
   user_id: [{ required: true, message: '请输入用户ID', trigger: 'blur' }],
   name: [{ required: true, message: '请输入智能体名称', trigger: 'blur' }],
@@ -532,7 +534,7 @@ const editAgent = (agent) => {
   agentForm.value = {
     user_id: agent.user_id,
     name: agent.name,
-    nickname: agent.nickname || '',
+    nickname: getAgentNickname(agent),
     custom_prompt: agent.custom_prompt || '',
     llm_config_id: agent.llm_config_id,
     tts_config_id: agent.tts_config_id,
@@ -565,7 +567,7 @@ const saveAgent = async () => {
     const payload = {
       ...agentForm.value,
       name: String(agentForm.value.name || '').trim(),
-      nickname: String(agentForm.value.nickname || '').trim(),
+      nickname: String(agentForm.value.nickname || '').trim() || String(agentForm.value.name || '').trim(),
       openclaw: {
         allowed: !!agentForm.value.openclaw_allowed,
         enter_keywords: normalizeKeywordList(agentForm.value.openclaw_enter_keywords),
@@ -764,7 +766,7 @@ const parseOpenClawConfigFromAgent = (agent) => {
   return buildDefaultOpenClawConfig()
 }
 
-const fetchOpenClawEndpoint = async () => {
+const fetchOpenClawEndpoint = async ({ showError = true } = {}) => {
   if (!editingAgent.value?.id) {
     openClawEndpointData.value = {
       endpoint: '',
@@ -790,7 +792,9 @@ const fetchOpenClawEndpoint = async () => {
     openClawEndpointData.value.connected = false
     openClawEndpointData.value.status = 'unknown'
     openClawEndpointData.value.status_message = error.response?.data?.error || ''
-    ElMessage.error('获取OpenClaw接入点失败')
+    if (showError) {
+      ElMessage.error('获取OpenClaw接入点失败')
+    }
   } finally {
     openClawEndpointLoading.value = false
   }
@@ -941,7 +945,7 @@ const testOpenClawChat = async () => {
     ElMessage.error(msg)
   } finally {
     openClawChatTesting.value = false
-    await fetchOpenClawEndpoint()
+    await fetchOpenClawEndpoint({ showError: false })
   }
 }
 

@@ -185,6 +185,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				user.GET("/tts-configs", userController.GetTTSConfigs)
 
 				// MCP接入点
+				user.GET("/mcp-services/options", userController.GetMCPServiceOptions)
 				user.GET("/agents/:id/mcp-services/options", userController.GetAgentMCPServiceOptions)
 				user.GET("/agents/:id/mcp-endpoint", userController.GetAgentMCPEndpoint)
 				user.GET("/agents/:id/openclaw-endpoint", userController.GetAgentOpenClawEndpoint)
