@@ -25,21 +25,49 @@ const authStore = useAuthStore()
 
 <style scoped>
 .test-page {
-  padding: 20px;
+  padding: 24px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: var(--apple-shadow-md);
+}
+
+.test-page h1 {
+  margin: 0 0 12px;
+  color: var(--apple-text);
+}
+
+.test-page > p {
+  margin: 0;
+  color: var(--apple-text-secondary);
 }
 
 .debug-info {
-  background: #f5f5f5;
-  padding: 15px;
-  border-radius: 4px;
   margin: 20px 0;
+  padding: 16px 18px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+  border-radius: 18px;
+  color: var(--apple-text-secondary);
+}
+
+.debug-info h3 {
+  margin: 20px 0;
+  color: var(--apple-text);
+}
+
+.debug-info p {
+  margin: 8px 0;
 }
 
 .actions {
   margin-top: 20px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .actions .el-button {
-  margin-right: 10px;
+  margin-right: 0;
 }
 </style>

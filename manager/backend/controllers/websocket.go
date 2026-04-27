@@ -70,6 +70,7 @@ type MCPTool struct {
 
 const (
 	defaultBroadcastRequestTimeout = 30 * time.Second
+	defaultMcpStatusRequestTimeout = 3 * time.Second
 	openClawChatDefaultTimeoutMs   = 10 * 60 * 1000
 	openClawChatMinTimeoutMs       = 1000
 	openClawChatMaxTimeoutMs       = 10 * 60 * 1000
@@ -656,6 +657,14 @@ func (ctrl *WebSocketController) RequestMcpToolDetailsFromClient(ctx context.Con
 	return ctrl.requestMcpToolsByBody(ctx, map[string]interface{}{"agent_id": agentID})
 }
 
+func (ctrl *WebSocketController) RequestMcpEndpointStatusFromClient(ctx context.Context, agentID string) (map[string]interface{}, error) {
+	body := map[string]interface{}{
+		"agent_id": agentID,
+	}
+
+	return ctrl.broadcastMcpStatusRequest(ctx, body)
+}
+
 // RequestDeviceMcpToolsFromClient 请求设备维度MCP工具列表（广播方式，等待第一个非空列表响应）
 func (ctrl *WebSocketController) RequestDeviceMcpToolsFromClient(ctx context.Context, deviceID string) ([]string, error) {
 	toolDetails, err := ctrl.RequestDeviceMcpToolDetailsFromClient(ctx, deviceID)
@@ -914,6 +923,132 @@ func (ctrl *WebSocketController) CallOpenClawChatStreamFromClient(
 
 func (ctrl *WebSocketController) broadcastRequestAndWaitFirstSuccess(ctx context.Context, method, path string, body map[string]interface{}) (*WebSocketResponse, error) {
 	return ctrl.broadcastRequestAndWaitFirstSuccessWithTimeout(ctx, method, path, body, defaultBroadcastRequestTimeout)
+}
+
+func isMcpStatusOnline(body map[string]interface{}) bool {
+	if body == nil {
+		return false
+	}
+	if connected, ok := body["connected"].(bool); ok && connected {
+		return true
+	}
+	status, _ := body["status"].(string)
+	return strings.EqualFold(strings.TrimSpace(status), "online")
+}
+
+func mcpStatusClientCount(body map[string]interface{}) int {
+	if body == nil {
+		return 0
+	}
+	switch v := body["client_count"].(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case float32:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+func (ctrl *WebSocketController) broadcastMcpStatusRequest(ctx context.Context, body map[string]interface{}) (map[string]interface{}, error) {
+	requestID := uuid.New().String()
+
+	clients := make([]*WebSocketClient, 0)
+	for item := range ctrl.clientsMap.IterBuffered() {
+		client := item.Val
+		if client != nil && client.isConnected {
+			clients = append(clients, client)
+		}
+	}
+	if len(clients) == 0 {
+		return nil, fmt.Errorf("没有连接的客户端")
+	}
+
+	responseChan := make(chan *WebSocketResponse, len(clients))
+	responseHandler := func(response *WebSocketResponse) {
+		select {
+		case responseChan <- response:
+		default:
+			log.Printf("MCP状态响应通道已满，丢弃响应: %s", response.ID)
+		}
+	}
+
+	for _, client := range clients {
+		client.mu.Lock()
+		client.callbacks[requestID] = responseHandler
+		client.mu.Unlock()
+	}
+	defer func() {
+		for _, client := range clients {
+			client.mu.Lock()
+			delete(client.callbacks, requestID)
+			client.mu.Unlock()
+		}
+	}()
+
+	sentCount := 0
+	for _, client := range clients {
+		request := WebSocketRequest{ID: requestID, Method: "GET", Path: "/api/mcp/status", Body: body}
+		if err := client.conn.WriteJSON(request); err != nil {
+			log.Printf("向客户端 %s 发送MCP状态请求失败: %v", client.ID, err)
+			continue
+		}
+		sentCount++
+	}
+	if sentCount == 0 {
+		return nil, fmt.Errorf("没有可用的客户端")
+	}
+
+	offline := map[string]interface{}{
+		"connected":    false,
+		"status":       "offline",
+		"client_count": 0,
+	}
+	responsesReceived := 0
+	successResponses := 0
+	firstError := ""
+	timeout := time.After(defaultMcpStatusRequestTimeout)
+	for {
+		select {
+		case response := <-responseChan:
+			responsesReceived++
+			if response != nil && response.Status == http.StatusOK {
+				successResponses++
+				if isMcpStatusOnline(response.Body) {
+					return response.Body, nil
+				}
+				offline["client_count"] = mcpStatusClientCount(offline) + mcpStatusClientCount(response.Body)
+			} else if response != nil && firstError == "" {
+				firstError = strings.TrimSpace(response.Error)
+			}
+
+			if responsesReceived >= sentCount {
+				if successResponses > 0 {
+					return offline, nil
+				}
+				if firstError != "" {
+					return nil, fmt.Errorf("%s", firstError)
+				}
+				return nil, fmt.Errorf("所有客户端都返回失败")
+			}
+		case <-timeout:
+			if successResponses > 0 {
+				return offline, nil
+			}
+			if firstError != "" {
+				return nil, fmt.Errorf("%s", firstError)
+			}
+			return nil, fmt.Errorf("请求超时")
+		case <-ctx.Done():
+			return nil, fmt.Errorf("上下文取消")
+		}
+	}
 }
 
 func normalizeOpenClawChatTimeoutMs(v interface{}) int {

@@ -1,11 +1,7 @@
 <template>
   <div class="api-tokens-page">
-    <div class="page-header">
-      <div>
-        <h2>API Token 管理</h2>
-        <p class="page-subtitle">用于访问 /api/open/v1 对外接口，明文仅在创建时展示一次。</p>
-        <router-link class="doc-link" to="/openapi-docs">文档链接：查看公开 OpenAPI 接口说明</router-link>
-      </div>
+    <div class="page-actions">
+      <router-link class="doc-link" to="/openapi-docs">查看公开 OpenAPI 接口说明</router-link>
       <el-button type="primary" @click="openCreateDialog">
         <el-icon><Plus /></el-icon>
         创建 Token
@@ -163,17 +159,17 @@ onMounted(loadTokens)
 
 <style scoped>
 .api-tokens-page { padding: 8px; }
-.page-header {
+.page-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
-.page-subtitle { margin: 4px 0 0; color: #909399; }
 .doc-link {
   display: inline-block;
-  margin-top: 8px;
-  color: #409EFF;
+  color: var(--apple-primary);
   text-decoration: none;
   font-size: 13px;
 }

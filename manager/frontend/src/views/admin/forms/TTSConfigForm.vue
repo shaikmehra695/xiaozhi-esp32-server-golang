@@ -659,10 +659,11 @@ defineExpose({ validate, getJsonData, resetFields })
 
 .indextts-help {
   width: 100%;
-  border: 1px solid #d9e7ff;
-  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  border-radius: 18px;
   padding: 12px 14px;
-  background: linear-gradient(120deg, #f7fbff 0%, #f2f9ff 45%, #f8f8ff 100%);
+  background: rgba(248, 250, 252, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .indextts-help-head {
@@ -672,13 +673,13 @@ defineExpose({ validate, getJsonData, resetFields })
 .indextts-help-title {
   font-size: 14px;
   font-weight: 700;
-  color: #1f3d5b;
+  color: var(--apple-text);
 }
 
 .indextts-help-subtitle {
   margin-top: 4px;
   font-size: 12px;
-  color: #4f6b8a;
+  color: var(--apple-text-secondary);
 }
 
 .indextts-help-links {
@@ -690,7 +691,7 @@ defineExpose({ validate, getJsonData, resetFields })
 }
 
 .indextts-help-divider {
-  color: #a9b9cc;
+  color: var(--apple-text-tertiary);
   font-size: 12px;
 }
 
@@ -703,6 +704,6 @@ defineExpose({ validate, getJsonData, resetFields })
 .form-item-tip {
   margin-left: 8px;
   font-size: 12px;
-  color: #909399;
+  color: var(--apple-text-secondary);
 }
 </style>

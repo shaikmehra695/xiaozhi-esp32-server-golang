@@ -1,15 +1,10 @@
 <template>
   <div class="config-page">
-    <div class="page-header">
-      <div class="header-left">
-        <h2>Memory配置管理</h2>
-      </div>
-      <div class="header-right">
-        <el-button type="primary" @click="handleAddConfig">
-          <el-icon><Plus /></el-icon>
-          添加配置
-        </el-button>
-      </div>
+    <div class="page-actions">
+      <el-button type="primary" @click="handleAddConfig">
+        <el-icon><Plus /></el-icon>
+        添加配置
+      </el-button>
     </div>
 
     <el-table :data="safeConfigs" style="width: 100%" v-loading="loading">
@@ -462,16 +457,13 @@ onMounted(() => {
   padding: 20px;
 }
 
-.page-header {
+.page-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 20px;
-}
-
-.header-left h2 {
-  margin: 0;
-  color: #303133;
 }
 
 .empty-state {

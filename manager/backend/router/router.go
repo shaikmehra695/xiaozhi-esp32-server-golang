@@ -65,6 +65,8 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	api := r.Group("/api")
 	{
 		// 公开路由（无需认证）
+		api.GET("/captcha/status", authController.GetCaptchaStatus)
+		api.GET("/captcha/challenge", authController.GetSimpleCaptcha)
 		api.POST("/login", authController.Login)
 		api.POST("/register", authController.Register)
 
@@ -127,6 +129,8 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				// 设备管理
 				user.GET("/devices", userController.GetMyDevices)
 				user.POST("/devices", userController.CreateDevice)
+				user.PUT("/devices/:id", userController.UpdateDevice)
+				user.DELETE("/devices/:id", userController.DeleteDevice)
 
 				// 智能体管理
 				user.GET("/agents", userController.GetAgents)
@@ -181,6 +185,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				user.GET("/tts-configs", userController.GetTTSConfigs)
 
 				// MCP接入点
+				user.GET("/mcp-services/options", userController.GetMCPServiceOptions)
 				user.GET("/agents/:id/mcp-services/options", userController.GetAgentMCPServiceOptions)
 				user.GET("/agents/:id/mcp-endpoint", userController.GetAgentMCPEndpoint)
 				user.GET("/agents/:id/openclaw-endpoint", userController.GetAgentOpenClawEndpoint)
@@ -190,7 +195,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				user.GET("/devices/:id/mcp-tools", userController.GetDeviceMcpTools)
 				user.POST("/devices/:id/mcp-call", userController.CallDeviceMcpTool)
 
-				// 消息注入
+				// 语音推送
 				user.POST("/devices/inject-message", userController.InjectMessage)
 
 				// 声纹组管理

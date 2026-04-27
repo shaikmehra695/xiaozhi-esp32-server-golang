@@ -57,20 +57,28 @@ const handleRightClick = () => {
 
 <style scoped>
 .mobile-nav-bar {
-  background-color: #409EFF;
-  color: white;
+  background: transparent;
+  color: var(--apple-text);
+}
+
+:deep(.van-nav-bar) {
+  margin: 12px 12px 0;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  box-shadow: var(--apple-shadow-md);
+  overflow: hidden;
 }
 
 :deep(.van-nav-bar__title) {
-  color: white;
-  font-weight: 500;
+  color: var(--apple-text);
+  font-weight: 700;
 }
 
 :deep(.van-nav-bar__arrow) {
-  color: white;
+  color: var(--apple-text);
 }
 
 :deep(.van-nav-bar__text) {
-  color: white;
+  color: var(--apple-text);
 }
 </style>

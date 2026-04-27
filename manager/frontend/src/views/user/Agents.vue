@@ -1,122 +1,150 @@
 <template>
   <div class="agents-page">
-    <div class="page-header">
-      <div class="header-left">
-        <h2>我的智能体</h2>
-        <p class="page-subtitle">管理您的智能体配置</p>
+    <section class="page-toolbar apple-surface">
+      <div class="toolbar-chips">
+        <span class="apple-chip is-primary">智能体 {{ agentsCountText }}</span>
+        <span class="apple-chip is-success">设备 {{ devicesCountText }}</span>
+        <span class="apple-chip">在线 {{ onlineDevicesCountText }}</span>
       </div>
-      <div class="header-right">
-        <el-button type="primary" @click="showAddAgentDialog = true">
-              <el-icon><Plus /></el-icon>
-              添加智能体
-            </el-button>
-      </div>
-    </div>
 
-    <div v-if="agents.length === 0" class="welcome-section">
-      <el-card class="welcome-card">
+      <div class="toolbar-actions">
+        <el-button type="primary" @click="showAddAgentDialog = true">
+          <el-icon><Plus /></el-icon>
+          添加智能体
+        </el-button>
+        <el-button plain @click="openAddDeviceDialog">
+          <el-icon><Monitor /></el-icon>
+          添加设备
+        </el-button>
+        <el-button plain @click="openInjectMessageDialog">
+          <el-icon><ChatDotRound /></el-icon>
+          语音推送
+        </el-button>
+      </div>
+    </section>
+
+    <section v-if="initialLoading" class="agents-grid agents-grid-loading" aria-label="智能体加载中">
+      <article v-for="index in 3" :key="index" class="agent-card agent-card-skeleton apple-surface">
+        <div class="skeleton-card-header">
+          <div class="skeleton-avatar skeleton-shimmer"></div>
+          <div class="skeleton-title-block">
+            <div class="skeleton-line skeleton-line-title skeleton-shimmer"></div>
+            <div class="skeleton-line skeleton-line-subtitle skeleton-shimmer"></div>
+          </div>
+          <div class="skeleton-icons">
+            <span class="skeleton-icon skeleton-shimmer"></span>
+            <span class="skeleton-icon skeleton-shimmer"></span>
+            <span class="skeleton-icon skeleton-shimmer"></span>
+            <span class="skeleton-icon skeleton-shimmer"></span>
+          </div>
+        </div>
+        <div class="skeleton-summary">
+          <div class="skeleton-line skeleton-shimmer"></div>
+          <div class="skeleton-line skeleton-shimmer"></div>
+          <div class="skeleton-line skeleton-line-short skeleton-shimmer"></div>
+        </div>
+        <div class="skeleton-actions">
+          <span class="skeleton-button skeleton-shimmer"></span>
+          <span class="skeleton-button skeleton-shimmer"></span>
+          <span class="skeleton-button skeleton-shimmer"></span>
+        </div>
+      </article>
+    </section>
+
+    <div v-else-if="agents.length === 0" class="welcome-section">
+      <el-card class="welcome-card apple-surface">
         <div class="welcome-content">
-          <el-icon size="64" color="#409EFF"><Monitor /></el-icon>
-          <h3>欢迎使用智能体管理</h3>
-          <p>您还没有创建任何智能体。智能体是您的AI助手，可以帮助您处理各种任务。</p>
+          <el-icon size="64" color="var(--apple-primary)"><Monitor /></el-icon>
+          <h3>先创建第一个智能体</h3>
+          <p>创建后就能继续绑定设备、配置知识库和语音能力。</p>
           <div class="welcome-actions">
             <el-button type="primary" size="large" @click="showAddAgentDialog = true">
               <el-icon><Plus /></el-icon>
-              创建第一个智能体
+              创建智能体
             </el-button>
           </div>
         </div>
       </el-card>
     </div>
 
-    <div v-else class="agents-grid">
-      <div v-for="agent in agents" :key="agent.id" class="agent-item">
-        <div class="agent-card">
-          <div class="agent-header">
+    <section v-else class="agents-grid">
+      <article v-for="agent in agents" :key="agent.id" class="agent-card apple-surface">
+        <div class="agent-header">
+          <div class="agent-heading">
             <div class="agent-avatar">
-              <el-icon size="28"><Monitor /></el-icon>
+              <el-icon><Monitor /></el-icon>
             </div>
             <div class="agent-info">
               <h3 class="agent-name">{{ agent.name }}</h3>
-              <p class="agent-desc">智能助手</p>
-            </div>
-            <div class="agent-status">
-              <span class="status-dot active"></span>
-              <span class="status-text">在线</span>
+              <p class="agent-desc">昵称：{{ agent.nickname || agent.name }}</p>
             </div>
           </div>
-          
-          <div class="agent-meta">
-            <div class="meta-row">
-              <span class="meta-label">TTS配置</span>
-              <span class="meta-value">{{ getVoiceType(agent) }}</span>
-            </div>
-            <div class="meta-row">
-              <span class="meta-label">语言模型</span>
-              <span class="meta-value">{{ getLLMProvider(agent) }}</span>
-            </div>
-            <div class="meta-row">
-              <span class="meta-label">最近对话</span>
-              <span class="meta-value">{{ formatDate(agent.updated_at) }}</span>
-            </div>
-          </div>
-          
-          <div class="agent-actions">
-            <el-button type="primary" size="small" @click="editAgent(agent.id)">
-              <el-icon><Setting /></el-icon>
-              配置
-            </el-button>
-            <el-button size="small" @click="handleChatHistory(agent.id)">
-              <el-icon><ChatDotRound /></el-icon>
-              对话
-            </el-button>
-            <el-button size="small" @click="handleManageDevices(agent.id)">
-              <el-icon><Monitor /></el-icon>
-              设备
-            </el-button>
+
+          <div class="agent-state-grid">
+            <el-tooltip :content="`记忆类型：${getMemoryModeText(agent)}`" placement="top" :show-after="200">
+              <div class="agent-state-badge is-icon-only" :class="`is-memory-${getMemoryModeKey(agent)}`">
+                <img class="state-image-icon state-image-icon--memory" :src="memoryStatusIcon" alt="" />
+              </div>
+            </el-tooltip>
+
+            <el-tooltip :content="getKnowledgeBaseTooltip(agent)" placement="top" :show-after="200">
+              <div class="agent-state-badge is-icon-only is-counter-badge" :class="{ 'is-active': getKnowledgeBaseCount(agent) > 0 }">
+                <img class="state-image-icon state-image-icon--knowledge" :src="knowledgeBaseStatusIcon" alt="" />
+                <span class="state-counter">{{ getKnowledgeBaseBadgeText(agent) }}</span>
+              </div>
+            </el-tooltip>
+
+            <el-tooltip :content="getMcpStatusTooltip(agent)" placement="top" :show-after="200" @show="ensureMcpConnectionStatus(agent.id)">
+              <div class="agent-state-badge is-icon-only is-counter-badge" :class="`is-mcp-${getMcpStatusKey(agent)}`">
+                <img class="state-image-icon state-image-icon--mcp" :src="mcpStatusIcon" alt="" />
+                <span class="state-counter">{{ getMcpServiceCountBadgeText() }}</span>
+              </div>
+            </el-tooltip>
+
+            <el-tooltip :content="getOpenClawStatusTooltip(agent)" placement="top" :show-after="200" @show="ensureOpenClawConnectionStatus(agent.id)">
+              <div class="agent-state-badge is-icon-only" :class="`is-openclaw-${getOpenClawStatusKey(agent)}`">
+                <img class="state-image-icon state-image-icon--openclaw" :src="openClawStatusIcon" alt="" />
+              </div>
+            </el-tooltip>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- 添加设备弹窗 -->
-    <el-dialog
-      v-model="showAddDeviceDialog"
-      title="添加设备"
-      width="500px"
-      class="device-dialog"
-    >
-      <el-form
-        ref="deviceFormRef"
-        :model="deviceForm"
-        :rules="deviceRules"
-        label-width="100px"
-      >
-        <el-form-item label="设备激活码" prop="device_code">
-          <el-input
-            v-model="deviceForm.device_code"
-            placeholder="请输入设备激活码"
-          />
-        </el-form-item>
-        <el-form-item label="设备名称" prop="device_name">
-          <el-input
-            v-model="deviceForm.device_name"
-            placeholder="请输入设备名称"
-          />
-        </el-form-item>
-      </el-form>
-      
-      <template #footer>
-        <el-button @click="showAddDeviceDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleAddDevice">确定</el-button>
-      </template>
-    </el-dialog>
+        <div class="agent-summary">
+          <div class="summary-row" :title="`音色模型：${getVoiceModelText(agent)}`">
+            <span class="summary-label">音色模型：</span>
+            <span class="summary-text">{{ truncateText(getVoiceModelText(agent), 18) }}</span>
+          </div>
+          <div class="summary-row" :title="`语言模型：${getLLMModelText(agent)}`">
+            <span class="summary-label">语言模型：</span>
+            <span class="summary-text">{{ truncateText(getLLMModelText(agent), 16) }}</span>
+          </div>
+          <div class="summary-row" :title="`设备数量：${getDeviceCountText(agent)}`">
+            <span class="summary-label">设备数量：</span>
+            <span class="summary-text is-count">{{ getDeviceCountText(agent) }}</span>
+          </div>
+        </div>
 
-    <!-- 添加智能体弹窗 -->
+        <div class="agent-actions">
+          <el-button type="primary" size="small" @click="editAgent(agent.id)">
+            <el-icon><Setting /></el-icon>
+            配置
+          </el-button>
+          <el-button size="small" @click="handleChatHistory(agent.id)">
+            <el-icon><ChatDotRound /></el-icon>
+            对话
+          </el-button>
+          <el-button size="small" @click="handleManageDevices(agent.id)">
+            <el-icon><Connection /></el-icon>
+            设备
+          </el-button>
+        </div>
+      </article>
+    </section>
+
     <el-dialog
       v-model="showAddAgentDialog"
       title="添加智能体"
-      width="500px"
+      width="560px"
       class="agent-dialog"
       :before-close="handleCloseAddAgent"
     >
@@ -125,241 +153,121 @@
         :model="agentForm"
         :rules="agentRules"
         size="large"
-        label-width="100px"
+        label-position="top"
       >
         <el-form-item label="智能体名称" prop="name">
           <el-input
             v-model="agentForm.name"
             placeholder="请输入智能体名称"
-            size="large"
             :maxlength="50"
             show-word-limit
           />
+        </el-form-item>
+        <el-form-item label="智能体昵称" prop="nickname">
+          <el-input
+            v-model="agentForm.nickname"
+            placeholder="给大模型使用，例如：小辉"
+            :maxlength="50"
+            show-word-limit
+          />
+          <div class="form-tip">用于替换 Prompt 中的 {{assistant_name}}，不是列表里的管理名称。</div>
         </el-form-item>
         <el-form-item label="角色介绍" prop="custom_prompt">
           <el-input
             v-model="agentForm.custom_prompt"
             type="textarea"
-            :rows="4"
-            placeholder="请输入角色介绍/系统提示词，这将影响AI的回答风格和个性"
+            :rows="5"
+            placeholder="请输入角色介绍 / 系统提示词"
             :maxlength="10000"
             show-word-limit
           />
         </el-form-item>
-        <el-form-item label="记忆模式" prop="memory_mode">
-          <el-select v-model="agentForm.memory_mode" placeholder="请选择记忆模式" style="width: 100%">
-            <el-option label="无记忆" value="none" />
-            <el-option label="短记忆" value="short" />
-            <el-option label="长记忆" value="long" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="只允许声纹聊天" prop="speaker_chat_mode">
-          <el-select v-model="agentForm.speaker_chat_mode" placeholder="请选择声纹聊天限制" style="width: 100%">
-            <el-option label="关闭" value="off" />
-            <el-option label="仅命中声纹时允许聊天" value="identified_only" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="handleCloseAddAgent" size="large">取消</el-button>
-          <el-button type="primary" @click="handleAddAgent" :loading="adding" size="large">
-            确定
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
-
-    <!-- 添加设备弹窗 -->
-    <el-dialog
-      v-model="showAddDeviceDialog"
-      title="添加设备"
-      width="400px"
-      class="device-dialog"
-      :before-close="handleCloseAddDevice"
-    >
-      <div class="device-dialog-content">
-        <div class="device-icon">
-          <el-icon size="48"><Monitor /></el-icon>
-        </div>
-        <p class="device-tip">请输入设备验证码</p>
-        <el-form
-          ref="deviceFormRef"
-          :model="deviceForm"
-          :rules="deviceRules"
-        >
-          <el-form-item prop="code">
-            <el-input
-              v-model="deviceForm.code"
-              placeholder="请输入6位验证码"
-              size="large"
-              :maxlength="6"
-              style="text-align: center; font-size: 18px; letter-spacing: 4px;"
-            />
-          </el-form-item>
-        </el-form>
-      </div>
-      
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="handleCloseAddDevice" size="large">取消</el-button>
-          <el-button type="primary" @click="handleAddDevice" :loading="addingDevice" size="large">
-            确定
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
-
-    <!-- MCP接入点对话框 -->
-    <el-dialog
-      v-model="showMCPDialog"
-      title="MCP接入点"
-      width="700px"
-      class="mcp-dialog"
-    >
-      <div v-loading="mcpLoading">
-        <!-- 工具列表区域 -->
-        <div class="mcp-tools-section">
-          <div class="tools-header">
-            <div class="tools-title">MCP工具列表</div>
-            <el-button 
-              size="small" 
-              type="primary" 
-              @click="refreshMcpTools"
-              :loading="toolsLoading"
-            >
-              <el-icon><Refresh /></el-icon>
-              刷新工具列表
-            </el-button>
-          </div>
-          
-          <div class="tools-list">
-            <div v-if="mcpTools.length === 0" class="tools-empty">
-              <el-tag type="info" size="large" class="tool-tag">
-                暂无工具数据
-              </el-tag>
-            </div>
-            
-            <div v-else class="tools-tags">
-              <el-tag
-                v-for="tool in mcpTools"
-                :key="tool.name"
-                :type="tool.schema ? 'success' : 'info'"
-                size="large"
-                class="tool-tag"
-                :title="tool.description"
-              >
-                {{ tool.name }}
-                <el-tooltip
-                  v-if="tool.description"
-                  :content="tool.description"
-                  placement="top"
-                  :show-after="500"
-                >
-                  <el-icon class="tool-info-icon"><InfoFilled /></el-icon>
-                </el-tooltip>
-              </el-tag>
-            </div>
-          </div>
-        </div>
-
-        <el-alert
-          title="接入点信息"
-          description="这是智能体的MCP WebSocket接入点URL，可用于设备连接"
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 20px; margin-top: 24px;"
-        />
-        
-        <div class="mcp-endpoint-display">
-          <div class="endpoint-header">
-            <div class="endpoint-label">MCP接入点URL：</div>
-            <el-button size="small" type="primary" @click="copyMCPEndpoint">复制URL</el-button>
-          </div>
-          <div class="endpoint-content">
-            {{ mcpEndpointData.endpoint }}
-          </div>
-        </div>
-
-        <el-divider />
-        <el-form :model="mcpCallForm" label-width="90px">
-          <el-form-item label="工具">
-            <el-select v-model="mcpCallForm.tool_name" placeholder="请选择工具" style="width: 100%" @change="handleMcpToolChange">
-              <el-option v-for="tool in mcpTools" :key="tool.name" :label="tool.name" :value="tool.name" />
+        <div class="dialog-grid">
+          <el-form-item label="记忆模式" prop="memory_mode">
+            <el-select v-model="agentForm.memory_mode" placeholder="请选择记忆模式" style="width: 100%">
+              <el-option label="无记忆" value="none" />
+              <el-option label="短记忆" value="short" />
+              <el-option label="长记忆" value="long" />
             </el-select>
           </el-form-item>
-          <el-form-item label="参数JSON">
-            <el-input v-model="mcpCallForm.argumentsText" type="textarea" :rows="6" placeholder='例如: {"query":"hello"}' />
+          <el-form-item label="只允许声纹聊天" prop="speaker_chat_mode">
+            <el-select v-model="agentForm.speaker_chat_mode" placeholder="请选择声纹聊天限制" style="width: 100%">
+              <el-option label="关闭" value="off" />
+              <el-option label="仅命中声纹时允许聊天" value="identified_only" />
+            </el-select>
           </el-form-item>
-        </el-form>
-        <el-button type="primary" @click="callAgentMcpTool" :loading="callingTool">调用工具</el-button>
-        <div class="mcp-result-box">{{ mcpCallResult || '暂无调用结果' }}</div>
-      </div>
-      
+        </div>
+      </el-form>
+
       <template #footer>
-        <el-button @click="showMCPDialog = false">关闭</el-button>
+        <div class="dialog-footer">
+          <el-button @click="handleCloseAddAgent">取消</el-button>
+          <el-button type="primary" :loading="adding" @click="handleAddAgent">
+            {{ adding ? '创建中...' : '创建智能体' }}
+          </el-button>
+        </div>
       </template>
     </el-dialog>
+
+    <DeviceBindingDialog
+      v-model="showAddDeviceDialog"
+      :agents="agents"
+      @success="handleDeviceBound"
+    />
+
+    <MessageInjectDialog
+      v-model="showInjectMessageDialog"
+      :devices="allDevices"
+      @success="handleInjectSuccess"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Setting, Microphone, ChatDotRound, Monitor, Refresh, InfoFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { Plus, Setting, ChatDotRound, Monitor } from '@element-plus/icons-vue'
 import api from '../../utils/api'
+import DeviceBindingDialog from '../../components/user/DeviceBindingDialog.vue'
+import MessageInjectDialog from '../../components/user/MessageInjectDialog.vue'
+import mcpStatusIcon from '../../assets/agent-status-icons/mcp.png'
+import openClawStatusIcon from '../../assets/agent-status-icons/openclaw.png'
+import memoryStatusIcon from '../../assets/agent-status-icons/memory.png'
+import knowledgeBaseStatusIcon from '../../assets/agent-status-icons/knowledge-base.png'
 
 const router = useRouter()
 
-const loading = ref(false)
+const DEFAULT_PROMPT = '我是一个叫{{assistant_name}}的台湾女孩，说话机车，声音好听，习惯简短表达，爱用网络梗。\n我的男朋友是一个程序员，梦想是开发出一个机器人，能够帮助人们解决生活中的各种问题。\n我是一个喜欢哈哈大笑的女孩，爱东说西说吹牛，不合逻辑的也照吹，就要逗别人开心。'
+
 const agents = ref([])
+const allDevices = ref([])
+const knowledgeBases = ref([])
+
 const showAddAgentDialog = ref(false)
 const showAddDeviceDialog = ref(false)
+const showInjectMessageDialog = ref(false)
+
 const adding = ref(false)
-const addingDevice = ref(false)
 const agentFormRef = ref()
-const deviceFormRef = ref()
-
-// MCP接入点相关
-const showMCPDialog = ref(false)
-const mcpLoading = ref(false)
-const mcpEndpointData = ref({
-  endpoint: ''
-})
-
-// MCP工具相关
-const toolsLoading = ref(false)
-const mcpTools = ref([])
-const currentAgentId = ref(null)
-const callingTool = ref(false)
-const mcpCallResult = ref('')
-const mcpCallForm = ref({ tool_name: '', argumentsText: '{}' })
-
-const deviceForm = reactive({
-  code: ''
-})
+const initialLoading = ref(true)
 
 const agentForm = reactive({
   name: '',
-  custom_prompt: '我是一个叫{{assistant_name}}的台湾女孩，说话机车，声音好听，习惯简短表达，爱用网络梗。\n我的男朋友是一个程序员，梦想是开发出一个机器人，能够帮助人们解决生活中的各种问题。\n我是一个喜欢哈哈大笑的女孩，爱东说西说吹牛，不合逻辑的也照吹，就要逗别人开心。',
+  nickname: '',
+  custom_prompt: DEFAULT_PROMPT,
   memory_mode: 'short',
   speaker_chat_mode: 'off'
 })
-
-const deviceRules = {
-  code: [
-    { required: true, message: '请输入设备验证码', trigger: 'blur' },
-    { len: 6, message: '验证码长度为6位', trigger: 'blur' }
-  ]
-}
 
 const agentRules = {
   name: [
     { required: true, message: '请输入智能体名称', trigger: 'blur' },
     { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
+  ],
+  nickname: [
+    { required: true, message: '请输入智能体昵称', trigger: 'blur' },
+    { min: 1, max: 50, message: '长度在 1 到 50 个字符', trigger: 'blur' }
   ],
   memory_mode: [
     { required: true, message: '请选择记忆模式', trigger: 'change' }
@@ -369,124 +277,150 @@ const agentRules = {
   ]
 }
 
+const onlineDevicesCount = computed(() => allDevices.value.filter(device => isDeviceOnline(device.last_active_at)).length)
+const agentsCountText = computed(() => initialLoading.value ? '--' : agents.value.length)
+const devicesCountText = computed(() => initialLoading.value ? '--' : allDevices.value.length)
+const onlineDevicesCountText = computed(() => initialLoading.value ? '--' : onlineDevicesCount.value)
+const knowledgeBaseNameMap = computed(() => {
+  const map = new Map()
+  for (const kb of knowledgeBases.value) {
+    map.set(Number(kb.id), kb.name || `知识库 #${kb.id}`)
+  }
+  return map
+})
+const mcpConnectionStatusMap = reactive({})
+const openClawConnectionStatusMap = reactive({})
+const globalMcpServiceCount = ref(null)
+const globalMcpServiceCountError = ref('')
+
+const isDeviceOnline = (lastActiveAt) => {
+  if (!lastActiveAt) return false
+  const lastActive = new Date(lastActiveAt)
+  return (Date.now() - lastActive.getTime()) < 5 * 60 * 1000
+}
+
+const getAgentDevices = (agentId) => {
+  return allDevices.value.filter(device => Number(device.agent_id) === Number(agentId))
+}
+
+const getAgentDeviceCount = (agentId) => getAgentDevices(agentId).length
+
 const loadAgents = async () => {
   try {
     const response = await api.get('/user/agents')
     agents.value = response.data.data || []
-    console.log('智能体列表数据:', agents.value)
-    // 检查第一个智能体的数据结构
-    if (agents.value.length > 0) {
-      console.log('第一个智能体数据:', agents.value[0])
-      console.log('LLM配置:', agents.value[0].llm_config)
-      console.log('TTS配置:', agents.value[0].tts_config)
-    }
   } catch (error) {
     ElMessage.error('加载智能体列表失败')
   }
 }
 
+const loadDevices = async () => {
+  try {
+    const response = await api.get('/user/devices')
+    allDevices.value = response.data.data || []
+  } catch (error) {
+    allDevices.value = []
+    ElMessage.error('加载设备列表失败')
+  }
+}
+
+const loadKnowledgeBases = async () => {
+  try {
+    const response = await api.get('/user/knowledge-bases')
+    knowledgeBases.value = response.data.data || []
+  } catch (error) {
+    knowledgeBases.value = []
+    console.error('加载知识库列表失败:', error)
+  }
+}
+
 const handleAddAgent = async () => {
   if (!agentFormRef.value) return
-  
+
   try {
     await agentFormRef.value.validate()
-    adding.value = true
-    
-    // 获取默认配置
+  } catch {
+    return
+  }
+
+  adding.value = true
+  try {
     const [llmResponse, ttsResponse] = await Promise.all([
       api.get('/user/llm-configs'),
       api.get('/user/tts-configs')
     ])
-    
+
     const llmConfigs = llmResponse.data.data || []
     const ttsConfigs = ttsResponse.data.data || []
-    
-    // 寻找默认配置
     const defaultLlmConfig = llmConfigs.find(config => config.is_default)
     const defaultTtsConfig = ttsConfigs.find(config => config.is_default)
-    
+
     const agentData = {
-      name: agentForm.name,
+      name: agentForm.name.trim(),
+      nickname: agentForm.nickname.trim(),
       custom_prompt: agentForm.custom_prompt,
       memory_mode: agentForm.memory_mode,
       speaker_chat_mode: agentForm.speaker_chat_mode
     }
-    
-    // 如果有默认配置，自动应用
+
     if (defaultLlmConfig) {
       agentData.llm_config_id = defaultLlmConfig.config_id
     }
     if (defaultTtsConfig) {
       agentData.tts_config_id = defaultTtsConfig.config_id
     }
-    
+
     const response = await api.post('/user/agents', agentData)
-    
     if (response.data.success) {
       ElMessage.success('智能体添加成功')
-      handleCloseAddAgent() // 使用统一的关闭方法
-      await loadAgents() // 等待加载完成
+      handleCloseAddAgent()
+      await loadAgents()
     }
   } catch (error) {
-    console.error('添加智能体失败:', error)
-    ElMessage.error('添加智能体失败')
+    ElMessage.error(error.response?.data?.error || '添加智能体失败')
   } finally {
     adding.value = false
   }
 }
 
-const handleAddDevice = async () => {
-  if (!deviceFormRef.value) return
-  
-  try {
-    await deviceFormRef.value.validate()
-    addingDevice.value = true
-    
-    const response = await api.post('/user/devices', {
-      code: deviceForm.code
-    })
-    
-    if (response.data.success) {
-      ElMessage.success('设备添加成功')
-      showAddDeviceDialog.value = false
-      Object.assign(deviceForm, { code: '' })
-      // 可以在这里刷新设备列表或其他相关操作
-    }
-  } catch (error) {
-    console.error('添加设备失败:', error)
-    ElMessage.error('添加设备失败')
-  } finally {
-    addingDevice.value = false
+const openAddDeviceDialog = () => {
+  if (!agents.value.length) {
+    ElMessage.warning('请先创建智能体，再绑定设备')
+    return
   }
+  showAddDeviceDialog.value = true
+}
+
+const openInjectMessageDialog = () => {
+  if (!allDevices.value.length) {
+    ElMessage.warning('请先绑定设备，再进行语音推送')
+    return
+  }
+  showInjectMessageDialog.value = true
+}
+
+const handleDeviceBound = async () => {
+  await Promise.all([loadAgents(), loadDevices()])
+}
+
+const handleInjectSuccess = async () => {
+  await loadDevices()
 }
 
 const handleCloseAddAgent = () => {
   showAddAgentDialog.value = false
-  if (agentFormRef.value) {
-    agentFormRef.value.resetFields()
-  }
-  Object.assign(agentForm, { 
+  agentFormRef.value?.resetFields?.()
+  Object.assign(agentForm, {
     name: '',
-    custom_prompt: '我是一个叫{{assistant_name}}的台湾女孩，说话机车，声音好听，习惯简短表达，爱用网络梗。\n我的男朋友是一个程序员，梦想是开发出一个机器人，能够帮助人们解决生活中的各种问题。\n我是一个喜欢哈哈大笑的女孩，爱东说西说吹牛，不合逻辑的也照吹，就要逗别人开心。',
+    nickname: '',
+    custom_prompt: DEFAULT_PROMPT,
     memory_mode: 'short',
     speaker_chat_mode: 'off'
   })
 }
 
-const handleCloseAddDevice = () => {
-  showAddDeviceDialog.value = false
-  if (deviceFormRef.value) {
-    deviceFormRef.value.resetFields()
-  }
-  Object.assign(deviceForm, { code: '' })
-}
-
 const editAgent = (id) => {
   router.push(`/user/agents/${id}/edit`)
-}
-
-const handleVoiceRecognition = (id) => {
-  ElMessage.info('声效识别功能开发中')
 }
 
 const handleChatHistory = (id) => {
@@ -494,413 +428,615 @@ const handleChatHistory = (id) => {
 }
 
 const handleManageDevices = (id) => {
-  router.push(`/user/agents/${id}/devices`)
+  router.push({ path: '/user/devices', query: { agent_id: id } })
 }
 
-const getVoiceType = (agent) => {
-  console.log('getVoiceType - tts_config:', agent.tts_config)
-  if (agent.tts_config && agent.tts_config.name) {
-    return agent.tts_config.name
+const truncateText = (value, maxLength = 14) => {
+  const text = String(value || '').trim() || '未设置'
+  if (text.length <= maxLength) {
+    return text
+  }
+  return `${text.slice(0, maxLength)}...`
+}
+
+const getVoiceModelText = (agent) => {
+  const ttsType = agent.tts_config?.name?.trim() || agent.tts_config?.provider?.trim() || ''
+  const voiceName = typeof agent.voice === 'string' ? agent.voice.trim() : ''
+
+  if (ttsType && voiceName) {
+    return `${ttsType} · ${voiceName}`
+  }
+  if (ttsType) {
+    return `${ttsType} · 默认音色`
+  }
+  if (voiceName) {
+    return voiceName
   }
   return '未设置'
 }
 
-const getLLMProvider = (agent) => {
-  console.log('getLLMProvider - llm_config:', agent.llm_config)
-  if (agent.llm_config && agent.llm_config.name) {
-    return agent.llm_config.name
+const getLLMModelText = (agent) => {
+  return agent.llm_config?.name?.trim() || agent.llm_config?.provider?.trim() || '未设置'
+}
+
+const getDeviceCountText = (agent) => {
+  return `${getAgentDeviceCount(agent.id)} 台`
+}
+
+const getMemoryModeKey = (agent) => {
+  const mode = String(agent.memory_mode || 'short').trim().toLowerCase()
+  if (mode === 'none') return 'none'
+  if (mode === 'long') return 'long'
+  return 'short'
+}
+
+const getMemoryModeText = (agent) => {
+  const key = getMemoryModeKey(agent)
+  if (key === 'none') return '无记忆'
+  if (key === 'long') return '长记忆'
+  return '短记忆'
+}
+
+const getKnowledgeBaseIds = (agent) => {
+  return Array.isArray(agent.knowledge_base_ids) ? agent.knowledge_base_ids : []
+}
+
+const getKnowledgeBaseCount = (agent) => {
+  return getKnowledgeBaseIds(agent).length
+}
+
+const getKnowledgeBaseBadgeText = (agent) => {
+  const count = getKnowledgeBaseCount(agent)
+  return count > 99 ? '99+' : String(count)
+}
+
+const getKnowledgeBaseNames = (agent) => {
+  return getKnowledgeBaseIds(agent).map((id) => knowledgeBaseNameMap.value.get(Number(id)) || `知识库 #${id}`)
+}
+
+const getKnowledgeBaseTooltip = (agent) => {
+  const names = getKnowledgeBaseNames(agent)
+  if (names.length === 0) {
+    return '关联知识库：未关联'
   }
-  return '未设置'
+  return `关联知识库：${names.join('、')}`
 }
 
-const formatDate = (dateString) => {
-  return new Date(dateString).toLocaleString('zh-CN')
+const normalizeMcpServiceNames = (raw) => {
+  return String(raw || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
 }
 
-// 显示MCP接入点
-const showMCPEndpoint = async (agent) => {
-  showMCPDialog.value = true
-  mcpLoading.value = true
-  currentAgentId.value = agent.id
-  mcpCallResult.value = ""
-  mcpCallForm.value = { tool_name: "", argumentsText: "{}" }
-  
-  try {
-    const response = await api.get(`/user/agents/${agent.id}/mcp-endpoint`)
-    mcpEndpointData.value = response.data.data
-    
-    // 自动刷新工具列表
-    await refreshMcpTools()
-  } catch (error) {
-    ElMessage.error('获取MCP接入点失败')
-    console.error('Error getting MCP endpoint:', error)
-    showMCPDialog.value = false
-  } finally {
-    mcpLoading.value = false
+const getConnectionStatusText = (state) => {
+  if (!state || state.loading) return '检测中'
+  if (state.connected || state.status === 'online') return '已连接'
+  if (state.status === 'offline') return '未连接'
+  if (state.status_message) return '连接未知'
+  return '未连接'
+}
+
+const getMcpStatusKey = (agent) => {
+  const state = mcpConnectionStatusMap[String(agent.id)]
+  if (!state || state.loading) return 'checking'
+  if (state.connected || state.status === 'online') return 'online'
+  if (state.status === 'offline') return 'offline'
+  return 'unknown'
+}
+
+const getGlobalMcpServiceCountText = () => {
+  if (globalMcpServiceCountError.value) return '检测失败'
+  if (globalMcpServiceCount.value === null) return '检测中'
+  return `${globalMcpServiceCount.value} 个`
+}
+
+const getMcpServiceCountBadgeText = () => {
+  if (globalMcpServiceCount.value === null) return '?'
+  if (globalMcpServiceCount.value > 99) return '99+'
+  return String(globalMcpServiceCount.value)
+}
+
+const getMcpServiceScopeText = (agent) => {
+  const count = normalizeMcpServiceNames(agent.mcp_service_names).length
+  return count > 0 ? `已选择 ${count} 个服务` : '跟随全局配置'
+}
+
+const getMcpClientCountText = (connection) => {
+  const count = Number(connection?.client_count || 0)
+  if (count <= 0) return ''
+  return `（${count} 个客户端）`
+}
+
+const getMcpStatusTooltip = (agent) => {
+  const connection = mcpConnectionStatusMap[String(agent.id)]
+  const connectionText = getConnectionStatusText(connection)
+  return `智能体WebSocket：${connectionText}${getMcpClientCountText(connection)}｜全局MCP服务：${getGlobalMcpServiceCountText()}｜服务范围：${getMcpServiceScopeText(agent)}`
+}
+
+const parseOpenClawConfig = (agent) => {
+  if (agent?.openclaw && typeof agent.openclaw === 'object') {
+    return { allowed: !!agent.openclaw.allowed }
   }
-}
 
-// 刷新MCP工具列表
-const refreshMcpTools = async () => {
-  if (!currentAgentId.value) {
-    ElMessage.warning('未选择智能体')
-    return
-  }
-  
-  toolsLoading.value = true
-  try {
-    const response = await api.get(`/user/agents/${currentAgentId.value}/mcp-tools`)
-    if (response.data.data && response.data.data.tools) {
-      mcpTools.value = response.data.data.tools
-      if (mcpTools.value.length > 0) {
-        if (!mcpCallForm.value.tool_name) {
-          mcpCallForm.value.tool_name = mcpTools.value[0].name
-        }
-        updateMcpExampleByTool(mcpCallForm.value.tool_name)
-      }
-      ElMessage.success(`成功获取 ${mcpTools.value.length} 个工具`)
-    } else {
-      mcpTools.value = []
-      ElMessage.info('未找到工具数据')
-    }
-  } catch (error) {
-    ElMessage.error('获取工具列表失败: ' + (error.response?.data?.error || error.message))
-    console.error('Error refreshing MCP tools:', error)
-    mcpTools.value = []
-  } finally {
-    toolsLoading.value = false
-  }
-}
-
-
-
-const buildExampleFromSchema = (schema = {}) => {
-  if (!schema || typeof schema !== 'object') return {}
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) return schema.enum[0]
-
-  const type = schema.type || 'object'
-  if (type === 'object') {
-    const props = schema.properties || {}
-    const result = {}
-    Object.keys(props).sort().forEach((key) => {
-      result[key] = buildExampleFromSchema(props[key])
-    })
-    return result
-  }
-  if (type === 'array') return [buildExampleFromSchema(schema.items || {})]
-  if (type === 'number') return 0.1
-  if (type === 'integer') return 0
-  if (type === 'boolean') return false
-  return ''
-}
-
-const updateMcpExampleByTool = (toolName) => {
-  const selectedTool = mcpTools.value.find(item => item.name === toolName)
-  if (!selectedTool) return
-
-  const example = buildExampleFromSchema(selectedTool.input_schema || {})
-  mcpCallForm.value.argumentsText = JSON.stringify(example ?? {}, null, 2)
-}
-
-const handleMcpToolChange = (toolName) => {
-  updateMcpExampleByTool(toolName)
-}
-
-const formatMcpCallResult = (payload) => {
-  const MAX_PARSE_DEPTH = 8
-
-  const tryParseJSONString = (value) => {
-    if (typeof value !== 'string') return { parsed: false, value }
-    let text = value.trim()
-    if (!text) return { parsed: false, value }
-
-    const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-    if (fenced) {
-      text = fenced[1].trim()
-    }
-
-    const looksLikeJSON =
-      (text.startsWith('{') && text.endsWith('}')) ||
-      (text.startsWith('[') && text.endsWith(']'))
-    if (!looksLikeJSON) return { parsed: false, value }
-
+  if (typeof agent?.openclaw_config === 'string' && agent.openclaw_config.trim()) {
     try {
-      return { parsed: true, value: JSON.parse(text) }
-    } catch (_) {
-      return { parsed: false, value }
-    }
+      const parsed = JSON.parse(agent.openclaw_config)
+      return { allowed: !!parsed?.allowed }
+    } catch {}
   }
 
-  const deepParseJSONStrings = (value, depth = 0) => {
-    if (depth >= MAX_PARSE_DEPTH || value == null) return value
-
-    if (typeof value === 'string') {
-      const parsed = tryParseJSONString(value)
-      if (!parsed.parsed) return value
-      return deepParseJSONStrings(parsed.value, depth + 1)
-    }
-
-    if (Array.isArray(value)) {
-      return value.map((item) => deepParseJSONStrings(item, depth + 1))
-    }
-
-    if (typeof value === 'object') {
-      const out = {}
-      Object.keys(value).forEach((key) => {
-        out[key] = deepParseJSONStrings(value[key], depth + 1)
-      })
-
-      if (Array.isArray(out.content) && out.content.length === 1) {
-        const first = out.content[0]
-        if (first && typeof first === 'object' && !Array.isArray(first) && first.type === 'text' && Object.prototype.hasOwnProperty.call(first, 'text')) {
-          const textValue = first.text
-          if (textValue && typeof textValue === 'object') {
-            return textValue
-          }
-        }
-      }
-
-      return out
-    }
-
-    return value
-  }
-
-  const data = payload ?? {}
-  const raw = (data && typeof data === 'object' && !Array.isArray(data) && Object.prototype.hasOwnProperty.call(data, 'result'))
-    ? data.result
-    : data
-
-  return JSON.stringify(deepParseJSONStrings(raw), null, 2)
+  return { allowed: false }
 }
 
-const callAgentMcpTool = async () => {
-  if (!currentAgentId.value || !mcpCallForm.value.tool_name) {
-    ElMessage.warning('请选择工具')
-    return
+const getOpenClawStatusKey = (agent) => {
+  return parseOpenClawConfig(agent).allowed ? 'enabled' : 'disabled'
+}
+
+const getOpenClawStatusTooltip = (agent) => {
+  const connection = openClawConnectionStatusMap[String(agent.id)]
+  const configText = parseOpenClawConfig(agent).allowed ? '已启用' : '未启用'
+  return `OpenClaw状态：${configText}｜连接状态：${getConnectionStatusText(connection)}`
+}
+
+const ensureMcpConnectionStatus = async (agentId) => {
+  const key = String(agentId)
+  const current = mcpConnectionStatusMap[key]
+  if (current?.loading || current?.loaded) return
+
+  mcpConnectionStatusMap[key] = {
+    loading: true,
+    loaded: false,
+    connected: false,
+    status: 'unknown',
+    status_message: '',
+    client_count: 0
   }
 
-  let argumentsObj = {}
   try {
-    argumentsObj = mcpCallForm.value.argumentsText ? JSON.parse(mcpCallForm.value.argumentsText) : {}
-  } catch (e) {
-    ElMessage.error('参数JSON格式错误')
-    return
-  }
-
-  callingTool.value = true
-  try {
-    const response = await api.post(`/user/agents/${currentAgentId.value}/mcp-call`, {
-      tool_name: mcpCallForm.value.tool_name,
-      arguments: argumentsObj
-    })
-    mcpCallResult.value = formatMcpCallResult(response.data.data || {})
-    ElMessage.success('MCP工具调用成功')
+    const response = await api.get(`/user/agents/${agentId}/mcp-endpoint`)
+    const data = response.data.data || {}
+    mcpConnectionStatusMap[key] = {
+      loading: false,
+      loaded: true,
+      connected: !!data.connected,
+      status: String(data.status || 'unknown').toLowerCase(),
+      status_message: String(data.status_message || ''),
+      client_count: Number(data.client_count || 0)
+    }
   } catch (error) {
-    mcpCallResult.value = JSON.stringify(error.response?.data || { error: error.message }, null, 2)
-    ElMessage.error('MCP工具调用失败')
+    mcpConnectionStatusMap[key] = {
+      loading: false,
+      loaded: true,
+      connected: false,
+      status: 'unknown',
+      status_message: error.response?.data?.error || error.message || '状态获取失败',
+      client_count: 0
+    }
+  }
+}
+
+const loadGlobalMcpServiceCount = async () => {
+  globalMcpServiceCountError.value = ''
+  try {
+    const response = await api.get('/user/mcp-services/options')
+    const options = response.data.data?.options
+    globalMcpServiceCount.value = Array.isArray(options) ? options.length : 0
+  } catch (error) {
+    globalMcpServiceCount.value = null
+    globalMcpServiceCountError.value = error.response?.data?.error || error.message || '加载失败'
+    console.error('加载全局MCP服务数量失败:', error)
+  }
+}
+
+const loadMcpConnectionStatuses = async () => {
+  await Promise.all(agents.value.map(agent => ensureMcpConnectionStatus(agent.id)))
+}
+
+const ensureOpenClawConnectionStatus = async (agentId) => {
+  const key = String(agentId)
+  const current = openClawConnectionStatusMap[key]
+  if (current?.loading || current?.loaded) return
+
+  openClawConnectionStatusMap[key] = {
+    loading: true,
+    loaded: false,
+    connected: false,
+    status: 'unknown',
+    status_message: ''
+  }
+
+  try {
+    const response = await api.get(`/user/agents/${agentId}/openclaw-endpoint`)
+    const data = response.data.data || {}
+    openClawConnectionStatusMap[key] = {
+      loading: false,
+      loaded: true,
+      connected: !!data.connected,
+      status: String(data.status || 'unknown').toLowerCase(),
+      status_message: String(data.status_message || '')
+    }
+  } catch (error) {
+    openClawConnectionStatusMap[key] = {
+      loading: false,
+      loaded: true,
+      connected: false,
+      status: 'unknown',
+      status_message: error.response?.data?.error || error.message || '状态获取失败'
+    }
+  }
+}
+
+onMounted(async () => {
+  initialLoading.value = true
+  try {
+    await Promise.all([loadAgents(), loadDevices(), loadKnowledgeBases()])
+    void loadGlobalMcpServiceCount()
+    void loadMcpConnectionStatuses()
   } finally {
-    callingTool.value = false
+    initialLoading.value = false
   }
-}
-
-// 复制MCP接入点URL
-const copyMCPEndpoint = async () => {
-  try {
-    await navigator.clipboard.writeText(mcpEndpointData.value.endpoint)
-    ElMessage.success('MCP接入点URL已复制到剪贴板')
-  } catch (error) {
-    ElMessage.error('复制失败')
-    console.error('Error copying to clipboard:', error)
-  }
-}
-
-onMounted(() => {
-  loadAgents()
 })
 </script>
 
 <style scoped>
 .agents-page {
-  padding: 0;
+  display: grid;
+  gap: 20px;
 }
 
-.page-header {
+.page-toolbar {
+  padding: 22px 24px;
+  border-radius: 30px;
   display: flex;
   justify-content: space-between;
+  gap: 16px;
   align-items: center;
-  margin-bottom: 20px;
-  padding: 20px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.header-left h2 {
-  margin: 0;
-  color: #333;
-}
-
-.page-subtitle {
-  margin: 5px 0 0 0;
-  color: #666;
-  font-size: 14px;
-}
-
-.header-right {
+.toolbar-chips {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.welcome-card {
+  border-radius: 28px;
+}
+
+.welcome-content {
+  text-align: center;
+  padding: 44px 24px;
+}
+
+.welcome-content h3 {
+  margin: 18px 0 10px;
+  font-size: 26px;
+  color: var(--apple-text);
+}
+
+.welcome-content p {
+  margin: 0 0 24px;
+  color: var(--apple-text-secondary);
+  line-height: 1.7;
+}
+
+.welcome-actions {
+  display: flex;
+  justify-content: center;
 }
 
 .agents-grid {
-  padding: 0 20px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 420px));
-  gap: 20px 12px;
-  justify-content: flex-start;
-}
-
-.agent-item {
-  min-width: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-content: flex-start;
 }
 
 .agent-card {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  border: 1px solid #f0f0f0;
   padding: 20px;
-  transition: all 0.3s ease;
-  height: 100%;
+  border-radius: 28px;
   display: flex;
   flex-direction: column;
-  width: 100%;
-  max-width: 420px;
-  min-width: 0;
+  gap: 14px;
 }
 
-.agent-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  border-color: #409EFF;
+.agent-card-skeleton {
+  min-height: 220px;
+  pointer-events: none;
+}
+
+.skeleton-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.skeleton-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  flex: none;
+}
+
+.skeleton-title-block {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.skeleton-icons {
+  display: grid;
+  grid-template-columns: repeat(2, 30px);
+  gap: 8px;
+}
+
+.skeleton-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+}
+
+.skeleton-summary {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.skeleton-line {
+  height: 18px;
+  border-radius: 999px;
+}
+
+.skeleton-line-title {
+  width: 46%;
+  height: 20px;
+}
+
+.skeleton-line-subtitle {
+  width: 64%;
+  height: 14px;
+}
+
+.skeleton-line-short {
+  width: 52%;
+}
+
+.skeleton-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.skeleton-button {
+  width: 70px;
+  height: 32px;
+  border-radius: 10px;
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, rgba(226, 232, 240, 0.62) 0%, rgba(248, 250, 252, 0.94) 50%, rgba(226, 232, 240, 0.62) 100%);
+  background-size: 220% 100%;
+  animation: agents-skeleton-shimmer 1.15s ease-in-out infinite;
+}
+
+@keyframes agents-skeleton-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+
+  100% {
+    background-position: -120% 0;
+  }
 }
 
 .agent-header {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.agent-heading {
+  min-width: 0;
+  flex: 1;
+  display: flex;
   align-items: center;
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #f5f5f5;
+  gap: 14px;
 }
 
 .agent-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #409EFF 0%, #67C23A 100%);
-  display: flex;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  flex: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-right: 12px;
-  color: white;
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3);
+  color: #fff;
+  background: linear-gradient(180deg, #2e90ff 0%, #007aff 100%);
+  box-shadow: 0 12px 24px rgba(0, 122, 255, 0.18);
 }
 
 .agent-info {
   flex: 1;
+  min-width: 0;
 }
 
 .agent-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: #303133;
-  margin: 0 0 4px 0;
-  line-height: 1.4;
+  margin: 0 0 4px;
+  font-size: 18px;
+  color: var(--apple-text);
 }
 
 .agent-desc {
-  font-size: 12px;
-  color: #909399;
   margin: 0;
-  line-height: 1.4;
+  font-size: 13px;
+  color: var(--apple-text-secondary);
+  line-height: 1.6;
 }
 
-.agent-status {
+.agent-state-grid {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, auto));
+  gap: 8px;
+}
+
+.agent-state-badge {
+  min-width: 36px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+  color: var(--apple-text-secondary);
+  position: relative;
+}
+
+.agent-state-badge.is-icon-only {
+  min-width: 30px;
+  width: 30px;
+  min-height: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.state-image-icon {
+  width: 15px;
+  height: 15px;
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.state-image-icon--memory {
+  width: 14px;
+  height: 14px;
+}
+
+.state-image-icon--knowledge {
+  width: 15px;
+  height: 15px;
+}
+
+.state-image-icon--mcp {
+  width: 15px;
+  height: 15px;
+}
+
+.state-image-icon--openclaw {
+  width: 16px;
+  height: 16px;
+}
+
+.state-counter {
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: currentColor;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.agent-state-badge.is-memory-short,
+.agent-state-badge.is-active,
+.agent-state-badge.is-mcp-checking {
+  color: var(--apple-primary);
+  background: rgba(0, 122, 255, 0.08);
+  border-color: rgba(0, 122, 255, 0.12);
+}
+
+.agent-state-badge.is-memory-long,
+.agent-state-badge.is-mcp-online,
+.agent-state-badge.is-openclaw-enabled {
+  color: #176a31;
+  background: rgba(52, 199, 89, 0.12);
+  border-color: rgba(52, 199, 89, 0.16);
+}
+
+.agent-state-badge.is-mcp-offline {
+  color: #b42318;
+  background: rgba(255, 59, 48, 0.1);
+  border-color: rgba(255, 59, 48, 0.16);
+}
+
+.agent-state-badge.is-memory-none,
+.agent-state-badge.is-mcp-unknown,
+.agent-state-badge.is-openclaw-disabled {
+  color: var(--apple-text-tertiary);
+  background: rgba(248, 250, 252, 0.92);
+  border-color: rgba(229, 229, 234, 0.72);
+}
+
+.agent-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.summary-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #67C23A;
+.summary-label {
+  flex: none;
+  color: var(--apple-text-secondary);
 }
 
-.status-dot.active {
-  background: #67C23A;
-  box-shadow: 0 0 0 2px rgba(103, 194, 58, 0.2);
-}
-
-.status-text {
-  font-size: 12px;
-  color: #67C23A;
-  font-weight: 500;
-}
-
-.agent-meta {
+.summary-text {
   flex: 1;
-  margin-bottom: 16px;
-}
-
-.meta-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-  padding: 6px 0;
-}
-
-.meta-row:last-child {
-  margin-bottom: 0;
-}
-
-.meta-label {
-  font-size: 13px;
-  color: #606266;
-  font-weight: 500;
-}
-
-.meta-value {
-  font-size: 13px;
-  color: #303133;
-  text-align: right;
-  max-width: 120px;
+  min-width: 0;
+  color: var(--apple-text);
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.summary-text.is-count {
+  font-weight: 700;
+}
+
 .agent-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding-top: 16px;
-  border-top: 1px solid #f5f5f5;
+  gap: 10px;
+  margin-top: auto;
 }
 
 .agent-actions .el-button {
-  border-radius: 6px;
-  font-size: 12px;
-  height: 32px;
   min-width: 0;
   width: 100%;
-  padding: 0 8px;
-}
-
-.agent-actions .el-button .el-icon {
-  margin-right: 4px;
+  border-radius: 14px;
 }
 
 .agent-actions :deep(.el-button > span) {
@@ -909,241 +1045,80 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.agent-actions .el-button--primary {
-  background: linear-gradient(135deg, #409EFF 0%, #67C23A 100%);
-  border: none;
+.dialog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
 
-.agent-actions .el-button--primary:hover {
-  background: linear-gradient(135deg, #337ecc 0%, #529b2e 100%);
-}
- 
- .dialog-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-  }
-
-  .device-dialog-content {
-    text-align: center;
-    padding: 20px 0;
-  }
-
-  .device-icon {
-    margin-bottom: 16px;
-    color: #409EFF;
-  }
-
-  .device-tip {
-    font-size: 14px;
-    color: #666;
-    margin-bottom: 24px;
-  }
-
-  .device-dialog-content .el-input__inner {
-    text-align: center;
-    font-size: 18px;
-    letter-spacing: 4px;
-  }
- 
- .welcome-section {
-  padding: 40px 20px;
-}
-
-.welcome-card {
-  max-width: 600px;
-  margin: 0 auto;
-}
-
-.welcome-content {
-  text-align: center;
-  padding: 40px 20px;
-}
-
-.welcome-content h3 {
-  margin: 20px 0 15px 0;
-  color: #333;
-  font-size: 24px;
-}
-
-.welcome-content p {
-  color: #666;
-  font-size: 16px;
-  line-height: 1.6;
-  margin-bottom: 30px;
-}
-
-.welcome-actions {
-  display: flex;
-  gap: 15px;
-  justify-content: center;
-}
-
-/* MCP接入点相关样式 */
-.mcp-result-box {
-  margin-top: 12px;
-  white-space: pre-wrap;
-  font-family: monospace;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 10px;
-  min-height: 80px;
-}
-
-.mcp-endpoint-display {
-  margin: 20px 0;
-}
-
-.endpoint-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.endpoint-label {
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-  margin-bottom: 8px;
-}
-
-.endpoint-content {
-  padding: 12px 16px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 13px;
-  color: #1e293b;
-  word-break: break-all;
-  line-height: 1.5;
-  min-height: 60px;
-  display: flex;
-  align-items: center;
-}
-
-.mcp-tools-section {
-  margin-top: 24px;
-  border-top: 1px solid #e2e8f0;
-  padding-top: 20px;
-}
-
-.tools-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.tools-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #374151;
-}
-
-.tools-empty {
-  margin: 20px 0;
-  text-align: center;
-}
-
-.tools-list {
-  margin-top: 16px;
-}
-
-.tools-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.tool-tag {
-  position: relative;
-  padding: 8px 16px;
-  font-size: 14px;
-  border-radius: 20px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.tool-tag:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.tool-info-icon {
-  margin-left: 6px;
+.form-tip {
+  margin-top: 6px;
+  color: var(--apple-text-secondary);
   font-size: 12px;
-  opacity: 0.7;
+  line-height: 1.5;
 }
 
-.tool-tag:hover .tool-info-icon {
-  opacity: 1;
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
-@media (max-width: 900px) {
-  .agent-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 1024px) {
+  .page-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
-  .agent-actions .el-button:last-child {
-    grid-column: 1 / -1;
+  .toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+}
+
+@media (min-width: 769px) and (max-width: 1180px) {
+  .agents-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 768px) {
-  .page-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 16px;
-    margin-bottom: 12px;
-    border-radius: 0;
-    box-shadow: none;
+  .agents-page {
+    gap: 16px;
   }
 
-  .header-right {
-    width: 100%;
+  .page-toolbar,
+  .agent-card {
+    border-radius: 24px;
   }
 
-  .header-right .el-button {
+  .page-toolbar {
+    padding: 20px 18px;
+  }
+
+  .toolbar-actions,
+  .dialog-footer {
     width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .toolbar-actions .el-button,
+  .dialog-footer .el-button {
+    flex: 1;
+    min-width: 120px;
+  }
+
+  .dialog-grid {
+    grid-template-columns: 1fr;
   }
 
   .agents-grid {
-    padding: 0 12px;
     grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
-  .agent-card {
-    max-width: none;
-  }
-
-  :deep(.agent-dialog),
-  :deep(.device-dialog),
-  :deep(.mcp-dialog) {
-    width: calc(100vw - 24px) !important;
-    margin-top: 8vh !important;
-  }
-
-  :deep(.agent-dialog .el-dialog__body),
-  :deep(.device-dialog .el-dialog__body),
-  :deep(.mcp-dialog .el-dialog__body) {
-    max-height: 68vh;
-    overflow-y: auto;
   }
 }
 
 @media (max-width: 560px) {
-  .agents-grid {
-    padding: 0 12px;
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
   .agent-actions {
     grid-template-columns: 1fr;
   }

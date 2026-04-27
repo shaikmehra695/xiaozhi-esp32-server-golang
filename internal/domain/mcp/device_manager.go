@@ -479,6 +479,16 @@ func (dc *DeviceMcpSession) snapshotWsEndpointClients() []*McpClientInstance {
 	return clients
 }
 
+func (dc *DeviceMcpSession) GetWsEndpointConnectionStatus() (bool, int) {
+	connectedCount := 0
+	for _, mcpInstance := range dc.snapshotWsEndpointClients() {
+		if mcpInstance != nil && mcpInstance.IsConnected() && mcpInstance.IsInitialized() {
+			connectedCount++
+		}
+	}
+	return connectedCount > 0, connectedCount
+}
+
 func (dc *DeviceMcpSession) snapshotIotClients() []*McpClientInstance {
 	dc.iotMux.RLock()
 	defer dc.iotMux.RUnlock()

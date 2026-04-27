@@ -1,23 +1,17 @@
 <template>
   <div class="config-page">
-    <!-- 页面标题和操作按钮 -->
-    <div class="page-header">
-      <div class="header-left">
-        <h2>用户管理</h2>
-      </div>
-      <div class="header-right">
-        <el-input
-          v-model="searchKeyword"
-          placeholder="搜索用户..."
-          style="width: 200px; margin-right: 10px"
-          prefix-icon="Search"
-          clearable
-        />
-        <el-button type="primary" @click="openAddDialog">
-          <el-icon><Plus /></el-icon>
-          添加用户
-        </el-button>
-      </div>
+    <div class="page-actions">
+      <el-input
+        v-model="searchKeyword"
+        placeholder="搜索用户..."
+        style="width: 200px"
+        prefix-icon="Search"
+        clearable
+      />
+      <el-button type="primary" @click="openAddDialog">
+        <el-icon><Plus /></el-icon>
+        添加用户
+      </el-button>
     </div>
 
     <!-- 用户列表表格 -->
@@ -508,26 +502,18 @@ onMounted(() => {
 <style scoped>
 .config-page {
   padding: 20px;
-  background: white;
+  background: rgba(255, 255, 255, 0.88);
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.page-header {
+.page-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-bottom: 20px;
-}
-
-.header-left h2 {
-  margin: 0;
-  color: #333;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
 }
 
 .quota-hint {

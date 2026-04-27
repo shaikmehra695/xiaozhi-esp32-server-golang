@@ -1,18 +1,5 @@
 <template>
   <div class="speakers-page">
-    <div class="page-header">
-      <div class="header-left">
-        <h2>声纹管理</h2>
-        <p class="page-subtitle">管理您的声纹识别配置</p>
-      </div>
-      <div class="header-right">
-        <el-button type="primary" @click="handleAddGroup">
-          <el-icon><Plus /></el-icon>
-          创建声纹组
-        </el-button>
-      </div>
-    </div>
-
     <!-- 筛选栏 -->
     <div class="filter-bar">
       <el-select
@@ -41,7 +28,11 @@
           <el-icon><Search /></el-icon>
         </template>
       </el-input>
-      </div>
+      <el-button class="create-group-button" type="primary" @click="handleAddGroup">
+        <el-icon><Plus /></el-icon>
+        创建声纹组
+      </el-button>
+    </div>
 
     <!-- 声纹组列表 -->
     <div v-loading="loading" class="speakers-content">
@@ -483,7 +474,7 @@
           <div class="record-section">
             <div class="record-status">
               <div v-if="!isRecording && !recordedBlob" class="record-ready">
-                <el-icon size="48" color="#409EFF"><Microphone /></el-icon>
+                <el-icon size="48" color="var(--apple-primary)"><Microphone /></el-icon>
                 <p>点击下方按钮开始录制</p>
                 <p class="record-tip">建议录制 3-10 秒的清晰音频</p>
               </div>
@@ -496,7 +487,7 @@
                 <p class="record-tip">点击停止按钮结束录制</p>
               </div>
               <div v-else-if="recordedBlob" class="record-complete">
-                <el-icon size="48" color="#67C23A"><CircleCheck /></el-icon>
+                <el-icon size="48" color="var(--apple-success)"><CircleCheck /></el-icon>
                 <p>录制完成</p>
                 <p class="record-tip">时长: {{ formatRecordTime(recordTime) }}</p>
                 <audio :src="recordedBlobUrl" controls class="record-preview"></audio>
@@ -603,7 +594,7 @@
           <div class="record-section">
             <div class="record-status">
               <div v-if="!isVerifyRecording && !verifyRecordedBlob" class="record-ready">
-                <el-icon size="48" color="#409EFF"><Microphone /></el-icon>
+                <el-icon size="48" color="var(--apple-primary)"><Microphone /></el-icon>
                 <p>点击下方按钮开始录制</p>
                 <p class="record-tip">建议录制 3-10 秒的清晰音频</p>
               </div>
@@ -616,7 +607,7 @@
                 <p class="record-tip">点击停止按钮结束录制</p>
               </div>
               <div v-else-if="verifyRecordedBlob" class="record-complete">
-                <el-icon size="48" color="#67C23A"><CircleCheck /></el-icon>
+                <el-icon size="48" color="var(--apple-success)"><CircleCheck /></el-icon>
                 <p>录制完成</p>
                 <p class="record-tip">时长: {{ formatRecordTime(verifyRecordTime) }}</p>
                 <audio :src="verifyRecordedBlobUrl" controls class="record-preview"></audio>
@@ -663,8 +654,8 @@
         <el-divider>验证结果</el-divider>
         <div :class="['result-content', verifyResult.verified ? 'result-success' : 'result-failed']">
           <div class="result-icon">
-            <el-icon v-if="verifyResult.verified" size="48" color="#67C23A"><CircleCheck /></el-icon>
-            <el-icon v-else size="48" color="#F56C6C"><CircleClose /></el-icon>
+            <el-icon v-if="verifyResult.verified" size="48" color="var(--apple-success)"><CircleCheck /></el-icon>
+            <el-icon v-else size="48" color="var(--apple-danger)"><CircleClose /></el-icon>
           </div>
           <div class="result-info">
             <div class="result-status">
@@ -2176,39 +2167,23 @@ onBeforeUnmount(() => {
   padding: 0;
 }
 
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding: 20px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.header-left h2 {
-  margin: 0;
-  color: #333;
-}
-
-.page-subtitle {
-  margin: 5px 0 0 0;
-  color: #666;
-  font-size: 14px;
-}
-
 .filter-bar {
   padding: 15px 20px;
-  background: white;
+  background: rgba(255, 255, 255, 0.88);
   border-radius: 8px;
   margin-bottom: 20px;
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.create-group-button {
+  margin-left: auto;
 }
 
 .speakers-content {
-  background: white;
+  background: rgba(255, 255, 255, 0.88);
   border-radius: 8px;
   padding: 20px;
 }
@@ -2299,10 +2274,11 @@ onBeforeUnmount(() => {
   gap: 8px;
   margin-top: 8px;
   padding: 8px 12px;
-  background: #f5f7fa;
-  border-radius: 4px;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(229, 229, 234, 0.72);
+  border-radius: 12px;
   font-size: 14px;
-  color: #606266;
+  color: var(--apple-text-secondary);
 }
 
 .file-size {
@@ -2386,7 +2362,7 @@ onBeforeUnmount(() => {
 
 .audio-upload :deep(.el-icon--upload) {
   font-size: 48px;
-  color: #409EFF;
+  color: var(--apple-primary);
   margin-bottom: 16px;
 }
 
@@ -2396,7 +2372,7 @@ onBeforeUnmount(() => {
 }
 
 .audio-upload :deep(.el-upload__text em) {
-  color: #409EFF;
+  color: var(--apple-primary);
   font-style: normal;
 }
 
@@ -2457,7 +2433,7 @@ onBeforeUnmount(() => {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #f56c6c;
+  background: var(--apple-danger);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -2474,7 +2450,7 @@ onBeforeUnmount(() => {
 
 .recording-text {
   font-size: 16px;
-  color: #f56c6c;
+  color: var(--apple-danger);
   font-weight: 500;
 }
 

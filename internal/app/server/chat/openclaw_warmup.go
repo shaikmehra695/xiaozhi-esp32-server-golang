@@ -255,7 +255,7 @@ func (s *ChatSession) cancelOpenClawWarmup(correlationID string, interrupt bool)
 
 	task.cancelWarmupOnly()
 	if interrupt && task.hasSpokenAny() {
-		s.InterruptAndClearTTSQueue()
+		s.InterruptAndClearTTSQueueWithReason(fmt.Sprintf("OpenClaw warmup canceled correlation_id=%s", correlationID))
 	}
 
 	log.Infof(
@@ -276,7 +276,7 @@ func (s *ChatSession) finishOpenClawWarmup(correlationID string, interrupt bool)
 
 	task.cancelWarmupOnly()
 	if interrupt {
-		s.InterruptAndClearTTSQueue()
+		s.InterruptAndClearTTSQueueWithReason(fmt.Sprintf("OpenClaw warmup finished correlation_id=%s interrupt", correlationID))
 	}
 	s.endOpenClawSpeech(task)
 
@@ -298,7 +298,7 @@ func (s *ChatSession) beginOpenClawSpeech(task *openClawWarmupTask) {
 		return
 	}
 	s.ttsManager.ClearAudioHistory()
-	s.ttsManager.EnqueueTtsStart(task.sessionCtx)
+	s.ttsManager.EnqueueTtsStartWithReason(task.sessionCtx, fmt.Sprintf("OpenClaw warmup start correlation_id=%s", task.correlationID))
 }
 
 func (s *ChatSession) endOpenClawSpeech(task *openClawWarmupTask) {

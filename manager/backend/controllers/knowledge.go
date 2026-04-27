@@ -453,6 +453,68 @@ func buildWeknoraModelListCandidateEndpoints(baseURL string) []string {
 	return ret
 }
 
+func buildKnowledgeGlobalConfigData(db *gorm.DB) gin.H {
+	fallback := gin.H{
+		"default_provider": "dify",
+		"providers":        gin.H{},
+	}
+
+	if db == nil {
+		return fallback
+	}
+
+	var configs []models.Config
+	if err := db.Where("type = ? AND enabled = ?", "knowledge_search", true).Find(&configs).Error; err != nil {
+		log.Printf("[Knowledge] 获取知识库全局配置失败: %v", err)
+		return fallback
+	}
+
+	selectedByProvider := make(map[string]models.Config)
+	for _, cfg := range configs {
+		provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+		if provider == "" {
+			continue
+		}
+		prev, exists := selectedByProvider[provider]
+		if !exists || (!prev.IsDefault && cfg.IsDefault) {
+			selectedByProvider[provider] = cfg
+		}
+	}
+
+	if len(selectedByProvider) == 0 {
+		return fallback
+	}
+
+	providerNames := make([]string, 0, len(selectedByProvider))
+	for provider := range selectedByProvider {
+		providerNames = append(providerNames, provider)
+	}
+	sort.Strings(providerNames)
+
+	providers := make(gin.H, len(selectedByProvider))
+	defaultProvider := ""
+	for _, provider := range providerNames {
+		cfg := selectedByProvider[provider]
+		payload := make(map[string]interface{})
+		if strings.TrimSpace(cfg.JsonData) != "" {
+			_ = json.Unmarshal([]byte(cfg.JsonData), &payload)
+		}
+		providers[provider] = payload
+		if cfg.IsDefault {
+			defaultProvider = provider
+		}
+	}
+
+	if defaultProvider == "" {
+		defaultProvider = providerNames[0]
+	}
+
+	return gin.H{
+		"default_provider": defaultProvider,
+		"providers":        providers,
+	}
+}
+
 func (uc *UserController) GetKnowledgeBases(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	var items []models.KnowledgeBase
@@ -497,7 +559,10 @@ func (uc *UserController) GetKnowledgeBases(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": resp})
+	c.JSON(http.StatusOK, gin.H{
+		"data":      resp,
+		"knowledge": buildKnowledgeGlobalConfigData(uc.DB),
+	})
 }
 
 func (uc *UserController) CreateKnowledgeBase(c *gin.Context) {

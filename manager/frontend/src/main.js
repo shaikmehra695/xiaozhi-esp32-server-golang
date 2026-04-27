@@ -21,6 +21,7 @@ import 'vant/lib/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
+import './styles/apple-light.css'
 
 const app = createApp(App)
 
