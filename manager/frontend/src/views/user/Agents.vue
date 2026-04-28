@@ -88,16 +88,14 @@
             </el-tooltip>
 
             <el-tooltip :content="getKnowledgeBaseTooltip(agent)" placement="top" :show-after="200">
-              <div class="agent-state-badge is-icon-only is-counter-badge" :class="{ 'is-active': getKnowledgeBaseCount(agent) > 0 }">
+              <div class="agent-state-badge is-icon-only" :class="{ 'is-active': getKnowledgeBaseCount(agent) > 0 }">
                 <img class="state-image-icon state-image-icon--knowledge" :src="knowledgeBaseStatusIcon" alt="" />
-                <span class="state-counter">{{ getKnowledgeBaseBadgeText(agent) }}</span>
               </div>
             </el-tooltip>
 
             <el-tooltip :content="getMcpStatusTooltip(agent)" placement="top" :show-after="200" @show="ensureMcpConnectionStatus(agent.id)">
-              <div class="agent-state-badge is-icon-only is-counter-badge" :class="`is-mcp-${getMcpStatusKey(agent)}`">
+              <div class="agent-state-badge is-icon-only" :class="`is-mcp-${getMcpStatusKey(agent)}`">
                 <img class="state-image-icon state-image-icon--mcp" :src="mcpStatusIcon" alt="" />
-                <span class="state-counter">{{ getMcpServiceCountBadgeText() }}</span>
               </div>
             </el-tooltip>
 
@@ -125,17 +123,21 @@
         </div>
 
         <div class="agent-actions">
-          <el-button type="primary" size="small" @click="editAgent(agent.id)">
+          <el-button class="agent-action-button agent-action-button-feature" size="small" @click="editAgent(agent.id)">
             <el-icon><Setting /></el-icon>
             配置
           </el-button>
-          <el-button size="small" @click="handleChatHistory(agent.id)">
+          <el-button class="agent-action-button" size="small" @click="handleChatHistory(agent.id)">
             <el-icon><ChatDotRound /></el-icon>
             对话
           </el-button>
-          <el-button size="small" @click="handleManageDevices(agent.id)">
+          <el-button class="agent-action-button" size="small" @click="handleManageDevices(agent.id)">
             <el-icon><Connection /></el-icon>
             设备
+          </el-button>
+          <el-button class="agent-action-button agent-action-button-danger" size="small" @click="handleDeleteAgent(agent)">
+            <el-icon><Delete /></el-icon>
+            删除
           </el-button>
         </div>
       </article>
@@ -226,8 +228,8 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Plus, Setting, ChatDotRound, Monitor } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Setting, ChatDotRound, Monitor, Delete } from '@element-plus/icons-vue'
 import api from '../../utils/api'
 import DeviceBindingDialog from '../../components/user/DeviceBindingDialog.vue'
 import MessageInjectDialog from '../../components/user/MessageInjectDialog.vue'
@@ -304,6 +306,7 @@ const getAgentDevices = (agentId) => {
 }
 
 const getAgentDeviceCount = (agentId) => getAgentDevices(agentId).length
+const canDeleteAgent = (agent) => getAgentDeviceCount(agent.id) === 0
 
 const loadAgents = async () => {
   try {
@@ -431,6 +434,33 @@ const handleManageDevices = (id) => {
   router.push({ path: '/user/devices', query: { agent_id: id } })
 }
 
+const handleDeleteAgent = async (agent) => {
+  if (!canDeleteAgent(agent)) {
+    ElMessage.warning('该智能体仍绑定设备，请先移除所有设备后再删除')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除智能体 "${agent.name}" 吗？`,
+      '确认删除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    await api.delete(`/user/agents/${agent.id}`)
+    ElMessage.success('智能体删除成功')
+    await loadAgents()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.error || '智能体删除失败')
+    }
+  }
+}
+
 const truncateText = (value, maxLength = 14) => {
   const text = String(value || '').trim() || '未设置'
   if (text.length <= maxLength) {
@@ -485,11 +515,6 @@ const getKnowledgeBaseCount = (agent) => {
   return getKnowledgeBaseIds(agent).length
 }
 
-const getKnowledgeBaseBadgeText = (agent) => {
-  const count = getKnowledgeBaseCount(agent)
-  return count > 99 ? '99+' : String(count)
-}
-
 const getKnowledgeBaseNames = (agent) => {
   return getKnowledgeBaseIds(agent).map((id) => knowledgeBaseNameMap.value.get(Number(id)) || `知识库 #${id}`)
 }
@@ -529,12 +554,6 @@ const getGlobalMcpServiceCountText = () => {
   if (globalMcpServiceCountError.value) return '检测失败'
   if (globalMcpServiceCount.value === null) return '检测中'
   return `${globalMcpServiceCount.value} 个`
-}
-
-const getMcpServiceCountBadgeText = () => {
-  if (globalMcpServiceCount.value === null) return '?'
-  if (globalMcpServiceCount.value > 99) return '99+'
-  return String(globalMcpServiceCount.value)
 }
 
 const getMcpServiceScopeText = (agent) => {
@@ -892,7 +911,7 @@ onMounted(async () => {
   flex: none;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, auto));
-  gap: 8px;
+  gap: 10px;
 }
 
 .agent-state-badge {
@@ -943,27 +962,8 @@ onMounted(async () => {
 }
 
 .state-image-icon--openclaw {
-  width: 16px;
-  height: 16px;
-}
-
-.state-counter {
-  position: absolute;
-  right: -4px;
-  top: -4px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: currentColor;
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+  width: 15px;
+  height: 15px;
 }
 
 .agent-state-badge.is-memory-short,
@@ -1031,21 +1031,72 @@ onMounted(async () => {
 
 .agent-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
   margin-top: auto;
 }
 
 .agent-actions .el-button {
   min-width: 0;
   width: 100%;
-  border-radius: 14px;
+  min-height: 34px;
+  margin-left: 0;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(214, 219, 228, 0.9);
+  background: rgba(248, 250, 252, 0.92);
+  color: #4b5563;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-actions .el-button + .el-button {
+  margin-left: 0;
 }
 
 .agent-actions :deep(.el-button > span) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-actions :deep(.el-button .el-icon) {
+  font-size: 13px;
+}
+
+.agent-action-button-danger {
+  border-color: rgba(244, 191, 191, 0.95);
+  background: rgba(255, 245, 245, 0.96);
+  color: #b42318;
+}
+
+.agent-action-button-feature {
+  border-color: rgba(147, 197, 253, 0.85);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.98) 0%, rgba(219, 234, 254, 0.9) 100%);
+  color: #1d4ed8;
+}
+
+.agent-actions .el-button:hover {
+  border-color: rgba(148, 163, 184, 0.82);
+  background: rgba(241, 245, 249, 0.98);
+  color: #334155;
+}
+
+.agent-action-button-feature:hover {
+  border-color: rgba(96, 165, 250, 0.95);
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.98) 0%, rgba(191, 219, 254, 0.92) 100%);
+  color: #1e40af;
+}
+
+.agent-action-button-danger:hover {
+  border-color: rgba(248, 113, 113, 0.78);
+  background: rgba(254, 242, 242, 0.98);
+  color: #991b1b;
 }
 
 .dialog-grid {

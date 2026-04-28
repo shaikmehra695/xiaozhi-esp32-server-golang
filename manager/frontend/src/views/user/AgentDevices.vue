@@ -141,21 +141,21 @@
           </div>
           
           <div class="device-actions">
-            <el-button size="small" @click="handleDeviceRole(device.id)">
+            <el-button class="device-action-button device-action-button-feature" size="small" @click="handleDeviceRole(device.id)">
               <el-icon><User /></el-icon>
               角色
             </el-button>
-            <el-button size="small" @click="handleDeviceMcp(device)">
+            <el-button class="device-action-button" size="small" @click="handleDeviceMcp(device)">
               <el-icon><Setting /></el-icon>
               MCP
             </el-button>
-            <el-button class="voice-push-button" size="small" plain @click="handleVoicePush(device)">
+            <el-button class="device-action-button device-action-button-voice" size="small" @click="handleVoicePush(device)">
               <el-icon><ChatDotRound /></el-icon>
               语音通知
             </el-button>
             <el-button
+              class="device-action-button device-action-button-danger"
               size="small"
-              type="danger"
               @click="handleDeleteDevice(device)"
             >
               <el-icon><Delete /></el-icon>
@@ -1069,12 +1069,21 @@ watch(
 .device-actions .el-button {
   min-width: 0;
   width: 100%;
-  height: 34px;
   min-height: 34px;
-  margin: 0;
-  padding: 0 8px;
+  margin-left: 0;
+  padding: 0 10px;
   justify-content: center;
   border-radius: 12px;
+  border: 1px solid rgba(214, 219, 228, 0.9);
+  background: rgba(248, 250, 252, 0.92);
+  color: #4b5563;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.device-actions .el-button + .el-button {
+  margin-left: 0;
 }
 
 .device-actions :deep(.el-button > span) {
@@ -1091,19 +1100,53 @@ watch(
 
 .device-actions :deep(.el-icon) {
   flex: none;
+  font-size: 13px;
 }
 
-.voice-push-button {
-  color: #0f6f8f;
-  background: rgba(8, 145, 178, 0.08);
-  border-color: rgba(8, 145, 178, 0.22);
+.device-action-button-feature {
+  border-color: rgba(147, 197, 253, 0.85);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.98) 0%, rgba(219, 234, 254, 0.9) 100%);
+  color: #1d4ed8;
 }
 
-.voice-push-button:hover,
-.voice-push-button:focus {
+.device-action-button-voice {
+  border-color: rgba(153, 246, 228, 0.95);
+  background: rgba(240, 253, 250, 0.96);
+  color: #0f766e;
+}
+
+.device-action-button-danger {
+  border-color: rgba(244, 191, 191, 0.95);
+  background: rgba(255, 245, 245, 0.96);
+  color: #b42318;
+}
+
+.device-actions .el-button:hover,
+.device-actions .el-button:focus {
+  border-color: rgba(148, 163, 184, 0.82);
+  background: rgba(241, 245, 249, 0.98);
+  color: #334155;
+}
+
+.device-action-button-feature:hover,
+.device-action-button-feature:focus {
+  border-color: rgba(96, 165, 250, 0.95);
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.98) 0%, rgba(191, 219, 254, 0.92) 100%);
+  color: #1e40af;
+}
+
+.device-action-button-voice:hover,
+.device-action-button-voice:focus {
   color: #075985;
-  background: rgba(8, 145, 178, 0.14);
-  border-color: rgba(8, 145, 178, 0.34);
+  background: rgba(236, 254, 255, 0.98);
+  border-color: rgba(34, 211, 238, 0.58);
+}
+
+.device-action-button-danger:hover,
+.device-action-button-danger:focus {
+  border-color: rgba(248, 113, 113, 0.78);
+  background: rgba(254, 242, 242, 0.98);
+  color: #991b1b;
 }
 
 .dialog-footer {
