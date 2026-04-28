@@ -15,16 +15,13 @@ func (s *ChatSession) StopSpeaking(isSendTtsStop bool) {
 	s.StopSpeakingWithReason(isSendTtsStop, "ChatSession.StopSpeaking")
 }
 
-func (s *ChatSession) StopSpeakingAfterAsr(isSendTtsStop bool) {
-	s.StopSpeakingAfterAsrWithReason(isSendTtsStop, "ChatSession.StopSpeakingAfterAsr")
-}
-
 func (s *ChatSession) StopSpeakingWithReason(isSendTtsStop bool, reason string) {
 	s.stopSpeakingWithLock(true, isSendTtsStop, true, reason)
 }
 
-func (s *ChatSession) StopSpeakingAfterAsrWithReason(isSendTtsStop bool, reason string) {
-	s.stopSpeakingWithLock(false, isSendTtsStop, true, reason)
+// StopAssistantOutputAfterAsrWithReason 只停止当前 assistant 输出，不挂起媒体播放。
+func (s *ChatSession) StopAssistantOutputAfterAsrWithReason(isSendTtsStop bool, reason string) {
+	s.stopSpeakingWithLock(false, isSendTtsStop, false, reason)
 }
 
 // stopSpeakingWithLock 在 stopSpeaking 基础上增加了 mutex 保护

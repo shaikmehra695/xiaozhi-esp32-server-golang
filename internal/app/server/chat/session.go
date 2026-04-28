@@ -249,8 +249,7 @@ func NewChatSession(clientState *ClientState, serverTransport *ServerTransport, 
 				log.Debugf("设备 %s realtime媒体播放门控激活，跳过ASR首字打断: text=%s", clientState.DeviceID, text)
 				return
 			}
-			clientState.AfterAsrSessionCtx.CancelWithReason("ChatSession.OnAsrFirstTextCallback: realtime_mode=4")
-			s.InterruptAndClearTTSQueueWithReason("ChatSession.OnAsrFirstTextCallback realtime_mode=4")
+			s.StopAssistantOutputAfterAsrWithReason(true, "ChatSession.OnAsrFirstTextCallback realtime_mode=4")
 		}
 	}
 
@@ -1081,6 +1080,7 @@ func (s *ChatSession) InterruptAndClearTTSQueueWithReason(reason string) {
 			log.Warnf("挂起媒体播放失败: %v", err)
 		}
 	}
+	s.ttsManager.ClearTTSQueue()
 	s.ttsManager.InterruptAndStopWithReason(s.clientState.Ctx, true, context.Canceled, reason)
 }
 
@@ -1092,7 +1092,7 @@ func (s *ChatSession) HandleAbortMessage(msg *ClientMessage) error {
 	s.clientState.Abort = true
 
 	if s.clientState.IsRealTime() {
-		s.StopSpeakingAfterAsrWithReason(true, "HandleAbortMessage realtime")
+		s.StopAssistantOutputAfterAsrWithReason(true, "HandleAbortMessage realtime")
 	} else {
 		s.StopSpeakingWithReason(true, "HandleAbortMessage auto")
 	}

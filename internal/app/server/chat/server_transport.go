@@ -29,6 +29,26 @@ type udpSessionProvider interface {
 	GetUdpSession() *mqtt_udp.UdpSession
 }
 
+// DrainPendingAudio clears transport-level buffered audio before an interrupt stop.
+func (s *ServerTransport) DrainPendingAudio() int {
+	if s == nil || s.transport == nil {
+		return 0
+	}
+	provider, ok := s.transport.(udpSessionProvider)
+	if !ok {
+		return 0
+	}
+	udpSession := provider.GetUdpSession()
+	if udpSession == nil {
+		return 0
+	}
+	drained := udpSession.DrainPendingAudio()
+	if drained > 0 {
+		log.Infof("drained pending transport audio: device=%s drained=%d", s.clientState.DeviceID, drained)
+	}
+	return drained
+}
+
 func NewServerTransport(transport types_conn.IConn, clientState *ClientState) *ServerTransport {
 	return &ServerTransport{
 		transport:      transport,

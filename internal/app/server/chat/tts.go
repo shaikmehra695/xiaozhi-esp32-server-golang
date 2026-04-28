@@ -117,10 +117,11 @@ type TTSManager struct {
 	audioMutex         sync.Mutex
 
 	// 双流式 TTS 内部 StreamChan：由 handleTextResponse 在 IsStart 时创建，IsEnd 时关闭
-	dualStreamChan  chan llm_common.LLMResponseStruct
-	dualStreamDone  chan struct{} // 双流式 isSync 等待用：StreamChan 对应的 onEndFunc 信号
-	dualStreamMu    sync.Mutex
-	dualStreamEpoch atomic.Uint64
+	dualStreamChan     chan llm_common.LLMResponseStruct
+	dualStreamDone     chan struct{} // 双流式 isSync 等待用：StreamChan 对应的 onEndFunc 信号
+	dualStreamOwnerCtx context.Context
+	dualStreamMu       sync.Mutex
+	dualStreamEpoch    atomic.Uint64
 
 	ttsMetricMu    sync.Mutex
 	ttsMetricState ttsMetricState
@@ -1134,6 +1135,9 @@ func (t *TTSManager) finishTtsStopWithReason(ctx context.Context, sendTtsStop bo
 
 	sentTtsStop := false
 	if sendTtsStop {
+		if stopErr != nil && t.serverTransport != nil {
+			t.serverTransport.DrainPendingAudio()
+		}
 		if err := t.serverTransport.SendTtsStop(); err != nil {
 			if stopErr == nil {
 				stopErr = err
@@ -1296,6 +1300,7 @@ func (t *TTSManager) ClearTTSQueue() {
 	dualStreamChan := t.dualStreamChan
 	t.dualStreamChan = nil
 	t.dualStreamDone = nil
+	t.dualStreamOwnerCtx = nil
 	t.dualStreamMu.Unlock()
 	safeCloseLLMResponseStream(dualStreamChan)
 
@@ -1482,6 +1487,10 @@ func (t *TTSManager) handleTextResponseWithHooks(ctx context.Context, llmRespons
 	if !hasText && !llmResponse.IsEnd && !llmResponse.IsStart {
 		return nil
 	}
+	if ctx != nil && ctx.Err() != nil {
+		log.Debugf("handleTextResponse: ignore response because ctx already canceled")
+		return nil
+	}
 
 	// TTS_INPUT hook
 	if t.session != nil {
@@ -1537,12 +1546,14 @@ func (t *TTSManager) handleTextResponseWithHooks(ctx context.Context, llmRespons
 
 	// 双流式模式
 	var streamChan chan llm_common.LLMResponseStruct
+	var streamOwnerCtx context.Context
 	if llmResponse.IsStart {
 		streamEpoch := t.dualStreamEpoch.Load()
 		t.dualStreamMu.Lock()
 		oldStreamChan := t.dualStreamChan
 		t.dualStreamChan = nil
 		t.dualStreamDone = nil
+		t.dualStreamOwnerCtx = nil
 		t.dualStreamMu.Unlock()
 		safeCloseLLMResponseStream(oldStreamChan)
 
@@ -1582,12 +1593,18 @@ func (t *TTSManager) handleTextResponseWithHooks(ctx context.Context, llmRespons
 		}
 		t.dualStreamChan = streamChan
 		t.dualStreamDone = done
+		t.dualStreamOwnerCtx = ctx
 		t.dualStreamMu.Unlock()
 		log.Debugf("handleTextResponse: dual stream, created StreamChan and pushed item")
 	} else {
 		t.dualStreamMu.Lock()
 		streamChan = t.dualStreamChan
+		streamOwnerCtx = t.dualStreamOwnerCtx
 		t.dualStreamMu.Unlock()
+		if streamChan != nil && streamOwnerCtx != ctx {
+			log.Debugf("handleTextResponse: dual stream fragment ignored because active stream belongs to another context")
+			return nil
+		}
 	}
 
 	if streamChan != nil && hasText {
@@ -1628,10 +1645,11 @@ func (t *TTSManager) handleTextResponseWithHooks(ctx context.Context, llmRespons
 	if llmResponse.IsEnd && streamChan != nil {
 		var done chan struct{}
 		t.dualStreamMu.Lock()
-		if t.dualStreamChan == streamChan {
+		if t.dualStreamChan == streamChan && t.dualStreamOwnerCtx == ctx {
 			done = t.dualStreamDone
 			t.dualStreamChan = nil
 			t.dualStreamDone = nil
+			t.dualStreamOwnerCtx = nil
 		}
 		t.dualStreamMu.Unlock()
 		safeCloseLLMResponseStream(streamChan)

@@ -924,6 +924,11 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 					result.ok = true
 					return result, nil
 				}
+				if ctx.Err() != nil {
+					saveInterruptedAssistant()
+					log.Infof("%s LLM分片到达时上下文已取消，丢弃晚到响应并退出", state.DeviceID)
+					return result, nil
+				}
 
 				log.Debugf("LLM 响应: %+v", llmResponse)
 
