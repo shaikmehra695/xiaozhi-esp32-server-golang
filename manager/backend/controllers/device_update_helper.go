@@ -19,3 +19,13 @@ func updateDeviceColumns(db *gorm.DB, deviceID uint, updates map[string]interfac
 
 	return db.Model(&models.Device{}).Where("id = ?", deviceID).Updates(updates).Error
 }
+
+func countDevicesByAgentID(db *gorm.DB, agentID uint) (int64, error) {
+	if agentID == 0 {
+		return 0, nil
+	}
+
+	var count int64
+	err := db.Model(&models.Device{}).Where("agent_id = ?", agentID).Count(&count).Error
+	return count, err
+}

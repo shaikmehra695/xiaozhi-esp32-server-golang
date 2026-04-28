@@ -164,23 +164,7 @@ func (uc *UserController) CreateDevice(c *gin.Context) {
 		nickName = strings.TrimSpace(req.DeviceName)
 	}
 
-	// 生成6位随机设备代码，确保不重复
-	var deviceCode string
-	for i := 0; i < 10; i++ { // 最多尝试10次
-		code := generateRandomCode()
-
-		// 检查代码是否已存在
-		var count int64
-		if err := uc.DB.Model(&models.Device{}).Where("device_code = ?", code).Count(&count).Error; err == nil && count == 0 {
-			deviceCode = code
-			break
-		}
-	}
-
-	// 如果10次都重复，使用时间戳生成
-	if deviceCode == "" {
-		deviceCode = fmt.Sprintf("%06d", time.Now().Unix()%1000000)
-	}
+	deviceCode := generateUniqueDeviceCode(uc.DB)
 
 	// 创建设备
 	device := models.Device{
@@ -236,6 +220,19 @@ func normalizeDeviceNickName(value string) (string, error) {
 		return "", fmt.Errorf("设备昵称最多 50 个字符")
 	}
 	return nickName, nil
+}
+
+func generateUniqueDeviceCode(db *gorm.DB) string {
+	for i := 0; i < 10; i++ { // 最多尝试10次
+		code := generateRandomCode()
+
+		var count int64
+		if err := db.Model(&models.Device{}).Where("device_code = ?", code).Count(&count).Error; err == nil && count == 0 {
+			return code
+		}
+	}
+
+	return fmt.Sprintf("%06d", time.Now().Unix()%1000000)
 }
 
 // 获取用户所有设备概览（只读）
@@ -626,6 +623,16 @@ func (uc *UserController) DeleteAgent(c *gin.Context) {
 		return
 	}
 
+	deviceCount, err := countDevicesByAgentID(uc.DB, agent.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询智能体绑定设备失败"})
+		return
+	}
+	if deviceCount > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体已绑定设备，请先移除所有设备后再删除"})
+		return
+	}
+
 	if err := uc.DB.Delete(&agent).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除智能体失败"})
 		return
@@ -661,6 +668,7 @@ func (uc *UserController) GetAgentDevices(c *gin.Context) {
 func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	agentID := c.Param("id")
+	currentUserID := userID.(uint)
 
 	var req struct {
 		Code       string `json:"code"`
@@ -700,47 +708,95 @@ func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 		return
 	}
 
-	// 验证未绑定设备（user_id为0表示设备未绑定用户）
-	var device models.Device
-	query := uc.DB.Where("user_id = 0")
-	if code != "" {
-		if err := query.Where("device_code = ?", code).First(&device).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码无效或设备已被绑定"})
-			return
-		}
-	} else {
-		normalizedDeviceName := normalizeDeviceNameCandidate(deviceName)
-		if err := query.Where("LOWER(REPLACE(device_name, '-', ':')) = ?", normalizedDeviceName).First(&device).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "设备MAC无效或设备已被绑定"})
-			return
-		}
-	}
-
-	// 绑定设备到用户和智能体
-	device.UserID = userID.(uint)
-
-	// 转换agentID字符串为uint
 	agentIDInt, err := strconv.Atoi(agentID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的智能体ID"})
 		return
 	}
-	device.AgentID = uint(agentIDInt)
 
-	// 自动激活设备
-	device.Activated = true
-	if nickName != "" {
-		device.NickName = nickName
-	} else if strings.TrimSpace(device.NickName) == "" {
-		device.NickName = strings.TrimSpace(device.DeviceName)
+	var device models.Device
+	deviceExists := true
+	if code != "" {
+		if err := uc.DB.Where("device_code = ?", code).First(&device).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				deviceExists = false
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "查询设备失败"})
+				return
+			}
+		}
+	} else {
+		normalizedDeviceName := normalizeDeviceNameCandidate(deviceName)
+		if err := uc.DB.Where("LOWER(REPLACE(device_name, '-', ':')) = ?", normalizedDeviceName).First(&device).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				deviceExists = false
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "查询设备失败"})
+				return
+			}
+		}
 	}
 
-	if err := updateDeviceColumns(uc.DB, device.ID, map[string]interface{}{
-		"user_id":   device.UserID,
-		"agent_id":  device.AgentID,
-		"activated": device.Activated,
-		"nick_name": device.NickName,
-	}); err != nil {
+	if deviceExists {
+		if device.UserID != 0 {
+			if code != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "验证码无效或设备已被绑定"})
+			} else {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "设备MAC无效或设备已被绑定"})
+			}
+			return
+		}
+
+		device.UserID = currentUserID
+		device.AgentID = uint(agentIDInt)
+		device.Activated = true
+		if nickName != "" {
+			device.NickName = nickName
+		} else if strings.TrimSpace(device.NickName) == "" {
+			device.NickName = strings.TrimSpace(device.DeviceName)
+		}
+
+		if err := updateDeviceColumns(uc.DB, device.ID, map[string]interface{}{
+			"user_id":   device.UserID,
+			"agent_id":  device.AgentID,
+			"activated": device.Activated,
+			"nick_name": device.NickName,
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "设备绑定失败"})
+			return
+		}
+
+		c.JSON(http.StatusCreated, gin.H{"success": true, "data": device})
+		return
+	}
+
+	finalDeviceName := strings.TrimSpace(deviceName)
+	if finalDeviceName == "" {
+		finalDeviceName = strings.TrimSpace(req.DeviceName)
+	}
+	if finalDeviceName == "" {
+		finalDeviceName = code
+	}
+
+	deviceCode := code
+	if deviceCode == "" {
+		deviceCode = generateUniqueDeviceCode(uc.DB)
+	}
+
+	device = models.Device{
+		UserID:     currentUserID,
+		AgentID:    uint(agentIDInt),
+		DeviceCode: deviceCode,
+		DeviceName: finalDeviceName,
+		Activated:  true,
+	}
+	if nickName != "" {
+		device.NickName = nickName
+	} else {
+		device.NickName = strings.TrimSpace(finalDeviceName)
+	}
+
+	if err := uc.DB.Create(&device).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "设备绑定失败"})
 		return
 	}

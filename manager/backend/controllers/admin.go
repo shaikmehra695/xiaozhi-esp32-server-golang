@@ -3363,6 +3363,17 @@ func (ac *AdminController) UpdateAgent(c *gin.Context) {
 
 func (ac *AdminController) DeleteAgent(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+
+	deviceCount, err := countDevicesByAgentID(ac.DB, uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询智能体绑定设备失败"})
+		return
+	}
+	if deviceCount > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体已绑定设备，请先移除所有设备后再删除"})
+		return
+	}
+
 	if err := ac.DB.Delete(&models.Agent{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除智能体失败"})
 		return

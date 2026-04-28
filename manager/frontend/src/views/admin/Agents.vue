@@ -613,7 +613,7 @@ const deleteAgent = async (agent) => {
     loadAgents()
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('智能体删除失败')
+      ElMessage.error(error.response?.data?.error || '智能体删除失败')
       console.error('Error deleting agent:', error)
     }
   }
