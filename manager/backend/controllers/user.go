@@ -227,7 +227,21 @@ func isSixDigitCode(value string) bool {
 }
 
 func normalizeDeviceNameCandidate(value string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", ":"))
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+
+	// 兼容常见 MAC 分隔符，统一归一化为 12 位十六进制串进行匹配
+	replacer := strings.NewReplacer(
+		":", "",
+		"-", "",
+		".", "",
+		" ", "",
+		"：", "",
+	)
+	normalized := strings.ToLower(replacer.Replace(trimmed))
+	return normalized
 }
 
 func normalizeDeviceNickName(value string) (string, error) {
@@ -708,7 +722,14 @@ func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 		}
 	} else {
 		normalizedDeviceName := normalizeDeviceNameCandidate(deviceName)
-		if err := query.Where("LOWER(REPLACE(device_name, '-', ':')) = ?", normalizedDeviceName).First(&device).Error; err != nil {
+		if normalizedDeviceName == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "设备MAC无效或设备已被绑定"})
+			return
+		}
+		if err := query.Where(
+			"LOWER(REPLACE(REPLACE(REPLACE(REPLACE(device_name, '-', ''), ':', ''), '.', ''), ' ', '')) = ?",
+			normalizedDeviceName,
+		).First(&device).Error; err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "设备MAC无效或设备已被绑定"})
 			return
 		}
