@@ -843,8 +843,9 @@ watch(
 .devices-grid {
   margin-top: 20px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 340px));
   gap: 16px;
+  justify-content: flex-start;
 }
 
 .device-item {
@@ -863,6 +864,7 @@ watch(
   flex-direction: column;
   width: 100%;
   min-width: 0;
+  max-width: 340px;
 }
 
 .device-card:hover {
@@ -1230,7 +1232,7 @@ watch(
 
 @media (min-width: 769px) and (max-width: 1180px) {
   .devices-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(280px, 340px));
   }
 }
 </style>

@@ -8,8 +8,8 @@
     </div>
 
     <!-- 角色卡片列表 -->
-    <el-row :gutter="12" class="roles-grid" v-loading="loading">
-      <el-col :xs="24" :sm="12" :lg="8" v-for="role in userRoles" :key="role.id" class="role-col">
+    <div class="roles-grid" v-loading="loading">
+      <div v-for="role in userRoles" :key="role.id" class="role-col">
         <el-card class="role-card" shadow="hover">
           <template #header>
             <div class="card-header">
@@ -58,8 +58,8 @@
             </div>
           </div>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
     <!-- 空状态 -->
     <el-empty v-if="!loading && userRoles.length === 0" description="暂无角色，点击右上角创建">
@@ -492,7 +492,11 @@ onMounted(() => {
 }
 
 .roles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 340px));
+  gap: 12px;
   align-items: stretch;
+  justify-content: flex-start;
 }
 
 .role-col {
@@ -501,8 +505,8 @@ onMounted(() => {
 }
 
 .role-card {
-  margin-bottom: 20px;
   width: 100%;
+  max-width: 340px;
   border-radius: 12px;
   border: 1px solid #ebeef5;
   transition: transform 0.2s ease, box-shadow 0.2s ease;

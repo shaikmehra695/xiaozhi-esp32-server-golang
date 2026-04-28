@@ -735,9 +735,10 @@ onMounted(async () => {
 
 .agents-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 340px));
   gap: 16px;
   align-content: flex-start;
+  justify-content: flex-start;
 }
 
 .agent-card {
@@ -746,6 +747,8 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  max-width: 340px;
+  width: 100%;
 }
 
 .agent-card-skeleton {
@@ -1079,7 +1082,7 @@ onMounted(async () => {
 
 @media (min-width: 769px) and (max-width: 1180px) {
   .agents-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(280px, 340px));
   }
 }
 
