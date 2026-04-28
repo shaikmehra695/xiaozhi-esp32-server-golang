@@ -5,11 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"xiaozhi-esp32-server-golang/internal/app/server/mqtt_udp"
 	data_audio "xiaozhi-esp32-server-golang/internal/data/audio"
 	data_client "xiaozhi-esp32-server-golang/internal/data/client"
 	msgdata "xiaozhi-esp32-server-golang/internal/data/msg"
 	config_types "xiaozhi-esp32-server-golang/internal/domain/config/types"
 	llm_common "xiaozhi-esp32-server-golang/internal/domain/llm/common"
+	"xiaozhi-esp32-server-golang/internal/domain/play_music"
 )
 
 func TestClearTTSQueueDismissesDrainedItemsForTurnBarrier(t *testing.T) {
@@ -103,6 +105,85 @@ func TestClearTTSQueueResetsDualStreamState(t *testing.T) {
 	}
 }
 
+func TestHandleTextResponseWithCanceledContextSkipsEnqueue(t *testing.T) {
+	manager := newTestTTSManager(false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := manager.handleTextResponseWithHooks(ctx, llm_common.LLMResponseStruct{Text: "晚到分片"}, false, nil, nil); err != nil {
+		t.Fatalf("handleTextResponseWithHooks returned error: %v", err)
+	}
+	if got := manager.ttsQueueSeq.Load(); got != 0 {
+		t.Fatalf("expected canceled ctx to skip queueing tts items, got seq=%d", got)
+	}
+}
+
+func TestDualStreamIgnoresFragmentsFromPreviousTurn(t *testing.T) {
+	manager := newTestTTSManager(true)
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	defer firstCancel()
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer secondCancel()
+
+	if err := manager.handleTextResponseWithHooks(firstCtx, llm_common.LLMResponseStruct{
+		Text:    "第一轮开头",
+		IsStart: true,
+	}, false, nil, nil); err != nil {
+		t.Fatalf("enqueue first dual-stream start failed: %v", err)
+	}
+
+	manager.ClearTTSQueue()
+
+	if err := manager.handleTextResponseWithHooks(secondCtx, llm_common.LLMResponseStruct{
+		Text:    "第二轮开头",
+		IsStart: true,
+	}, false, nil, nil); err != nil {
+		t.Fatalf("enqueue second dual-stream start failed: %v", err)
+	}
+
+	manager.dualStreamMu.Lock()
+	streamChan := manager.dualStreamChan
+	ownerCtx := manager.dualStreamOwnerCtx
+	manager.dualStreamMu.Unlock()
+	if streamChan == nil {
+		t.Fatal("expected second dual-stream turn to activate stream channel")
+	}
+	if ownerCtx != secondCtx {
+		t.Fatal("expected active dual-stream owner to switch to second turn context")
+	}
+
+	seqBefore := manager.ttsQueueSeq.Load()
+	if err := manager.handleTextResponseWithHooks(firstCtx, llm_common.LLMResponseStruct{
+		Text: "上一轮残留",
+	}, false, nil, nil); err != nil {
+		t.Fatalf("enqueue stale dual-stream fragment failed: %v", err)
+	}
+	if got := manager.ttsQueueSeq.Load(); got != seqBefore {
+		t.Fatalf("expected stale fragment not to enqueue fallback tts item, got seq=%d want=%d", got, seqBefore)
+	}
+
+	if err := manager.handleTextResponseWithHooks(secondCtx, llm_common.LLMResponseStruct{
+		Text: "第二轮续写",
+	}, false, nil, nil); err != nil {
+		t.Fatalf("enqueue second dual-stream continuation failed: %v", err)
+	}
+
+	first := <-streamChan
+	if first.Text != "第二轮开头" {
+		t.Fatalf("expected first buffered fragment to belong to second turn, got %q", first.Text)
+	}
+	second := <-streamChan
+	if second.Text != "第二轮续写" {
+		t.Fatalf("expected continuation to stay on second turn stream, got %q", second.Text)
+	}
+
+	select {
+	case extra := <-streamChan:
+		t.Fatalf("expected stale fragment to be ignored, got unexpected fragment %q", extra.Text)
+	default:
+	}
+}
+
 func TestBeginExclusiveMediaPlaybackDoesNotFinishTtsStopImmediately(t *testing.T) {
 	manager := newTestTTSManager(false)
 	manager.ttsActive.Store(true)
@@ -189,6 +270,73 @@ func TestRealtimeStopSpeakingSendsTtsStopForActiveTTS(t *testing.T) {
 	}
 	if session.clientState.GetTtsStart() {
 		t.Fatal("expected realtime tts stop to clear TTS start flag")
+	}
+}
+
+func TestStopAssistantOutputAfterAsrPreservesRealtimeMediaGate(t *testing.T) {
+	session, conn, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+
+	session.clientState.ListenMode = "realtime"
+	session.mediaPlayer = NewSessionMediaPlayer(session)
+
+	active := newActiveMediaPlayback(context.Background())
+	defer active.cancel()
+	defer active.closeDone()
+
+	source := MediaSourceDescriptor{SourceType: MediaSourceTypeMCPResource}
+	runtime := session.mediaPlayer.runtime
+	runtime.mu.Lock()
+	runtime.active = active
+	runtime.attachment = &mediaSessionAttachment{}
+	runtime.currentSource = &source
+	runtime.state.Status = play_music.StatusPlaying
+	runtime.state.CurrentSourceType = MediaSourceTypeMCPResource
+	runtime.mu.Unlock()
+
+	session.ttsManager.EnqueueTtsStart(context.Background())
+
+	startMsg := waitForServerMessage(t, conn, 0)
+	if startMsg.Type != msgdata.ServerMessageTypeTts || startMsg.State != msgdata.MessageStateStart {
+		t.Fatalf("expected first server message to be tts start, got type=%s state=%s", startMsg.Type, startMsg.State)
+	}
+
+	session.StopAssistantOutputAfterAsrWithReason(true, "test realtime assistant stop")
+
+	stopMsg := waitForServerMessage(t, conn, 1)
+	if stopMsg.Type != msgdata.ServerMessageTypeTts || stopMsg.State != msgdata.MessageStateStop {
+		t.Fatalf("expected second server message to be tts stop, got type=%s state=%s", stopMsg.Type, stopMsg.State)
+	}
+	if !session.isRealtimeMcpAudioGateActive() {
+		t.Fatal("expected realtime media gate to remain active after assistant-only stop")
+	}
+}
+
+func TestStopAssistantOutputAfterAsrDrainsPendingUDPAudio(t *testing.T) {
+	session, conn, cleanup := newStartedTTSControlTestSession(t)
+	defer cleanup()
+
+	conn.udpSession = &mqtt_udp.UdpSession{
+		SendChannel: make(chan []byte, 4),
+	}
+	conn.udpSession.SendChannel <- []byte{1}
+	conn.udpSession.SendChannel <- []byte{2}
+
+	session.ttsManager.EnqueueTtsStart(context.Background())
+
+	startMsg := waitForServerMessage(t, conn, 0)
+	if startMsg.Type != msgdata.ServerMessageTypeTts || startMsg.State != msgdata.MessageStateStart {
+		t.Fatalf("expected first server message to be tts start, got type=%s state=%s", startMsg.Type, startMsg.State)
+	}
+
+	session.StopAssistantOutputAfterAsrWithReason(true, "test realtime drain")
+
+	stopMsg := waitForServerMessage(t, conn, 1)
+	if stopMsg.Type != msgdata.ServerMessageTypeTts || stopMsg.State != msgdata.MessageStateStop {
+		t.Fatalf("expected second server message to be tts stop, got type=%s state=%s", stopMsg.Type, stopMsg.State)
+	}
+	if got := len(conn.udpSession.SendChannel); got != 0 {
+		t.Fatalf("expected pending UDP audio to be drained before tts stop, got len=%d", got)
 	}
 }
 

@@ -157,7 +157,17 @@ func (dac *DeviceActivationController) GetActivationInfo(c *gin.Context) {
 
 	// 更新数据库
 	if needUpdate {
-		if err := dac.DB.Save(&device).Error; err != nil {
+		updates := map[string]interface{}{}
+		if device.DeviceCode != "" {
+			updates["device_code"] = device.DeviceCode
+		}
+		if device.Challenge != "" {
+			updates["challenge"] = device.Challenge
+		}
+		if !isNewDevice && device.UserID == 0 {
+			updates["user_id"] = device.UserID
+		}
+		if err := updateDeviceColumns(dac.DB, device.ID, updates); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "更新设备信息失败"})
 			return
 		}
@@ -254,7 +264,9 @@ func (dac *DeviceActivationController) ActivateDevice(c *gin.Context) {
 
 	// 激活设备
 	device.Activated = true
-	if err := dac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(dac.DB, device.ID, map[string]interface{}{
+		"activated": device.Activated,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error":   "激活设备失败",

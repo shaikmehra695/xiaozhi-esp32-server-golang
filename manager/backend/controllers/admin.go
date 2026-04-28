@@ -2768,13 +2768,20 @@ func (ac *AdminController) CreateDevice(c *gin.Context) {
 			// 设备代码已存在，更新设备信息
 			existingDevice.UserID = req.UserID
 			existingDevice.NickName = nickName
+			updates := map[string]interface{}{
+				"user_id":   existingDevice.UserID,
+				"nick_name": existingDevice.NickName,
+				"agent_id":  req.AgentID,
+				"activated": true,
+			}
 			if req.DeviceName != "" {
 				existingDevice.DeviceName = req.DeviceName
+				updates["device_name"] = existingDevice.DeviceName
 			}
 			existingDevice.AgentID = req.AgentID // 更新智能体ID
 			existingDevice.Activated = true      // 激活设备
 
-			if err := ac.DB.Save(&existingDevice).Error; err != nil {
+			if err := updateDeviceColumns(ac.DB, existingDevice.ID, updates); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "更新设备失败"})
 				return
 			}
@@ -2849,7 +2856,14 @@ func (ac *AdminController) UpdateDevice(c *gin.Context) {
 	device.Activated = updateData.Activated
 	device.AgentID = updateData.AgentID
 
-	if err := ac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(ac.DB, device.ID, map[string]interface{}{
+		"user_id":     device.UserID,
+		"nick_name":   device.NickName,
+		"device_code": device.DeviceCode,
+		"device_name": device.DeviceName,
+		"activated":   device.Activated,
+		"agent_id":    device.AgentID,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新设备失败"})
 		return
 	}
@@ -5679,7 +5693,9 @@ func (ac *AdminController) ApplyRoleToDevice(c *gin.Context) {
 	}
 
 	device.RoleID = req.RoleID
-	if err := ac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(ac.DB, device.ID, map[string]interface{}{
+		"role_id": device.RoleID,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "应用角色失败"})
 		return
 	}
@@ -5737,7 +5753,9 @@ func (ac *AdminController) SwitchDeviceRoleByNameInternal(c *gin.Context) {
 
 	roleID := matchedRole.ID
 	device.RoleID = &roleID
-	if err := ac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(ac.DB, device.ID, map[string]interface{}{
+		"role_id": device.RoleID,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "切换设备角色失败"})
 		return
 	}
@@ -5770,7 +5788,9 @@ func (ac *AdminController) RestoreDeviceDefaultRoleInternal(c *gin.Context) {
 	}
 
 	device.RoleID = nil
-	if err := ac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(ac.DB, device.ID, map[string]interface{}{
+		"role_id": nil,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "恢复默认角色失败"})
 		return
 	}

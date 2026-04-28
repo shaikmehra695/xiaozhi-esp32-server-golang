@@ -320,7 +320,9 @@ func (uc *UserController) UpdateDevice(c *gin.Context) {
 	}
 
 	device.NickName = nickName
-	if err := uc.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(uc.DB, device.ID, map[string]interface{}{
+		"nick_name": device.NickName,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新设备昵称失败"})
 		return
 	}
@@ -733,7 +735,12 @@ func (uc *UserController) AddDeviceToAgent(c *gin.Context) {
 		device.NickName = strings.TrimSpace(device.DeviceName)
 	}
 
-	if err := uc.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(uc.DB, device.ID, map[string]interface{}{
+		"user_id":   device.UserID,
+		"agent_id":  device.AgentID,
+		"activated": device.Activated,
+		"nick_name": device.NickName,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "设备绑定失败"})
 		return
 	}
@@ -763,7 +770,9 @@ func (uc *UserController) RemoveDeviceFromAgent(c *gin.Context) {
 
 	// 将设备从智能体中移除（设置agent_id为0，但保持用户绑定）
 	device.AgentID = 0
-	if err := uc.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(uc.DB, device.ID, map[string]interface{}{
+		"agent_id": device.AgentID,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "移除设备失败"})
 		return
 	}
