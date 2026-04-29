@@ -116,26 +116,8 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 	header.Add("OpenAI-Beta", "realtime=v1")
 	var err error
 
-	// Establish (or reuse) the WebSocket connection.
-	a.connMu.Lock()
-	conn := a.conn
-	a.connMu.Unlock()
-	if conn == nil {
-		log.Debugf("[aliyun_qwen3] connecting to: %s", wsURL)
-		conn, _, err = a.dialer.DialContext(ctx, wsURL, header)
-		if err != nil {
-			unlock()
-			return nil, fmt.Errorf("connect websocket failed: %w", err)
-		}
-		a.connMu.Lock()
-		a.conn = conn
-		a.connMu.Unlock()
-		log.Debugf("[aliyun_qwen3] websocket connected")
-	} else {
-		log.Debugf("[aliyun_qwen3] reuse websocket connection")
-	}
-
-	log.Debugf("[aliyun_qwen3] session.update skipped (optional)")
+	// Lazy connect: defer websocket dialing until the first audio chunk arrives.
+	log.Debugf("[aliyun_qwen3] lazy connect enabled: websocket will be created on first audio chunk")
 
 	resultChan := make(chan types.StreamingResult, 20)
 	done := make(chan struct{})
@@ -192,6 +174,45 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 		}
 	}
 
+	var conn *websocket.Conn
+	connectReady := make(chan struct{})
+	var connectOnce sync.Once
+	var connectErr error
+	var connectErrMu sync.Mutex
+
+	ensureConnection := func() error {
+		connectOnce.Do(func() {
+			a.connMu.Lock()
+			existing := a.conn
+			a.connMu.Unlock()
+			if existing != nil {
+				log.Debugf("[aliyun_qwen3] reuse websocket connection")
+				conn = existing
+				close(connectReady)
+				return
+			}
+
+			log.Debugf("[aliyun_qwen3] connecting to: %s", wsURL)
+			dialConn, _, dialErr := a.dialer.DialContext(ctx, wsURL, header)
+			if dialErr != nil {
+				connectErrMu.Lock()
+				connectErr = fmt.Errorf("connect websocket failed: %w", dialErr)
+				connectErrMu.Unlock()
+				return
+			}
+			a.connMu.Lock()
+			a.conn = dialConn
+			a.connMu.Unlock()
+			conn = dialConn
+			log.Debugf("[aliyun_qwen3] websocket connected")
+			log.Debugf("[aliyun_qwen3] session.update skipped (optional)")
+			close(connectReady)
+		})
+		connectErrMu.Lock()
+		defer connectErrMu.Unlock()
+		return connectErr
+	}
+
 	// ctx cancel 时主动关闭底层连接，确保 ReadMessage 及时返回，
 	// 这样旧会话一定会退出并释放 taskMu，避免下一轮重启卡死。
 	go func() {
@@ -199,7 +220,9 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 		case <-ctx.Done():
 			recordSendErr(ctx.Err())
 			log.Debugf("[aliyun_qwen3] context cancelled, closing websocket to unblock receiver")
-			a.resetConn(conn)
+			if conn != nil {
+				a.resetConn(conn)
+			}
 		case <-done:
 		}
 	}()
@@ -211,6 +234,11 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 
 		sessionFinished := false
 
+		select {
+		case <-ctx.Done():
+			return
+		case <-connectReady:
+		}
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
@@ -440,6 +468,10 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 				if !ok {
 					// Audio stream ended.
 					log.Debugf("[aliyun_qwen3] audio stream ended, auto_end=%v, sent %d chunks, %d bytes", a.config.AutoEnd, audioChunkCount, totalAudioBytes)
+					if audioChunkCount == 0 {
+						log.Debugf("[aliyun_qwen3] no audio chunk received, skip creating websocket session")
+						return
+					}
 					if !a.config.AutoEnd {
 						// Manual mode requires input_audio_buffer.commit.
 						commitEvent := NewAudioCommitEvent()
@@ -474,6 +506,18 @@ func (a *AliyunQwen3ASR) StreamingRecognize(ctx context.Context, audioStream <-c
 				}
 
 				// Convert audio to PCM16 bytes.
+				if audioChunkCount == 0 {
+					if err := ensureConnection(); err != nil {
+						recordSendErr(err)
+						sendResult(types.StreamingResult{
+							Error:       err,
+							IsFinal:     true,
+							AsrType:     constants.AsrTypeAliyunQwen3,
+							RetryReason: classifyAliyunQwen3RetryReason(err),
+						})
+						return
+					}
+				}
 				audioBytes := float32SliceToPCM16Bytes(pcm)
 				audioChunkCount++
 				totalAudioBytes += len(audioBytes)
