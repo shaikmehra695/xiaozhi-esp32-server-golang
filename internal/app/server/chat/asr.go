@@ -26,6 +26,8 @@ import (
 
 type ASRManagerOption func(*ASRManager)
 
+const maxFirstSpeechPreAudioMs = 200
+
 // AsrMessageSaveCallback 消息保存回调函数类型
 type AsrMessageSaveCallback func(userMsg *schema.Message, messageID string, audioData []float32)
 
@@ -303,8 +305,9 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context) {
 						//首次触发识别到语音时,为了语音数据完整性 将vadPcmData赋值给pcmData, 之后的音频数据全部进入asr
 						if haveVoice && !clientHaveVoice {
 							//首次检测到语音时，最多只保留200ms的前静音数据
+							currentFrameSamples := len(pcmData)
 							allData := state.AsrAudioBuffer.GetAndClearAllData()
-							pcmData = allData
+							pcmData = trimFirstSpeechAudio(allData, currentFrameSamples, audioFormat.SampleRate, audioFormat.Channels)
 						}
 					}
 					//log.Debugf("isVad, pcmData len: %d, vadPcmData len: %d, haveVoice: %v", len(pcmData), len(vadPcmData), haveVoice)
@@ -1038,6 +1041,25 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 			}
 		}
 	}()
+}
+
+func trimFirstSpeechAudio(allData []float32, currentFrameSamples, sampleRate, channels int) []float32 {
+	if len(allData) == 0 {
+		return nil
+	}
+	if currentFrameSamples <= 0 || currentFrameSamples > len(allData) || sampleRate <= 0 || channels <= 0 {
+		return allData
+	}
+
+	maxPreSpeechSamples := sampleRate * channels * maxFirstSpeechPreAudioMs / 1000
+	keepSamples := currentFrameSamples + maxPreSpeechSamples
+	if keepSamples >= len(allData) {
+		return allData
+	}
+
+	audio := make([]float32, keepSamples)
+	copy(audio, allData[len(allData)-keepSamples:])
+	return audio
 }
 
 // getSpeakerResult 获取暂存的声纹结果（带超时）
