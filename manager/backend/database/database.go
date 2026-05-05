@@ -90,6 +90,9 @@ func Init(cfg config.DatabaseConfig) *gorm.DB {
 }
 
 func Close(db *gorm.DB) {
+	if db == nil {
+		return
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
 		log.Println("获取数据库连接失败:", err)
