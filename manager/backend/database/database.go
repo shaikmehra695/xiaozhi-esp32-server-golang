@@ -1,12 +1,15 @@
 package database
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"xiaozhi/manager/backend/config"
 	"xiaozhi/manager/backend/models"
+	"xiaozhi/manager/backend/services/configprovider"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
@@ -86,6 +89,9 @@ func Init(cfg config.DatabaseConfig) *gorm.DB {
 		log.Printf("迁移全局角色数据失败: %v", err)
 		// 迁移失败不影响启动，只是数据没有迁移
 	}
+	if err := repairConfigProviders(db); err != nil {
+		log.Printf("修复配置provider失败: %v", err)
+	}
 	return db
 }
 
@@ -155,5 +161,60 @@ func migrateGlobalRolesToRoles(db *gorm.DB) error {
 	}
 
 	log.Println("全局角色数据迁移完成")
+	return nil
+}
+
+func repairConfigProviders(db *gorm.DB) error {
+	var configs []models.Config
+	if err := db.Where("type IN ?", []string{"vad", "asr", "llm", "tts", "memory", "vision"}).Find(&configs).Error; err != nil {
+		return err
+	}
+
+	repaired := 0
+	for _, cfg := range configs {
+		var data map[string]interface{}
+		if cfg.JsonData != "" {
+			if err := json.Unmarshal([]byte(cfg.JsonData), &data); err != nil {
+				log.Printf("跳过provider修复，json_data解析失败 type=%s config_id=%s: %v", cfg.Type, cfg.ConfigID, err)
+				continue
+			}
+		}
+		if data == nil {
+			data = map[string]interface{}{}
+		}
+
+		provider := configprovider.NormalizeExistingProvider(cfg.Type, cfg.Provider, cfg.ConfigID, data)
+		if provider == "" || provider == cfg.Provider {
+			if jsonProvider, _ := data["provider"].(string); strings.TrimSpace(jsonProvider) == "" || strings.EqualFold(strings.TrimSpace(jsonProvider), provider) {
+				continue
+			}
+		}
+
+		updates := map[string]interface{}{}
+		if provider != "" && provider != cfg.Provider {
+			updates["provider"] = provider
+		}
+		if provider != "" {
+			if jsonProvider, _ := data["provider"].(string); !strings.EqualFold(strings.TrimSpace(jsonProvider), provider) {
+				data["provider"] = provider
+				bytes, err := json.Marshal(data)
+				if err != nil {
+					return err
+				}
+				updates["json_data"] = string(bytes)
+			}
+		}
+		if len(updates) == 0 {
+			continue
+		}
+		if err := db.Model(&models.Config{}).Where("id = ?", cfg.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		repaired++
+	}
+
+	if repaired > 0 {
+		log.Printf("已修复 %d 条配置provider", repaired)
+	}
 	return nil
 }
