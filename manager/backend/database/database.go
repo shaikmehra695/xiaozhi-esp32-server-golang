@@ -83,6 +83,10 @@ func Init(cfg config.DatabaseConfig) *gorm.DB {
 	}
 	log.Println("数据库表结构迁移成功")
 
+	if err := dropDeprecatedAgentStatusColumn(db); err != nil {
+		log.Printf("删除旧智能体状态字段失败: %v", err)
+	}
+
 	// 迁移现有全局角色数据到新的 roles 表
 	log.Println("检查是否需要迁移全局角色数据...")
 	if err := migrateGlobalRolesToRoles(db); err != nil {
@@ -93,6 +97,55 @@ func Init(cfg config.DatabaseConfig) *gorm.DB {
 		log.Printf("修复配置provider失败: %v", err)
 	}
 	return db
+}
+
+func dropDeprecatedAgentStatusColumn(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.Agent{}) {
+		return nil
+	}
+	hasColumn, err := hasDatabaseColumn(db, "agents", "status")
+	if err != nil {
+		return err
+	}
+	if !hasColumn {
+		return nil
+	}
+	err = db.Exec("ALTER TABLE agents DROP COLUMN status").Error
+	if err != nil {
+		return err
+	}
+	log.Println("已删除旧智能体状态字段 agents.status")
+	return nil
+}
+
+func hasDatabaseColumn(db *gorm.DB, tableName, columnName string) (bool, error) {
+	switch db.Dialector.Name() {
+	case "sqlite":
+		var columns []struct {
+			Name string `gorm:"column:name"`
+		}
+		if err := db.Raw(fmt.Sprintf("PRAGMA table_info(%s)", tableName)).Scan(&columns).Error; err != nil {
+			return false, err
+		}
+		for _, column := range columns {
+			if column.Name == columnName {
+				return true, nil
+			}
+		}
+		return false, nil
+	case "mysql":
+		var count int64
+		if err := db.Raw(
+			"SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+			tableName,
+			columnName,
+		).Scan(&count).Error; err != nil {
+			return false, err
+		}
+		return count > 0, nil
+	default:
+		return db.Migrator().HasColumn(tableName, columnName), nil
+	}
 }
 
 func Close(db *gorm.DB) {
