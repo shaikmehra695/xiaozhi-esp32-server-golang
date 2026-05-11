@@ -520,7 +520,7 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context) {
 						lastSpeakerPeekDoneAt.Store(0)
 						speakerPeekAudioMs = 0
 						state.OnVoiceSilence()
-						state.VoiceStatus.Reset()
+						//state.VoiceStatus.Reset()
 						continue
 					}
 				}
