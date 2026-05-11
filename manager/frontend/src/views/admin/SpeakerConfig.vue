@@ -1,11 +1,5 @@
 <template>
   <div class="config-page">
-    <div class="page-header">
-      <div class="header-left">
-        <h2>声纹识别配置</h2>
-      </div>
-    </div>
-
     <el-card v-loading="loading" class="config-card">
       <el-alert
         title="提示"
@@ -197,21 +191,9 @@ onMounted(() => {
 <style scoped>
 .config-page {
   padding: 20px;
-  background: white;
+  background: rgba(255, 255, 255, 0.88);
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.header-left h2 {
-  margin: 0;
-  color: #333;
 }
 
 .config-card {
@@ -221,7 +203,7 @@ onMounted(() => {
 .form-tip {
   margin-top: 8px;
   font-size: 12px;
-  color: #909399;
+  color: var(--apple-text-secondary);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -229,7 +211,7 @@ onMounted(() => {
 
 .form-tip .el-icon {
   font-size: 14px;
-  color: #409eff;
+  color: var(--apple-primary);
 }
 
 .form-actions {

@@ -26,6 +26,8 @@ import (
 
 type ASRManagerOption func(*ASRManager)
 
+const maxFirstSpeechPreAudioMs = 200
+
 // AsrMessageSaveCallback 消息保存回调函数类型
 type AsrMessageSaveCallback func(userMsg *schema.Message, messageID string, audioData []float32)
 
@@ -303,8 +305,9 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context) {
 						//首次触发识别到语音时,为了语音数据完整性 将vadPcmData赋值给pcmData, 之后的音频数据全部进入asr
 						if haveVoice && !clientHaveVoice {
 							//首次检测到语音时，最多只保留200ms的前静音数据
+							currentFrameSamples := len(pcmData)
 							allData := state.AsrAudioBuffer.GetAndClearAllData()
-							pcmData = allData
+							pcmData = trimFirstSpeechAudio(allData, currentFrameSamples, audioFormat.SampleRate, audioFormat.Channels)
 						}
 					}
 					//log.Debugf("isVad, pcmData len: %d, vadPcmData len: %d, haveVoice: %v", len(pcmData), len(vadPcmData), haveVoice)
@@ -323,13 +326,19 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context) {
 					if state.IsRealTime() && viper.GetInt("chat.realtime_mode") == 1 && continuousVoiceDuration > 360 {
 						// 只有在未触发过的情况下才执行，确保只执行一次
 						if !hasTriggeredCancel {
-							//realtime模式下, 如果此时有正在进行的llm和tts则取消掉
-							log.Debugf("realtime模式vad打断下 && 语音时长超过%d ms 如果此时有正在进行的llm和tts则取消掉", continuousVoiceDuration)
-							state.AfterAsrSessionCtx.CancelWithReason("ASRManager.ProcessVadAudio: realtime_mode=1 VAD interrupt")
-							if a.session != nil {
-								a.session.InterruptAndClearTTSQueue()
+							if a.session != nil && a.session.isRealtimeMcpAudioGateActive() {
+								log.Debugf("设备 %s realtime媒体播放门控激活，跳过VAD打断", state.DeviceID)
+								hasTriggeredCancel = true
+							} else {
+								//realtime模式下, 如果此时有正在进行的llm和tts则取消掉
+								log.Debugf("realtime模式vad打断下 && 语音时长超过%d ms 如果此时有正在进行的llm和tts则取消掉", continuousVoiceDuration)
+								if a.session != nil {
+									a.session.StopAssistantOutputAfterAsrWithReason(true, "ASRManager.ProcessVadAudio realtime_mode=1 VAD interrupt")
+								} else {
+									state.AfterAsrSessionCtx.CancelWithReason("ASRManager.ProcessVadAudio: realtime_mode=1 VAD interrupt")
+								}
+								hasTriggeredCancel = true // 标记为已触发
 							}
-							hasTriggeredCancel = true // 标记为已触发
 						}
 					}
 				} else {
@@ -431,9 +440,16 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context) {
 											peekResult.Confidence,
 											peekResult.Threshold,
 										)
+										if a.session != nil && a.session.isRealtimeMcpAudioGateActive() {
+											log.Debugf("设备 %s realtime媒体播放门控激活，跳过speaker peek打断", state.DeviceID)
+											return
+										}
 										a.session.MarkTurnSpeakerInterrupted()
-										state.AfterAsrSessionCtx.CancelWithReason("ASRManager.ProcessVadAudio: realtime_mode=3 speaker peek interrupt")
-										a.session.InterruptAndClearTTSQueue()
+										if a.session != nil {
+											a.session.StopAssistantOutputAfterAsrWithReason(true, "ASRManager.ProcessVadAudio realtime_mode=3 speaker peek interrupt")
+										} else {
+											state.AfterAsrSessionCtx.CancelWithReason("ASRManager.ProcessVadAudio: realtime_mode=3 speaker peek interrupt")
+										}
 									}(requestID)
 								}
 							}
@@ -775,9 +791,10 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 					}
 					if shouldInterrupt {
 						log.Debugf("OnListenStart realtime模式下, 停止当前的llm和tts")
-						state.AfterAsrSessionCtx.CancelWithReason("ASRManager.StartAsrRecognitionLoop: realtime_mode=2 ASR result interrupt")
 						if a.session != nil {
-							a.session.InterruptAndClearTTSQueue()
+							a.session.StopAssistantOutputAfterAsrWithReason(true, "ASRManager.StartAsrRecognitionLoop realtime_mode=2 ASR result interrupt")
+						} else {
+							state.AfterAsrSessionCtx.CancelWithReason("ASRManager.StartAsrRecognitionLoop: realtime_mode=2 ASR result interrupt")
 						}
 					}
 				}
@@ -1025,6 +1042,25 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 			}
 		}
 	}()
+}
+
+func trimFirstSpeechAudio(allData []float32, currentFrameSamples, sampleRate, channels int) []float32 {
+	if len(allData) == 0 {
+		return nil
+	}
+	if currentFrameSamples <= 0 || currentFrameSamples > len(allData) || sampleRate <= 0 || channels <= 0 {
+		return allData
+	}
+
+	maxPreSpeechSamples := sampleRate * channels * maxFirstSpeechPreAudioMs / 1000
+	keepSamples := currentFrameSamples + maxPreSpeechSamples
+	if keepSamples >= len(allData) {
+		return allData
+	}
+
+	audio := make([]float32, keepSamples)
+	copy(audio, allData[len(allData)-keepSamples:])
+	return audio
 }
 
 // getSpeakerResult 获取暂存的声纹结果（带超时）

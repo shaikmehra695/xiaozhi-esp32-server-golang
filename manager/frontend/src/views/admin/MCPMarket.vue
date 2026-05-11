@@ -1,10 +1,5 @@
 <template>
   <div class="mcp-market-page">
-    <div class="page-header">
-      <h2>MCP市场</h2>
-      <p class="subtitle">连接多个MCP市场并导入可用的SSE/StreamableHTTP服务</p>
-    </div>
-
     <el-tabs v-model="activeTab" class="market-tabs">
       <el-tab-pane name="discover">
         <template #label>
@@ -996,21 +991,6 @@ onMounted(async () => {
 <style scoped>
 .mcp-market-page {
   padding: 20px;
-}
-
-.page-header {
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  color: #1f2937;
-}
-
-.subtitle {
-  margin-top: 6px;
-  color: #6b7280;
-  font-size: 14px;
 }
 
 .market-tabs {

@@ -1,15 +1,14 @@
 <template>
   <div class="roles-page">
-    <div class="page-header">
-      <h2>全局角色管理</h2>
+    <div class="page-actions">
       <el-button type="primary" @click="showCreateDialog = true">
         <el-icon><Plus /></el-icon>
         创建全局角色
       </el-button>
     </div>
 
-    <el-row :gutter="12" class="roles-grid" v-loading="loading">
-      <el-col :xs="24" :sm="12" :lg="8" v-for="role in roles" :key="role.id" class="role-col">
+    <div class="roles-grid" v-loading="loading">
+      <div v-for="role in roles" :key="role.id" class="role-col">
         <el-card class="role-card" shadow="hover">
           <template #header>
             <div class="card-header">
@@ -63,8 +62,8 @@
             </div>
           </div>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
     <el-empty v-if="!loading && roles.length === 0" description="暂无全局角色，点击右上角创建">
       <el-button type="primary" @click="showCreateDialog = true">创建第一个全局角色</el-button>
@@ -198,7 +197,7 @@
                   :value="voice.value"
                 >
                   <span>{{ voice.label }}</span>
-                  <span style="color: #8492a6; font-size: 13px; margin-left: 8px;">{{ voice.value }}</span>
+                  <span class="apple-option-value">{{ voice.value }}</span>
                 </el-option>
               </el-select>
               <div class="form-tip">
@@ -524,20 +523,21 @@ onMounted(() => {
   padding: 20px;
 }
 
-.page-header {
+.page-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 20px;
 }
 
-.page-header h2 {
-  margin: 0;
-  color: #333;
-}
-
 .roles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 340px));
+  gap: 12px;
   align-items: stretch;
+  justify-content: flex-start;
 }
 
 .role-col {
@@ -546,9 +546,8 @@ onMounted(() => {
 }
 
 .role-card {
-  margin-bottom: 20px;
   width: 100%;
-  max-width: 440px;
+  max-width: 340px;
   border-radius: 12px;
   border: 1px solid #ebeef5;
   transition: transform 0.2s ease, box-shadow 0.2s ease;

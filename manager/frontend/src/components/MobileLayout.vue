@@ -36,6 +36,7 @@
         </div>
         <van-cell-group inset>
           <van-cell title="更多功能" is-link @click="handleGoMore" />
+          <van-cell v-if="!authStore.isAdmin" title="API Token" is-link @click="handleGoApiTokens" />
           <van-cell v-if="authStore.isAdmin" title="配置向导" is-link @click="handleGoConfigWizard" />
           <van-cell title="退出登录" is-link @click="handleLogout" />
         </van-cell-group>
@@ -66,7 +67,7 @@ const pageTitle = computed(() => {
 
 // 是否显示返回按钮（非首页且不在标签栏页面时显示）
 const showBack = computed(() => {
-  const hideBackPages = ['/dashboard', '/console', '/agents', '/user/speakers', '/more', '/login']
+  const hideBackPages = ['/dashboard', '/agents', '/user/speakers', '/more', '/login']
   const currentPath = route.path
   return !hideBackPages.some(path => currentPath === path || currentPath.startsWith(path + '/'))
 })
@@ -105,6 +106,11 @@ const handleGoMore = () => {
   showUserMenu.value = false
 }
 
+const handleGoApiTokens = () => {
+  router.push('/user/api-tokens')
+  showUserMenu.value = false
+}
+
 const handleGoConfigWizard = () => {
   router.push('/admin/config-wizard')
   showUserMenu.value = false
@@ -139,7 +145,9 @@ watch(
 <style scoped>
 .mobile-layout {
   height: 100dvh;
-  background-color: #f7f8fa;
+  background:
+    radial-gradient(circle at top left, rgba(0, 122, 255, 0.08), transparent 28%),
+    linear-gradient(180deg, #fbfcfe 0%, var(--apple-bg) 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -154,7 +162,7 @@ watch(
 }
 
 .mobile-content.with-tabbar {
-  padding-bottom: calc(50px + env(safe-area-inset-bottom)); /* 为底部标签栏留出空间 */
+  padding-bottom: calc(84px + env(safe-area-inset-bottom));
 }
 
 /* 页面切换动画 */
@@ -173,25 +181,29 @@ watch(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  border-radius: 12px;
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--apple-primary);
+  font-size: 16px;
   line-height: 1;
 }
 
-/* 用户菜单样式 */
 .user-menu {
-  padding: 10px 0;
+  padding: 4px 0 10px;
 }
 
 .user-info {
   display: flex;
   align-items: center;
-  padding: 20px;
+  padding: 12px 16px 18px;
   margin-bottom: 16px;
 }
 
 .user-info .van-icon {
   margin-right: 16px;
-  color: #409EFF;
+  color: var(--apple-primary);
 }
 
 .user-details {
@@ -200,17 +212,22 @@ watch(
 
 .username {
   font-size: 18px;
-  font-weight: 500;
-  color: #323233;
+  font-weight: 700;
+  color: var(--apple-text);
   margin-bottom: 4px;
 }
 
 .user-role {
   font-size: 14px;
-  color: #969799;
+  color: var(--apple-text-secondary);
 }
 
 :deep(.van-popup) {
-  border-radius: 12px 12px 0 0;
+  border-radius: 24px 24px 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+}
+
+:deep(.van-cell-group--inset) {
+  margin: 0;
 }
 </style>

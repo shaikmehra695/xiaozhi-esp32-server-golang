@@ -333,6 +333,17 @@ func GetWsEndpointMcpTools(agentId string) (map[string]tool.InvokableTool, error
 	return mcpClientPool.GetWsEndpointMcpTools(agentId)
 }
 
+func GetWsEndpointConnectionStatus(agentId string) (bool, int) {
+	if strings.TrimSpace(agentId) == "" {
+		return false, 0
+	}
+	client := mcpClientPool.GetMcpClient(agentId)
+	if client == nil {
+		return false, 0
+	}
+	return client.GetWsEndpointConnectionStatus()
+}
+
 // GetReportedToolsByDeviceID 获取设备通过 Iot over MCP 上报的工具。
 // 控制台设备维度仅返回 websocket / mqtt_udp(udp) transport 下的工具，不混入 ws endpoint 等其它类型。
 func GetReportedToolsByDeviceID(deviceId string) (map[string]tool.InvokableTool, error) {
@@ -433,8 +444,7 @@ func GetReportedToolByAgentIDAndName(agentId, toolName string) (tool.InvokableTo
 		return nil, false
 	}
 
-	invokable, ok := reportedTools[toolName]
-	return invokable, ok
+	return findInvokableToolByName(reportedTools, toolName)
 }
 
 func RawCallReportedToolByDeviceID(deviceId, toolName string, arguments map[string]interface{}) (string, bool, error) {

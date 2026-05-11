@@ -1,221 +1,229 @@
 <template>
-  <div class="dashboard">
-    <el-row :gutter="20">
-      <el-col :span="6" v-if="authStore.isAdmin">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon">
-              <el-icon size="40" color="#409EFF"><User /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-number">{{ stats.totalUsers }}</div>
-              <div class="stat-label">总用户数</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      
-      <el-col :span="authStore.isAdmin ? 6 : 8">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon">
-              <el-icon size="40" color="#67C23A"><Monitor /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-number">{{ stats.totalDevices }}</div>
-              <div class="stat-label">{{ authStore.isAdmin ? '设备总数' : '我的设备' }}</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      
-      <el-col :span="authStore.isAdmin ? 6 : 8">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon">
-              <el-icon size="40" color="#E6A23C"><Cpu /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-number">{{ stats.totalAgents }}</div>
-              <div class="stat-label">{{ authStore.isAdmin ? '智能体数量' : '我的智能体' }}</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      
-      <el-col :span="authStore.isAdmin ? 6 : 8">
-        <el-card class="stat-card">
-          <div class="stat-content">
-            <div class="stat-icon">
-              <el-icon size="40" color="#F56C6C"><Connection /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-number">{{ stats.onlineDevices }}</div>
-              <div class="stat-label">在线设备</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-    
-    <!-- 服务地址（紧凑） + OTA 测试 -->
-    <el-card class="address-card address-card-compact" v-if="authStore.isAdmin" style="margin: 20px 0;">
-      <template #header>
-        <div class="config-header address-card-header">
-          <span>
-            <el-icon size="16" color="#409EFF"><Link /></el-icon>
-            服务地址
+  <div class="dashboard-page">
+    <section class="stats-grid">
+      <article class="metric-card">
+        <div class="metric-top">
+          <span class="metric-icon users">
+            <el-icon><User /></el-icon>
           </span>
-          <el-button type="warning" size="small" :loading="otaTestLoading" @click="runOtaTest">
-            OTA 测试
-          </el-button>
+          <span class="metric-trend">{{ authStore.isAdmin ? '全局用户' : '关联账户' }}</span>
         </div>
-      </template>
-      <div v-loading="addressLoading" class="address-compact">
-        <template v-if="!addressLoading && (serviceAddress.otaUrl || serviceAddress.wsUrl)">
-          <div class="address-line">
-            <span class="address-tag">OTA</span>
-            <span class="address-text" :title="serviceAddress.otaUrl">{{ serviceAddress.otaUrl || '—' }}</span>
-            <el-button v-if="serviceAddress.otaUrl" link type="primary" size="small" :icon="CopyDocument" @click="copyAddress(serviceAddress.otaUrl)" />
-          </div>
-          <div class="address-line">
-            <span class="address-tag">WS</span>
-            <span class="address-text" :title="serviceAddress.wsUrl">{{ serviceAddress.wsUrl || '—' }}</span>
-            <el-button v-if="serviceAddress.wsUrl" link type="primary" size="small" :icon="CopyDocument" @click="copyAddress(serviceAddress.wsUrl)" />
-          </div>
-          <template v-if="serviceAddress.mqttEndpoint">
-            <div class="address-line">
-              <span class="address-tag">MQTT</span>
-              <span class="address-text" :title="serviceAddress.mqttEndpoint">{{ serviceAddress.mqttEndpoint }}</span>
-              <el-button link type="primary" size="small" :icon="CopyDocument" @click="copyAddress(serviceAddress.mqttEndpoint)" />
-            </div>
-          </template>
-          <template v-if="serviceAddress.udpAddress">
-            <div class="address-line">
-              <span class="address-tag">UDP</span>
-              <span class="address-text" :title="serviceAddress.udpAddress">{{ serviceAddress.udpAddress }}</span>
-              <el-button link type="primary" size="small" :icon="CopyDocument" @click="copyAddress(serviceAddress.udpAddress)" />
-            </div>
-          </template>
-          <div v-if="otaTestResult !== null" class="ota-test-block">
-            <span class="address-tag">OTA 接口返回</span>
-            <pre class="ota-test-pre">{{ otaTestResult }}</pre>
-          </div>
-        </template>
-        <div v-else-if="!addressLoading" class="address-empty">暂无 OTA 配置</div>
-      </div>
-    </el-card>
+        <strong>{{ authStore.isAdmin ? stats.totalUsers : 1 }}</strong>
+        <p>{{ authStore.isAdmin ? '总用户数' : '当前登录账户' }}</p>
+      </article>
 
-    <!-- 配置管理卡片 - 放在统计数据和系统信息之间 -->
-    <el-card class="config-card" v-if="authStore.isAdmin" style="margin: 20px 0;">
-      <template #header>
-        <div class="config-header">
-          <el-icon size="18" color="#409EFF"><Setting /></el-icon>
-          <span>配置管理</span>
+      <article class="metric-card">
+        <div class="metric-top">
+          <span class="metric-icon devices">
+            <el-icon><Monitor /></el-icon>
+          </span>
+          <span class="metric-trend">在线 {{ stats.onlineDevices }}</span>
         </div>
-      </template>
-      <div class="config-actions">
-        <el-button
-          type="primary"
-          @click="$router.push('/admin/config-wizard')"
-          class="config-btn"
-        >
-          <el-icon><Guide /></el-icon>
-          配置向导
-        </el-button>
-        <el-button 
-          type="primary" 
-          @click="exportConfig"
-          class="config-btn"
-        >
-          <el-icon><Download /></el-icon>
-          导出配置
-        </el-button>
-        <el-button 
-          type="success" 
-          @click="importConfig"
-          class="config-btn"
-        >
-           <el-icon><Upload /></el-icon>
-           导入配置
-           <div class="btn-tip">支持YAML/JSON</div>
-         </el-button>
-      </div>
-      <input
-        ref="fileInput"
-        type="file"
-        accept=".yaml,.yml,.json"
-        style="display: none"
-        @change="handleFileChange"
-      />
-    </el-card>
-    
-    <el-row :gutter="20" style="margin-top: 20px;">
-      <el-col :span="12">
-        <el-card>
+        <strong>{{ stats.totalDevices }}</strong>
+        <p>{{ authStore.isAdmin ? '设备总数' : '我的设备' }}</p>
+      </article>
+
+      <article class="metric-card">
+        <div class="metric-top">
+          <span class="metric-icon agents">
+            <el-icon><Cpu /></el-icon>
+          </span>
+          <span class="metric-trend">活跃中</span>
+        </div>
+        <strong>{{ stats.totalAgents }}</strong>
+        <p>{{ authStore.isAdmin ? '智能体数量' : '我的智能体' }}</p>
+      </article>
+
+      <article class="metric-card">
+        <div class="metric-top">
+          <span class="metric-icon status">
+            <el-icon><Connection /></el-icon>
+          </span>
+          <span class="metric-trend">实时监测</span>
+        </div>
+        <strong>{{ stats.onlineDevices }}</strong>
+        <p>在线设备</p>
+      </article>
+    </section>
+
+    <section class="dashboard-grid" :class="{ compact: !authStore.isAdmin }">
+      <div class="dashboard-main">
+        <el-card v-if="authStore.isAdmin" class="dashboard-card service-card">
           <template #header>
             <div class="card-header">
-              <span>系统信息</span>
+              <div>
+                <p class="card-eyebrow">SERVICE ADDRESS</p>
+                <h3>服务地址</h3>
+              </div>
+              <el-button type="warning" size="small" :loading="otaTestLoading" @click="runOtaTest">
+                OTA 测试
+              </el-button>
             </div>
           </template>
-          <div class="system-info">
-            <div class="info-item">
-              <span class="info-label">系统版本：</span>
-              <span class="info-value">v1.0.0</span>
+
+          <div v-loading="addressLoading" class="address-card-content">
+            <template v-if="!addressLoading && (serviceAddress.otaUrl || serviceAddress.wsUrl)">
+              <div class="address-list">
+                <div class="address-row">
+                  <span class="address-label">OTA</span>
+                  <span class="address-value" :title="serviceAddress.otaUrl">{{ serviceAddress.otaUrl || '—' }}</span>
+                  <el-button v-if="serviceAddress.otaUrl" link type="primary" :icon="CopyDocument" @click="copyAddress(serviceAddress.otaUrl)" />
+                </div>
+                <div class="address-row">
+                  <span class="address-label">WS</span>
+                  <span class="address-value" :title="serviceAddress.wsUrl">{{ serviceAddress.wsUrl || '—' }}</span>
+                  <el-button v-if="serviceAddress.wsUrl" link type="primary" :icon="CopyDocument" @click="copyAddress(serviceAddress.wsUrl)" />
+                </div>
+                <div v-if="serviceAddress.mqttEndpoint" class="address-row">
+                  <span class="address-label">MQTT</span>
+                  <span class="address-value" :title="serviceAddress.mqttEndpoint">{{ serviceAddress.mqttEndpoint }}</span>
+                  <el-button link type="primary" :icon="CopyDocument" @click="copyAddress(serviceAddress.mqttEndpoint)" />
+                </div>
+                <div v-if="serviceAddress.udpAddress" class="address-row">
+                  <span class="address-label">UDP</span>
+                  <span class="address-value" :title="serviceAddress.udpAddress">{{ serviceAddress.udpAddress }}</span>
+                  <el-button link type="primary" :icon="CopyDocument" @click="copyAddress(serviceAddress.udpAddress)" />
+                </div>
+              </div>
+
+              <div v-if="otaTestResult !== null" class="ota-test-block">
+                <span class="apple-chip is-primary">OTA 返回</span>
+                <pre class="ota-test-pre">{{ otaTestResult }}</pre>
+              </div>
+            </template>
+
+            <div v-else-if="!addressLoading" class="empty-inline">暂无 OTA 配置</div>
+          </div>
+        </el-card>
+
+        <el-card v-if="authStore.isAdmin" class="dashboard-card">
+          <template #header>
+            <div class="card-header">
+              <div>
+                <p class="card-eyebrow">CONFIGURATION</p>
+                <h3>配置管理</h3>
+              </div>
             </div>
-            <div class="info-item">
-              <span class="info-label">运行时间：</span>
-              <span class="info-value">{{ uptime }}</span>
+          </template>
+
+          <div class="config-actions">
+            <button class="action-card action-primary" type="button" @click="$router.push('/admin/config-wizard')">
+              <span class="action-icon"><el-icon><Guide /></el-icon></span>
+              <span class="action-copy">
+                <strong>配置向导</strong>
+                <small>从统一流程完成首次或增量配置</small>
+              </span>
+            </button>
+
+            <button class="action-card" type="button" @click="exportConfig">
+              <span class="action-icon"><el-icon><Download /></el-icon></span>
+              <span class="action-copy">
+                <strong>导出配置</strong>
+                <small>下载当前有效配置作为备份</small>
+              </span>
+            </button>
+
+            <button class="action-card" type="button" @click="importConfig">
+              <span class="action-icon"><el-icon><Upload /></el-icon></span>
+              <span class="action-copy">
+                <strong>导入配置</strong>
+                <small>支持 YAML / JSON 的快速导入</small>
+              </span>
+            </button>
+          </div>
+
+          <input
+            ref="fileInput"
+            type="file"
+            accept=".yaml,.yml,.json"
+            style="display: none"
+            @change="handleFileChange"
+          />
+        </el-card>
+      </div>
+
+      <div class="dashboard-side">
+        <el-card class="dashboard-card info-card">
+          <template #header>
+            <div class="card-header">
+              <div>
+                <p class="card-eyebrow">SYSTEM</p>
+                <h3>系统信息</h3>
+              </div>
             </div>
-            <div class="info-item">
-              <span class="info-label">当前用户：</span>
-              <span class="info-value">{{ authStore.user?.username }}</span>
+          </template>
+
+          <div class="info-list">
+            <div class="info-row">
+              <span>系统版本</span>
+              <strong>v1.0.0</strong>
             </div>
-            <div class="info-item">
-              <span class="info-label">用户角色：</span>
-              <el-tag :type="authStore.isAdmin ? 'danger' : 'primary'">
+            <div class="info-row">
+              <span>程序启动时间</span>
+              <strong>{{ programStartedAt }}</strong>
+            </div>
+            <div class="info-row">
+              <span>当前用户</span>
+              <strong>{{ authStore.user?.username || '—' }}</strong>
+            </div>
+            <div class="info-row">
+              <span>用户角色</span>
+              <el-tag :type="authStore.isAdmin ? 'danger' : 'primary'" effect="light">
                 {{ authStore.isAdmin ? '管理员' : '普通用户' }}
               </el-tag>
             </div>
           </div>
         </el-card>
-      </el-col>
-      
-      <el-col :span="12">
-        <el-card>
+
+        <el-card class="dashboard-card quick-card">
           <template #header>
             <div class="card-header">
-              <span>快速操作</span>
+              <div>
+                <p class="card-eyebrow">SHORTCUTS</p>
+                <h3>快速操作</h3>
+              </div>
             </div>
           </template>
+
           <div class="quick-actions">
             <template v-if="authStore.isAdmin">
-              <el-button type="primary" @click="$router.push('/admin/users')">
-                <el-icon><User /></el-icon>
-                用户管理
-              </el-button>
-              <el-button type="success" @click="$router.push('/admin/llm-config')">
-                <el-icon><Setting /></el-icon>
-                LLM配置
-              </el-button>
-              <el-button type="warning" @click="$router.push('/admin/vad-config')">
-                <el-icon><Setting /></el-icon>
-                VAD配置
-              </el-button>
+              <button class="quick-action" type="button" @click="$router.push('/admin/users')">
+                <span class="quick-action-icon"><el-icon><User /></el-icon></span>
+                <span>
+                  <strong>用户管理</strong>
+                  <small>查看账户、权限和状态</small>
+                </span>
+              </button>
+              <button class="quick-action" type="button" @click="$router.push('/admin/llm-config')">
+                <span class="quick-action-icon"><el-icon><Setting /></el-icon></span>
+                <span>
+                  <strong>LLM 配置</strong>
+                  <small>调整模型接入、超参与策略</small>
+                </span>
+              </button>
+              <button class="quick-action" type="button" @click="$router.push('/admin/vad-config')">
+                <span class="quick-action-icon"><el-icon><Cpu /></el-icon></span>
+                <span>
+                  <strong>VAD 配置</strong>
+                  <small>管理语音活动检测与实时性</small>
+                </span>
+              </button>
             </template>
+
             <template v-else>
-              <el-button type="primary" @click="$router.push('/agents')">
-                <el-icon><Monitor /></el-icon>
-                智能体管理
-              </el-button>
-              <el-text type="info">
-                普通用户主要功能在智能体管理页面
-              </el-text>
+              <button class="quick-action" type="button" @click="$router.push('/agents')">
+                <span class="quick-action-icon"><el-icon><Monitor /></el-icon></span>
+                <span>
+                  <strong>智能体管理</strong>
+                  <small>维护角色设定、绑定设备与测试能力</small>
+                </span>
+              </button>
+              <div class="empty-inline">普通用户的高频操作主要集中在智能体和设备工作台。</div>
             </template>
           </div>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -229,18 +237,15 @@ import {
   Monitor,
   Connection,
   Setting,
-  Plus,
   Download,
   Upload,
   Cpu,
   Guide,
-  Link,
   CopyDocument
 } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 
-// 服务地址（OTA、WS、MQTT、UDP）
 const addressLoading = ref(false)
 const serviceAddress = ref({
   otaUrl: '',
@@ -261,9 +266,7 @@ async function loadServiceAddress() {
     const config = otaList.find(c => c.is_default) || otaList[0]
     if (config?.json_data) {
       const data = JSON.parse(config.json_data || '{}')
-      console.log('[Dashboard] OTA配置数据:', data)
 
-      // 选择环境配置：优先 external，如果为空则使用 test
       let envData = data.external || {}
       const hasExternalWs = envData.websocket?.url
       const hasExternalOta = envData.ota_url
@@ -271,32 +274,28 @@ async function loadServiceAddress() {
         envData = data.test || {}
       }
 
-      // OTA URL：优先使用配置中的 ota_url，没有则从 websocket.url 解析
       let otaUrl = envData.ota_url || ''
       if (!otaUrl) {
         const wsUrl = envData.websocket?.url || ''
         if (wsUrl) {
-          const m = wsUrl.match(/^(wss?):\/\/([^:/]+)(?::(\d+))?/)
-          if (m) {
-            const proto = m[1] === 'wss' ? 'https' : 'http'
-            const port = m[3] || (m[1] === 'wss' ? '443' : '80')
-            otaUrl = `${proto}://${m[2]}:${port}/xiaozhi/ota/`
+          const matched = wsUrl.match(/^(wss?):\/\/([^:/]+)(?::(\d+))?/)
+          if (matched) {
+            const protocol = matched[1] === 'wss' ? 'https' : 'http'
+            const port = matched[3] || (matched[1] === 'wss' ? '443' : '80')
+            otaUrl = `${protocol}://${matched[2]}:${port}/xiaozhi/ota/`
           }
         }
       }
       serviceAddress.value.otaUrl = otaUrl
-
-      // WebSocket URL
       serviceAddress.value.wsUrl = envData.websocket?.url || ''
 
-      // MQTT endpoint
       const mqttEnabled = envData.mqtt?.enable
       const endpoint = envData.mqtt?.endpoint || ''
       if (mqttEnabled && endpoint) {
         serviceAddress.value.mqttEndpoint = endpoint
       }
     }
-    // UDP address
+
     const udpList = udpRes.data?.data || []
     const udpConfig = udpList.find(c => c.is_default) || udpList[0]
     if (udpConfig?.json_data) {
@@ -323,18 +322,17 @@ function copyAddress(text) {
   })
 }
 
-// 首页 OTA 测试（展示 OTA 接口返回内容）
 const otaTestLoading = ref(false)
 const otaTestResult = ref(null)
 
 function formatOtaResponseDisplay(str) {
   if (str == null || str === '') return ''
-  const s = String(str).trim()
-  if (!s) return ''
+  const content = String(str).trim()
+  if (!content) return ''
   try {
-    return JSON.stringify(JSON.parse(s), null, 2)
+    return JSON.stringify(JSON.parse(content), null, 2)
   } catch {
-    return s
+    return content
   }
 }
 
@@ -346,59 +344,39 @@ async function runOtaTest() {
     const data = res.data?.data ?? res.data
     const ota = data?.ota
     if (ota && typeof ota === 'object') {
-      const entry = Object.entries(ota).find(([k]) => !k.startsWith('_'))
+      const entry = Object.entries(ota).find(([key]) => !key.startsWith('_'))
       if (entry) {
-        const [, v] = entry
-
-        // 格式化显示结果
+        const [, value] = entry
         let displayText = ''
 
-        // WebSocket 结果
-        if (v.websocket) {
-          const ws = v.websocket
+        if (value.websocket) {
+          const ws = value.websocket
           displayText += `WebSocket: ${ws.ok ? '✓' : '✗'} ${ws.message}`
-          if (ws.first_packet_ms != null) {
-            displayText += ` (${ws.first_packet_ms}ms)\n`
-          } else {
-            displayText += '\n'
-          }
+          displayText += ws.first_packet_ms != null ? ` (${ws.first_packet_ms}ms)\n` : '\n'
         }
 
-        // MQTT UDP 结果
-        if (v.mqtt_udp) {
-          const mqtt = v.mqtt_udp
+        if (value.mqtt_udp) {
+          const mqtt = value.mqtt_udp
           displayText += `MQTT UDP: ${mqtt.ok ? '✓' : '✗'} ${mqtt.message}`
-          if (mqtt.first_packet_ms != null) {
-            displayText += ` (${mqtt.first_packet_ms}ms)\n`
-          } else {
-            displayText += '\n'
-          }
+          displayText += mqtt.first_packet_ms != null ? ` (${mqtt.first_packet_ms}ms)\n` : '\n'
         }
 
-        // OTA 响应内容（如果有）
-        if (v.ota_response !== undefined && v.ota_response !== '') {
-          displayText += `\n--- OTA 响应 ---\n${formatOtaResponseDisplay(v.ota_response)}`
+        if (value.ota_response !== undefined && value.ota_response !== '') {
+          displayText += `\n--- OTA 响应 ---\n${formatOtaResponseDisplay(value.ota_response)}`
         }
 
         otaTestResult.value = displayText.trim() || '未获取到详细信息'
-
-        // 根据整体结果显示消息
-        const overallOk = v.ok
-        if (overallOk) {
-          ElMessage.success(v.message || 'OTA 测试通过')
-        } else {
-          ElMessage.warning(v.message || 'OTA 测试未通过')
-        }
+        ElMessage[value.ok ? 'success' : 'warning'](value.message || (value.ok ? 'OTA 测试通过' : 'OTA 测试未通过'))
       } else {
         otaTestResult.value = '未获取到 OTA 测试结果'
       }
     } else {
       otaTestResult.value = typeof data === 'string' ? data : JSON.stringify(data || {}, null, 2)
     }
-  } catch (e) {
-    const errorMsg = (e.response?.data && typeof e.response.data === 'object')
-      ? JSON.stringify(e.response.data, null, 2)
-      : (e.response?.data?.message || e.message || '请求失败')
+  } catch (error) {
+    const errorMsg = (error.response?.data && typeof error.response.data === 'object')
+      ? JSON.stringify(error.response.data, null, 2)
+      : (error.response?.data?.message || error.message || '请求失败')
     otaTestResult.value = errorMsg
     ElMessage.error('OTA 测试请求失败')
   } finally {
@@ -413,7 +391,7 @@ const stats = ref({
   onlineDevices: 0
 })
 
-const uptime = ref('0天 0小时 0分钟')
+const programStartedAt = ref('—')
 const fileInput = ref(null)
 
 onMounted(async () => {
@@ -421,18 +399,8 @@ onMounted(async () => {
   if (authStore.isAdmin) {
     loadServiceAddress()
   }
-  
-  // 模拟运行时间
-  const startTime = new Date('2024-01-01')
-  const now = new Date()
-  const diff = now - startTime
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-  uptime.value = `${days}天 ${hours}小时 ${minutes}分钟`
 })
 
-// 加载统计数据
 const loadStats = async () => {
   try {
     const response = await api.get('/dashboard/stats')
@@ -442,39 +410,40 @@ const loadStats = async () => {
       totalAgents: response.data.totalAgents || 0,
       onlineDevices: response.data.onlineDevices || 0
     }
+    programStartedAt.value = response.data?.programStartedAt
+      ? new Date(response.data.programStartedAt).toLocaleString('zh-CN')
+      : '—'
   } catch (error) {
     console.error('加载统计数据失败:', error)
-    // 使用默认值
     stats.value = {
       totalUsers: 0,
       totalDevices: 0,
       totalAgents: 0,
       onlineDevices: 0
     }
+    programStartedAt.value = '—'
   }
 }
 
-// 导出配置
 const exportConfig = async () => {
   try {
     const response = await fetch('/api/admin/configs/export', {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${authStore.token}`
+        Authorization: `Bearer ${authStore.token}`
       }
     })
-    
+
     if (response.ok) {
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'config.yaml'
-      document.body.appendChild(a)
-      a.click()
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'config.yaml'
+      document.body.appendChild(link)
+      link.click()
       window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
-      
+      document.body.removeChild(link)
       ElMessage.success('配置导出成功')
     } else {
       ElMessage.error('配置导出失败')
@@ -485,37 +454,34 @@ const exportConfig = async () => {
   }
 }
 
-// 导入配置
 const importConfig = () => {
   fileInput.value.click()
 }
 
-// 处理文件选择
 const handleFileChange = async (event) => {
   const file = event.target.files[0]
   if (!file) return
-  
-  // 检查文件格式
+
   const validExtensions = ['.yaml', '.yml', '.json']
   const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'))
-  
+
   if (!validExtensions.includes(fileExtension)) {
-    ElMessage.error('请选择YAML或JSON格式的文件')
+    ElMessage.error('请选择 YAML 或 JSON 格式的文件')
     return
   }
-  
+
   const formData = new FormData()
   formData.append('file', file)
-  
+
   try {
     const response = await fetch('/api/admin/configs/import', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${authStore.token}`
+        Authorization: `Bearer ${authStore.token}`
       },
       body: formData
     })
-    
+
     if (response.ok) {
       ElMessage.success('配置导入成功')
     } else {
@@ -526,232 +492,304 @@ const handleFileChange = async (event) => {
     console.error('导入配置失败:', error)
     ElMessage.error('配置导入失败')
   }
-  
-  // 清空文件输入
+
   event.target.value = ''
 }
 </script>
 
 <style scoped>
-.dashboard {
-  padding: 0;
+.dashboard-page {
+  display: grid;
+  gap: 20px;
+}
+.card-eyebrow {
+  margin: 0;
+  color: var(--apple-text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.config-card {
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
 }
 
-.config-header {
+.metric-card {
+  padding: 22px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: var(--apple-shadow-md);
+}
+
+.metric-top {
   display: flex;
-  align-items: center;
-  font-size: 16px;
-  font-weight: 600;
-  color: #303133;
-}
-
-.config-header .el-icon {
-  margin-right: 8px;
-}
-
-.address-card {
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
-}
-
-.address-card-compact .el-card__body {
-  padding: 8px 16px 12px;
-}
-
-.address-card-header {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-}
-
-.address-card-header .el-icon {
-  margin-right: 6px;
-  vertical-align: -0.2em;
-}
-
-.address-compact {
-  min-height: 32px;
-}
-
-.address-line {
-  display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-  font-size: 13px;
+  gap: 12px;
+  margin-bottom: 18px;
 }
 
-.address-line:last-of-type {
-  margin-bottom: 0;
+.metric-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
 }
 
-.address-tag {
-  flex-shrink: 0;
-  width: 48px;
-  color: #909399;
+.metric-icon.users {
+  color: var(--apple-primary);
+  background: var(--apple-primary-soft);
 }
 
-.address-text {
-  flex: 1;
+.metric-icon.devices {
+  color: #176a31;
+  background: var(--apple-success-soft);
+}
+
+.metric-icon.agents {
+  color: #875f00;
+  background: var(--apple-warning-soft);
+}
+
+.metric-icon.status {
+  color: #8a1f19;
+  background: var(--apple-danger-soft);
+}
+
+.metric-trend {
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.metric-card strong {
+  display: block;
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.metric-card p {
+  margin: 10px 0 0;
+  color: var(--apple-text-secondary);
+  font-size: 14px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+  gap: 18px;
+}
+
+.dashboard-grid.compact {
+  grid-template-columns: 1fr 360px;
+}
+
+.dashboard-main,
+.dashboard-side {
+  display: grid;
+  gap: 18px;
+}
+
+.dashboard-card :deep(.el-card__header) {
+  padding-bottom: 18px;
+}
+
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.card-header h3 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+.address-card-content {
+  display: grid;
+  gap: 16px;
+}
+
+.address-list {
+  display: grid;
+  gap: 12px;
+}
+
+.address-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.86);
+  border: 1px solid rgba(229, 229, 234, 0.76);
+}
+
+.address-label {
+  color: var(--apple-text-tertiary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.address-value {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #303133;
+  color: var(--apple-text);
+  font-weight: 500;
 }
 
 .ota-test-block {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #ebeef5;
-}
-
-.ota-test-block .address-tag {
-  display: block;
-  margin-bottom: 4px;
+  display: grid;
+  gap: 10px;
 }
 
 .ota-test-pre {
   margin: 0;
-  padding: 8px;
-  background: #f5f7fa;
-  border-radius: 4px;
+  padding: 16px;
+  border-radius: 18px;
+  background: #f7f9fc;
+  border: 1px solid rgba(229, 229, 234, 0.72);
+  color: #445064;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.6;
   white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 160px;
+  word-break: break-word;
+  max-height: 180px;
   overflow: auto;
 }
 
-.address-empty {
-  color: #909399;
-  font-size: 13px;
-  padding: 4px 0;
+.config-actions,
+.quick-actions {
+  display: grid;
+  gap: 12px;
 }
 
-.config-actions {
+.action-card,
+.quick-action {
+  width: 100%;
+  padding: 16px;
+  border: 1px solid rgba(229, 229, 234, 0.76);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.9);
   display: flex;
-  gap: 15px;
-  padding: 10px 0;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
 }
 
-.config-btn {
-  flex: 1;
-  display: flex;
+.action-card:hover,
+.quick-action:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--apple-shadow-sm);
+  border-color: rgba(0, 122, 255, 0.18);
+}
+
+.action-primary {
+  background: linear-gradient(180deg, rgba(0, 122, 255, 0.12) 0%, rgba(0, 122, 255, 0.06) 100%);
+}
+
+.action-icon,
+.quick-action-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 12px 20px;
-  border-radius: 6px;
-  transition: all 0.3s ease;
-  font-weight: 500;
+  background: rgba(0, 122, 255, 0.1);
+  color: var(--apple-primary);
+  font-size: 18px;
+  flex: none;
 }
 
-.config-btn .el-icon {
-  margin-right: 8px;
-  font-size: 16px;
-}
-
-.config-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.config-btn {
-  position: relative;
-}
-
-.btn-tip {
-  position: absolute;
-  bottom: -20px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 10px;
-  color: #909399;
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.config-btn:hover .btn-tip {
-  opacity: 1;
-}
-
-.stat-card {
-  height: 120px;
-}
-
-.stat-content {
-  display: flex;
-  align-items: center;
-  height: 100%;
-}
-
-.stat-icon {
-  margin-right: 20px;
-}
-
-.stat-info {
-  flex: 1;
-}
-
-.stat-number {
-  font-size: 32px;
-  font-weight: bold;
-  color: #333;
-  line-height: 1;
-}
-
-.stat-label {
-  font-size: 14px;
-  color: #666;
-  margin-top: 8px;
-}
-
-.card-header {
-  font-weight: bold;
-  font-size: 16px;
-}
-
-.system-info {
-  padding: 10px 0;
-}
-
-.info-item {
-  display: flex;
-  align-items: center;
-  margin-bottom: 15px;
-}
-
-.info-item:last-child {
-  margin-bottom: 0;
-}
-
-.info-label {
-  width: 100px;
-  color: #666;
-}
-
-.info-value {
-  color: #333;
-  font-weight: 500;
-}
-
-.quick-actions {
+.action-copy,
+.quick-action span:last-child {
   display: flex;
   flex-direction: column;
-  gap: 15px;
-  padding: 10px 0;
+  gap: 4px;
 }
 
-.quick-actions .el-button {
-  justify-content: flex-start;
+.action-copy strong,
+.quick-action strong {
+  font-size: 15px;
+}
+
+.action-copy small,
+.quick-action small {
+  color: var(--apple-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.info-list {
+  display: grid;
+  gap: 12px;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(229, 229, 234, 0.72);
+}
+
+.info-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.info-row span {
+  color: var(--apple-text-secondary);
+  font-size: 14px;
+}
+
+.info-row strong {
+  color: var(--apple-text);
+  font-size: 14px;
+}
+
+.empty-inline {
+  color: var(--apple-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+@media (max-width: 1280px) {
+  .dashboard-grid,
+  .dashboard-grid.compact {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .address-row {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
 }
 </style>

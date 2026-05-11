@@ -62,6 +62,50 @@ func normalizeAgentSpeakerChatMode(mode string) string {
 	}
 }
 
+func findActiveCloneForVoiceModelOverride(base *gorm.DB, provider, ttsConfigID, voiceID string, clone *models.VoiceClone) error {
+	query := base.Where(
+		"voice_clones.tts_config_id = ? AND voice_clones.provider_voice_id = ? AND voice_clones.status = ?",
+		ttsConfigID,
+		voiceID,
+		voiceCloneStatusActive,
+	)
+	if provider == "doubao" {
+		query = query.Where("voice_clones.provider IN ?", []string{"doubao", "doubao_ws"})
+	} else {
+		query = query.Where("voice_clones.provider = ?", provider)
+	}
+	result := query.
+		Order("voice_clones.updated_at DESC, voice_clones.created_at DESC").
+		Order("voice_clones.id").
+		Limit(1).
+		Find(clone)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func getAgentAssistantName(agent models.Agent) string {
+	if nickname := strings.TrimSpace(agent.Nickname); nickname != "" {
+		return nickname
+	}
+	return strings.TrimSpace(agent.Name)
+}
+
+func ensureAgentNickname(agent *models.Agent) {
+	if agent == nil {
+		return
+	}
+	agent.Name = strings.TrimSpace(agent.Name)
+	agent.Nickname = strings.TrimSpace(agent.Nickname)
+	if agent.Nickname == "" {
+		agent.Nickname = agent.Name
+	}
+}
+
 type AdminController struct {
 	DB                  *gorm.DB
 	WebSocketController *WebSocketController
@@ -194,24 +238,23 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 		}
 
 		var clone models.VoiceClone
-		findCloneByScope := func(base *gorm.DB) error {
-			query := base.Where("tts_config_id = ? AND provider_voice_id = ? AND status = ?",
-				ttsConfigID, voiceID, voiceCloneStatusActive)
-			if provider == "doubao" {
-				query = query.Where("provider IN ?", []string{"doubao", "doubao_ws"})
-			} else {
-				query = query.Where("provider = ?", provider)
-			}
-			return query.Order("updated_at DESC, created_at DESC").First(&clone).Error
-		}
-
-		err := findCloneByScope(ac.DB.Model(&models.VoiceClone{}).Where("user_id = ?", device.UserID))
+		err := findActiveCloneForVoiceModelOverride(
+			ac.DB.Model(&models.VoiceClone{}).Where("voice_clones.user_id = ?", device.UserID),
+			provider,
+			ttsConfigID,
+			voiceID,
+			&clone,
+		)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// 回退：允许命中管理员共享给所有人的复刻音色，解决普通用户使用共享音色时模型覆盖缺失问题。
-			err = findCloneByScope(
+			err = findActiveCloneForVoiceModelOverride(
 				ac.DB.Model(&models.VoiceClone{}).
 					Joins("JOIN users ON users.id = voice_clones.user_id").
 					Where("voice_clones.shared_to_all = ? AND users.role = ?", true, "admin"),
+				provider,
+				ttsConfigID,
+				voiceID,
+				&clone,
 			)
 		}
 		if err != nil {
@@ -262,9 +305,9 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 
 			// 使用设备角色的 Prompt
 			response.Prompt = role.Prompt
-			// 替换 {{assistant_name}} 为智能体名称（如果设备有绑定智能体）
+			// 替换 {{assistant_name}} 为智能体昵称（如果设备有绑定智能体）
 			if deviceFound && agent.ID != 0 {
-				response.Prompt = strings.ReplaceAll(response.Prompt, "{{assistant_name}}", agent.Name)
+				response.Prompt = strings.ReplaceAll(response.Prompt, "{{assistant_name}}", getAgentAssistantName(agent))
 			}
 
 			// 使用设备角色的 LLM 配置
@@ -313,7 +356,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 
 		// 使用智能体的 Prompt
 		response.Prompt = agent.CustomPrompt
-		response.Prompt = strings.ReplaceAll(response.Prompt, "{{assistant_name}}", agent.Name)
+		response.Prompt = strings.ReplaceAll(response.Prompt, "{{assistant_name}}", getAgentAssistantName(agent))
 
 		// 使用智能体的 LLM 配置
 		if agent.LLMConfigID != nil && *agent.LLMConfigID != "" {
@@ -408,9 +451,9 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 			ac.DB.Where("type = ? AND is_default = ? AND enabled = ?", "tts", true, true).First(&response.TTS)
 		}
 
-		// 替换 {{assistant_name}} 为智能体名称（如果设备有绑定智能体）
+		// 替换 {{assistant_name}} 为智能体昵称（如果设备有绑定智能体）
 		if deviceFound && agent.ID != 0 {
-			response.Prompt = strings.ReplaceAll(response.Prompt, "{{assistant_name}}", agent.Name)
+			response.Prompt = strings.ReplaceAll(response.Prompt, "{{assistant_name}}", getAgentAssistantName(agent))
 		}
 	}
 
@@ -459,7 +502,7 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 	}
 
 	// 获取Memory默认配置
-	if err := ac.DB.Where("type = ? AND is_default = ? AND enabled = ?", "memory", true, true).First(&response.Memory).Error; err != nil {
+	if result := ac.DB.Where("type = ? AND is_default = ? AND enabled = ?", "memory", true, true).Limit(1).Find(&response.Memory); result.Error != nil || result.RowsAffected == 0 {
 		// 允许没有默认 Memory 配置：显式回退为 nomemo（不启用长记忆）。
 		response.Memory = models.Config{
 			Type:     "memory",
@@ -469,8 +512,8 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 			JsonData: "{}",
 			Enabled:  true,
 		}
-		if err != gorm.ErrRecordNotFound {
-			log.Printf("加载默认Memory配置失败，已回退nomemo: %v", err)
+		if result.Error != nil {
+			log.Printf("加载默认Memory配置失败，已回退nomemo: %v", result.Error)
 		}
 	}
 
@@ -2686,6 +2729,7 @@ func (ac *AdminController) ValidateDeviceCode(c *gin.Context) {
 func (ac *AdminController) CreateDevice(c *gin.Context) {
 	var req struct {
 		UserID     uint   `json:"user_id" binding:"required"`
+		NickName   string `json:"nick_name"`
 		DeviceCode string `json:"device_code"`
 		DeviceName string `json:"device_name"`
 		AgentID    uint   `json:"agent_id"`
@@ -2696,9 +2740,9 @@ func (ac *AdminController) CreateDevice(c *gin.Context) {
 		return
 	}
 
-	// 验证激活码和设备名称至少填一个
+	// 验证激活码和设备标识至少填一个
 	if req.DeviceCode == "" && req.DeviceName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "激活码和设备名称至少填写一个"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "激活码和设备标识至少填写一个"})
 		return
 	}
 
@@ -2708,6 +2752,14 @@ func (ac *AdminController) CreateDevice(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "指定的用户不存在"})
 		return
 	}
+	nickName, err := normalizeDeviceNickName(req.NickName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if nickName == "" {
+		nickName = strings.TrimSpace(req.DeviceName)
+	}
 
 	// 如果提供了激活码，先查找现有设备
 	if req.DeviceCode != "" {
@@ -2715,13 +2767,21 @@ func (ac *AdminController) CreateDevice(c *gin.Context) {
 		if err := ac.DB.Where("device_code = ?", req.DeviceCode).First(&existingDevice).Error; err == nil {
 			// 设备代码已存在，更新设备信息
 			existingDevice.UserID = req.UserID
+			existingDevice.NickName = nickName
+			updates := map[string]interface{}{
+				"user_id":   existingDevice.UserID,
+				"nick_name": existingDevice.NickName,
+				"agent_id":  req.AgentID,
+				"activated": true,
+			}
 			if req.DeviceName != "" {
 				existingDevice.DeviceName = req.DeviceName
+				updates["device_name"] = existingDevice.DeviceName
 			}
 			existingDevice.AgentID = req.AgentID // 更新智能体ID
 			existingDevice.Activated = true      // 激活设备
 
-			if err := ac.DB.Save(&existingDevice).Error; err != nil {
+			if err := updateDeviceColumns(ac.DB, existingDevice.ID, updates); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "更新设备失败"})
 				return
 			}
@@ -2742,6 +2802,7 @@ func (ac *AdminController) CreateDevice(c *gin.Context) {
 	// 创建设备
 	device := models.Device{
 		UserID:     req.UserID,
+		NickName:   nickName,
 		DeviceCode: req.DeviceCode,
 		DeviceName: req.DeviceName,
 		AgentID:    req.AgentID, // 使用请求中的智能体ID
@@ -2770,6 +2831,7 @@ func (ac *AdminController) UpdateDevice(c *gin.Context) {
 
 	var updateData struct {
 		UserID     uint   `json:"user_id"`
+		NickName   string `json:"nick_name"`
 		DeviceCode string `json:"device_code"`
 		DeviceName string `json:"device_name"`
 		Activated  bool   `json:"activated"`
@@ -2780,15 +2842,28 @@ func (ac *AdminController) UpdateDevice(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	nickName, err := normalizeDeviceNickName(updateData.NickName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	// 更新设备信息
 	device.UserID = updateData.UserID
+	device.NickName = nickName
 	device.DeviceCode = updateData.DeviceCode
 	device.DeviceName = updateData.DeviceName
 	device.Activated = updateData.Activated
 	device.AgentID = updateData.AgentID
 
-	if err := ac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(ac.DB, device.ID, map[string]interface{}{
+		"user_id":     device.UserID,
+		"nick_name":   device.NickName,
+		"device_code": device.DeviceCode,
+		"device_name": device.DeviceName,
+		"activated":   device.Activated,
+		"agent_id":    device.AgentID,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新设备失败"})
 		return
 	}
@@ -2823,6 +2898,7 @@ func (ac *AdminController) GetAgents(c *gin.Context) {
 	var result []AgentWithConfigs
 	for _, agent := range agents {
 		agentWithConfig := AgentWithConfigs{Agent: agent}
+		ensureAgentNickname(&agentWithConfig.Agent)
 
 		// 加载LLM配置
 		if agent.LLMConfigID != nil && *agent.LLMConfigID != "" {
@@ -2984,17 +3060,20 @@ func (ac *AdminController) GetAgentOpenClawEndpoint(c *gin.Context) {
 		return
 	}
 
-	endpoint, err := GenerateAgentOpenClawEndpoint(ac.DB, agentID, userID, ac.EndpointAuthToken)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	data := gin.H{
-		"endpoint":  endpoint,
+		"endpoint":  "",
 		"status":    "unknown",
 		"connected": false,
 	}
+
+	endpoint, err := GenerateAgentOpenClawEndpoint(ac.DB, agentID, userID, ac.EndpointAuthToken)
+	if err != nil {
+		data["status_message"] = err.Error()
+		c.JSON(http.StatusOK, gin.H{"data": data})
+		return
+	}
+	data["endpoint"] = endpoint
+
 	if ac.WebSocketController == nil {
 		data["status_message"] = "websocket controller unavailable"
 		c.JSON(http.StatusOK, gin.H{"data": data})
@@ -3180,6 +3259,15 @@ func (ac *AdminController) CreateAgent(c *gin.Context) {
 
 	agent.MemoryMode = normalizeAgentMemoryMode(agent.MemoryMode)
 	agent.SpeakerChatMode = normalizeAgentSpeakerChatMode(agent.SpeakerChatMode)
+	ensureAgentNickname(&agent)
+	if agent.Nickname == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入智能体昵称"})
+		return
+	}
+	if len([]rune(agent.Nickname)) > 50 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体昵称不能超过50个字符"})
+		return
+	}
 	normalizedMCPServiceNames, err := ac.normalizeAndValidateAgentMCPServices(agent.MCPServiceNames)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -3235,6 +3323,15 @@ func (ac *AdminController) UpdateAgent(c *gin.Context) {
 
 	agent.MemoryMode = normalizeAgentMemoryMode(agent.MemoryMode)
 	agent.SpeakerChatMode = normalizeAgentSpeakerChatMode(agent.SpeakerChatMode)
+	ensureAgentNickname(&agent)
+	if agent.Nickname == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入智能体昵称"})
+		return
+	}
+	if len([]rune(agent.Nickname)) > 50 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体昵称不能超过50个字符"})
+		return
+	}
 	normalizedMCPServiceNames, err := ac.normalizeAndValidateAgentMCPServices(agent.MCPServiceNames)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -3266,6 +3363,17 @@ func (ac *AdminController) UpdateAgent(c *gin.Context) {
 
 func (ac *AdminController) DeleteAgent(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+
+	deviceCount, err := countDevicesByAgentID(ac.DB, uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询智能体绑定设备失败"})
+		return
+	}
+	if deviceCount > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "智能体已绑定设备，请先移除所有设备后再删除"})
+		return
+	}
+
 	if err := ac.DB.Delete(&models.Agent{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除智能体失败"})
 		return
@@ -3538,7 +3646,8 @@ func (ac *AdminController) UpdateVisionBaseConfig(c *gin.Context) {
 func (ac *AdminController) GetChatSettings(c *gin.Context) {
 	response := gin.H{
 		"auth": gin.H{
-			"enable": false,
+			"enable":                false,
+			"login_captcha_enabled": true,
 		},
 		"chat": gin.H{
 			"max_idle_duration":         30000,
@@ -3554,6 +3663,9 @@ func (ac *AdminController) GetChatSettings(c *gin.Context) {
 		if authConfig.JsonData != "" && json.Unmarshal([]byte(authConfig.JsonData), &authData) == nil {
 			if enable, ok := authData["enable"].(bool); ok {
 				response["auth"].(gin.H)["enable"] = enable
+			}
+			if enabled, ok := authData["login_captcha_enabled"].(bool); ok {
+				response["auth"].(gin.H)["login_captcha_enabled"] = enabled
 			}
 		}
 	}
@@ -3584,7 +3696,8 @@ func (ac *AdminController) GetChatSettings(c *gin.Context) {
 func (ac *AdminController) UpdateChatSettings(c *gin.Context) {
 	var req struct {
 		Auth struct {
-			Enable bool `json:"enable"`
+			Enable              bool  `json:"enable"`
+			LoginCaptchaEnabled *bool `json:"login_captcha_enabled"`
 		} `json:"auth"`
 		Chat struct {
 			MaxIdleDuration        int64  `json:"max_idle_duration"`
@@ -3617,8 +3730,14 @@ func (ac *AdminController) UpdateChatSettings(c *gin.Context) {
 		return
 	}
 
+	loginCaptchaEnabled := true
+	if req.Auth.LoginCaptchaEnabled != nil {
+		loginCaptchaEnabled = *req.Auth.LoginCaptchaEnabled
+	}
+
 	authJSON, err := json.Marshal(map[string]interface{}{
-		"enable": req.Auth.Enable,
+		"enable":                req.Auth.Enable,
+		"login_captcha_enabled": loginCaptchaEnabled,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "auth 配置序列化失败"})
@@ -3700,7 +3819,10 @@ func (ac *AdminController) UpdateChatSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "聊天设置更新成功",
 		"data": gin.H{
-			"auth": gin.H{"enable": req.Auth.Enable},
+			"auth": gin.H{
+				"enable":                req.Auth.Enable,
+				"login_captcha_enabled": loginCaptchaEnabled,
+			},
 			"chat": gin.H{
 				"max_idle_duration":         req.Chat.MaxIdleDuration,
 				"chat_max_silence_duration": req.Chat.ChatMaxSilenceDuration,
@@ -5582,7 +5704,9 @@ func (ac *AdminController) ApplyRoleToDevice(c *gin.Context) {
 	}
 
 	device.RoleID = req.RoleID
-	if err := ac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(ac.DB, device.ID, map[string]interface{}{
+		"role_id": device.RoleID,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "应用角色失败"})
 		return
 	}
@@ -5640,7 +5764,9 @@ func (ac *AdminController) SwitchDeviceRoleByNameInternal(c *gin.Context) {
 
 	roleID := matchedRole.ID
 	device.RoleID = &roleID
-	if err := ac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(ac.DB, device.ID, map[string]interface{}{
+		"role_id": device.RoleID,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "切换设备角色失败"})
 		return
 	}
@@ -5673,7 +5799,9 @@ func (ac *AdminController) RestoreDeviceDefaultRoleInternal(c *gin.Context) {
 	}
 
 	device.RoleID = nil
-	if err := ac.DB.Save(&device).Error; err != nil {
+	if err := updateDeviceColumns(ac.DB, device.ID, map[string]interface{}{
+		"role_id": nil,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "恢复默认角色失败"})
 		return
 	}

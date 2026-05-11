@@ -86,7 +86,6 @@ func Init(cfg config.DatabaseConfig) *gorm.DB {
 		log.Printf("迁移全局角色数据失败: %v", err)
 		// 迁移失败不影响启动，只是数据没有迁移
 	}
-
 	return db
 }
 

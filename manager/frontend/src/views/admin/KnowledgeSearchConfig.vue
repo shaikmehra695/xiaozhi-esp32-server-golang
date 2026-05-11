@@ -1,7 +1,6 @@
 <template>
   <div class="config-page">
-    <div class="page-header">
-      <h2>知识库检索配置</h2>
+    <div class="page-actions">
       <el-button type="primary" @click="openDialog()">添加配置</el-button>
     </div>
 
@@ -54,7 +53,7 @@
             :href="getProviderWebsite(form.provider)"
             target="_blank"
             rel="noopener noreferrer"
-            style="color:#409EFF; text-decoration:none;"
+            style="color: var(--apple-primary); text-decoration:none;"
           >
             {{ getProviderWebsite(form.provider) }}
           </a>
@@ -71,7 +70,7 @@
               <el-option value="all_team_members" label="all_team_members（团队可见）" />
               <el-option value="partial_members" label="partial_members（部分成员可见）" />
             </el-select>
-            <div style="color:#909399; font-size:12px; line-height:1.4; margin-top:6px;">
+            <div class="form-helper-text">
               控制外部知识库平台中该 dataset 的可见范围，不影响本系统用户权限。
             </div>
           </el-form-item>
@@ -95,7 +94,7 @@
               <el-option value="me" label="me（仅自己可见）" />
               <el-option value="team" label="team（团队可见）" />
             </el-select>
-            <div style="color:#909399; font-size:12px; line-height:1.4; margin-top:6px;">
+            <div class="form-helper-text">
               控制外部知识库平台中该 dataset 的可见范围，不影响本系统用户权限。
             </div>
           </el-form-item>
@@ -113,11 +112,11 @@
           <el-form-item label="API Key"><el-input v-model="form.api_key" type="password" show-password /></el-form-item>
           <el-form-item label="阈值"><el-input-number v-model="form.score_threshold" :min="0" :max="1" :step="0.01" :precision="2" style="width:100%" /></el-form-item>
           <el-form-item label="模型列表">
-            <div style="display:flex; align-items:center; gap:10px; width:100%;">
+            <div class="inline-helper-row">
               <el-button size="small" :loading="weknoraModelLoading" @click="fetchWeknoraModels(true, false)">刷新模型</el-button>
-              <span v-if="weknoraModelLoading" style="color:#909399; font-size:12px;">正在拉取模型列表...</span>
-              <span v-else-if="weknoraModelLoadError" style="color:#F56C6C; font-size:12px;">{{ weknoraModelLoadError }}</span>
-              <span v-else style="color:#909399; font-size:12px;">自动拉取 embedding/llm/rerank 模型；也可手动输入。</span>
+              <span v-if="weknoraModelLoading" class="inline-helper-text">正在拉取模型列表...</span>
+              <span v-else-if="weknoraModelLoadError" class="inline-helper-text is-error">{{ weknoraModelLoadError }}</span>
+              <span v-else class="inline-helper-text">自动拉取 embedding/llm/rerank 模型；也可手动输入。</span>
             </div>
           </el-form-item>
           <el-form-item label="Embedding模型">
@@ -142,7 +141,7 @@
           <el-form-item label="重叠大小"><el-input-number v-model="form.chunk_overlap" :min="0" :step="50" style="width:100%" /></el-form-item>
           <el-form-item label="分隔符">
             <el-input v-model="form.separators_raw" placeholder="逗号分隔，如 \n\n,\n,。,！,？,;,；" />
-            <div style="color:#909399; font-size:12px; line-height:1.4; margin-top:6px;">
+            <div class="form-helper-text">
               保存时将按逗号拆分为 separators 数组。
             </div>
           </el-form-item>
@@ -164,7 +163,7 @@
                 :value="item.id"
               />
             </el-select>
-            <div style="color:#909399; font-size:12px; line-height:1.4; margin-top:6px;">
+            <div class="form-helper-text">
               用于知识摘要生成；不配置则跳过摘要步骤。
             </div>
           </el-form-item>
@@ -674,3 +673,39 @@ onBeforeUnmount(() => {
   }
 })
 </script>
+
+<style scoped>
+.page-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.form-helper-text {
+  margin-top: 6px;
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.inline-helper-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.inline-helper-text {
+  color: var(--apple-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.inline-helper-text.is-error {
+  color: var(--apple-danger);
+}
+</style>

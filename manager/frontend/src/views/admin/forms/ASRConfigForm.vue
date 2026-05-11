@@ -224,7 +224,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { InfoFilled } from '@element-plus/icons-vue'
 
 const props = defineProps({
@@ -234,11 +234,128 @@ const props = defineProps({
 
 const formRef = ref()
 
-function onProviderChange() {
-  if (props.model.provider === 'funasr' && props.model.funasr && !props.model.funasr.mode) {
+const ASR_PROVIDER_DEFAULTS = {
+  funasr: {
+    name: 'FunASR ASR',
+    config_id: 'funasr_default',
+    data: {
+      host: '127.0.0.1',
+      port: 10095,
+      mode: 'offline',
+      sample_rate: 16000,
+      chunk_size: [5, 10, 5],
+      chunk_interval: 10,
+      max_connections: 100,
+      timeout: 30,
+      auto_end: false
+    }
+  },
+  aliyun_funasr: {
+    name: '阿里云 FunASR ASR',
+    config_id: 'aliyun_funasr_default',
+    data: {
+      api_key: '',
+      ws_url: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/',
+      model: 'fun-asr-realtime',
+      format: 'pcm',
+      sample_rate: 16000,
+      vocabulary_id: '',
+      disfluency_removal_enabled: false,
+      timeout: 30
+    }
+  },
+  doubao: {
+    name: '豆包 ASR',
+    config_id: 'doubao_default',
+    data: {
+      appid: '',
+      access_token: '',
+      ws_url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
+      resource_id: 'volc.bigasr.sauc.duration',
+      model_name: 'bigmodel',
+      end_window_size: 800,
+      enable_punc: true,
+      enable_itn: true,
+      enable_ddc: false,
+      chunk_duration: 200,
+      timeout: 30
+    }
+  },
+  aliyun_qwen3: {
+    name: '阿里云 Qwen3 ASR',
+    config_id: 'aliyun_qwen3_default',
+    data: {
+      api_key: '',
+      ws_url: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',
+      model: 'qwen3-asr-flash-realtime',
+      format: 'pcm',
+      sample_rate: 16000,
+      language: 'zh',
+      auto_end: false,
+      vad_threshold: 0.0,
+      vad_silence_ms: 400,
+      timeout: 30
+    }
+  },
+  xunfei: {
+    name: '讯飞 ASR',
+    config_id: 'xunfei_default',
+    data: {
+      appid: '',
+      api_key: '',
+      api_secret: '',
+      host: 'iat-api.xfyun.cn',
+      path: '/v2/iat',
+      domain: 'iat',
+      language: 'zh_cn',
+      accent: 'mandarin',
+      sample_rate: 16000,
+      timeout: 30
+    }
+  }
+}
+
+const defaultNames = new Set(['默认ASR', ...Object.values(ASR_PROVIDER_DEFAULTS).map(item => item.name)])
+const defaultConfigIds = new Set(Object.values(ASR_PROVIDER_DEFAULTS).flatMap(item => [item.config_id, item.config_id.replace(/_default$/, '')]))
+
+function cloneDefaultData(provider) {
+  const data = ASR_PROVIDER_DEFAULTS[provider]?.data || {}
+  return JSON.parse(JSON.stringify(data))
+}
+
+function ensureProviderData(provider) {
+  if (!provider || !props.model || !ASR_PROVIDER_DEFAULTS[provider]) return
+  const current = props.model[provider]
+  props.model[provider] = { ...cloneDefaultData(provider), ...(current || {}) }
+  if (provider === 'funasr' && !props.model.funasr.mode) {
     props.model.funasr.mode = 'offline'
   }
 }
+
+function isDefaultish(value, knownValues) {
+  const normalized = String(value || '').trim()
+  return !normalized || knownValues.has(normalized)
+}
+
+function applyProviderIdentity(provider) {
+  if (!provider || !props.model || !ASR_PROVIDER_DEFAULTS[provider]) return
+  const defaults = ASR_PROVIDER_DEFAULTS[provider]
+  if (isDefaultish(props.model.name, defaultNames)) {
+    props.model.name = defaults.name
+  }
+  if (isDefaultish(props.model.config_id, defaultConfigIds)) {
+    props.model.config_id = defaults.config_id
+  }
+}
+
+function onProviderChange(provider) {
+  ensureProviderData(provider)
+  applyProviderIdentity(provider)
+}
+
+watch(() => props.model?.provider, (provider) => {
+  ensureProviderData(provider)
+}, { immediate: true })
 
 function getJsonData() {
   const m = props.model
@@ -265,13 +382,13 @@ defineExpose({ validate, getJsonData, resetFields })
 .form-tip {
   margin-top: 8px;
   font-size: 12px;
-  color: #909399;
+  color: var(--apple-text-secondary);
   display: flex;
   align-items: center;
   gap: 4px;
 }
 .form-tip .el-icon {
   font-size: 14px;
-  color: #409eff;
+  color: var(--apple-primary);
 }
 </style>

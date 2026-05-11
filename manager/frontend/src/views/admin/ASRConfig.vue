@@ -1,24 +1,19 @@
 <template>
   <div class="config-page">
-    <div class="page-header">
-      <div class="header-left">
-        <h2>ASR配置管理</h2>
-      </div>
-      <div class="header-right">
-        <el-button
-          type="warning"
-          plain
-          :loading="testingAll"
-          @click="testAllConfigs"
-          :disabled="!getEnabledConfigs().length"
-        >
-          测试全部
-        </el-button>
-        <el-button type="primary" @click="showDialog = true">
-          <el-icon><Plus /></el-icon>
-          添加配置
-        </el-button>
-      </div>
+    <div class="page-actions">
+      <el-button
+        type="warning"
+        plain
+        :loading="testingAll"
+        @click="testAllConfigs"
+        :disabled="!getEnabledConfigs().length"
+      >
+        测试全部
+      </el-button>
+      <el-button type="primary" @click="showDialog = true">
+        <el-icon><Plus /></el-icon>
+        添加配置
+      </el-button>
     </div>
 
     <el-table :data="configs" style="width: 100%" v-loading="loading">
@@ -634,21 +629,18 @@ onMounted(() => {
 <style scoped>
 .config-page {
   padding: 20px;
-  background: white;
+  background: rgba(255, 255, 255, 0.88);
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.page-header {
+.page-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 20px;
-}
-
-.header-left h2 {
-  margin: 0;
-  color: #333;
 }
 
 .test-result { font-size: 12px; }

@@ -2,7 +2,9 @@ package chat
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -29,6 +31,11 @@ type toolCallResponseSummary struct {
 func (l *LLMManager) handleToolCallResponse(ctx context.Context, respMsg *schema.Message, tools []schema.ToolCall, executor *toolCallExecutor) (toolCallResponseSummary, error) {
 	if len(tools) == 0 {
 		return toolCallResponseSummary{}, nil
+	}
+
+	tools = normalizeToolCallIDs(tools)
+	if respMsg != nil && len(respMsg.ToolCalls) > 0 {
+		respMsg.ToolCalls = normalizeToolCallIDs(respMsg.ToolCalls)
 	}
 
 	log.Infof("处理 %d 个工具调用", len(tools))
@@ -151,10 +158,8 @@ func newToolCallExecutor(manager *LLMManager, ctx context.Context) *toolCallExec
 
 func (e *toolCallExecutor) Submit(toolCalls []schema.ToolCall) {
 	for _, tc := range toolCalls {
-		callID := tc.ID
-		if callID == "" {
-			callID = fmt.Sprintf("auto_%s_%s", tc.Function.Name, tc.Function.Arguments)
-		}
+		toolCall := ensureToolCallID(tc)
+		callID := toolCall.ID
 
 		e.mu.Lock()
 		if _, exists := e.submittedCall[callID]; exists {
@@ -167,7 +172,6 @@ func (e *toolCallExecutor) Submit(toolCalls []schema.ToolCall) {
 		e.wg.Add(1)
 		e.mu.Unlock()
 
-		toolCall := tc
 		go func() {
 			defer e.wg.Done()
 			result := e.executeToolCall(order, toolCall)
@@ -177,6 +181,33 @@ func (e *toolCallExecutor) Submit(toolCalls []schema.ToolCall) {
 			e.mu.Unlock()
 		}()
 	}
+}
+
+func ensureToolCallID(toolCall schema.ToolCall) schema.ToolCall {
+	if strings.TrimSpace(toolCall.ID) != "" {
+		return toolCall
+	}
+
+	toolName := strings.TrimSpace(toolCall.Function.Name)
+	if toolName == "" {
+		toolName = "tool"
+	}
+
+	fingerprint := md5.Sum([]byte(toolName + "\n" + strings.TrimSpace(toolCall.Function.Arguments)))
+	toolCall.ID = fmt.Sprintf("auto_call_%s_%s", toolName, hex.EncodeToString(fingerprint[:8]))
+	return toolCall
+}
+
+func normalizeToolCallIDs(toolCalls []schema.ToolCall) []schema.ToolCall {
+	if len(toolCalls) == 0 {
+		return toolCalls
+	}
+
+	normalized := make([]schema.ToolCall, len(toolCalls))
+	for i, tc := range toolCalls {
+		normalized[i] = ensureToolCallID(tc)
+	}
+	return normalized
 }
 
 func (e *toolCallExecutor) Wait() []toolCallExecutionResult {

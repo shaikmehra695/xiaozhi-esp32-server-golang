@@ -45,6 +45,7 @@ func (a *Asr) CancelWithReason(reason string) {
 	a.lock.RUnlock()
 
 	if cancel != nil {
+		log.Debugf("Asr.CancelWithReason: reason=%s", reason)
 		cancel()
 	}
 }
@@ -130,6 +131,7 @@ func (a *Asr) StopWithReason(reason string) {
 	defer a.lock.Unlock()
 
 	if a.AsrAudioChannel != nil {
+		log.Debugf("Asr.StopWithReason: reason=%s", reason)
 		close(a.AsrAudioChannel) // close掉asr输入音频的channel，通知asr停止, 返回结果
 		a.AsrAudioChannel = nil  // 由于已经close，所以需要置空
 	}

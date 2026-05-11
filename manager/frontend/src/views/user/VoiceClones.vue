@@ -1,10 +1,6 @@
 <template>
   <div class="voice-clones-page">
-    <div class="page-header">
-      <div>
-        <h2>声音复刻</h2>
-        <p class="subtitle">支持 Minimax/CosyVoice/千问/IndexTTS，支持上传音频与浏览器录音</p>
-      </div>
+    <div class="page-actions">
       <el-button type="primary" @click="openCreateDialog">创建复刻音色</el-button>
     </div>
 
@@ -1039,15 +1035,13 @@ onBeforeUnmount(() => {
 .voice-clones-page {
   padding: 20px;
 }
-.page-header {
+.page-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 16px;
-}
-.subtitle {
-  color: #666;
-  margin-top: 4px;
 }
 .help {
   color: #999;

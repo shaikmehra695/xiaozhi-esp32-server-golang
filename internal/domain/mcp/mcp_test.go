@@ -480,6 +480,70 @@ func TestMCPToolInvokableRunReconnectsOnRetryableRemoteCallError(t *testing.T) {
 	assert.Same(t, reconnectedClient, testTool.client)
 }
 
+func TestMCPToolInvokableRunUsesOriginNameForRemoteCall(t *testing.T) {
+	originalCallRemoteMCPTool := callRemoteMCPTool
+	t.Cleanup(func() {
+		callRemoteMCPTool = originalCallRemoteMCPTool
+	})
+
+	var calledName string
+	callRemoteMCPTool = func(ctx context.Context, cli *client.Client, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		calledName = request.Params.Name
+		return mcp.NewToolResultText("ok"), nil
+	}
+
+	testTool := &McpTool{
+		info:       &schema.ToolInfo{Name: "browser_click", Desc: "click"},
+		originName: "browser.click",
+		serverName: "browser",
+		client:     new(client.Client),
+	}
+
+	_, err := testTool.InvokableRun(context.Background(), `{}`)
+	require.NoError(t, err)
+	assert.Equal(t, "browser.click", calledName)
+}
+
+func TestConvertMcpToolListToInvokableToolListSanitizesInvalidNames(t *testing.T) {
+	tools := []mcp.Tool{
+		mcp.NewTool("browser.click", mcp.WithDescription("click")),
+		mcp.NewTool("中文工具", mcp.WithDescription("unicode")),
+		mcp.NewTool("browser click", mcp.WithDescription("space")),
+	}
+
+	converted := ConvertMcpToolListToInvokableToolList(tools, "test_server", new(client.Client))
+
+	require.Contains(t, converted, "browser_click")
+	require.Contains(t, converted, "tool_f14843ab")
+	require.Contains(t, converted, "browser_click_29a678e7")
+
+	info, err := converted["browser_click"].(*McpTool).Info(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "browser_click", info.Name)
+	assert.Equal(t, "browser.click", converted["browser_click"].(*McpTool).originName)
+}
+
+func TestMcpClientInstanceGetToolByNameMatchesOriginName(t *testing.T) {
+	sanitizedTool := &McpTool{
+		info:       &schema.ToolInfo{Name: "browser_click"},
+		originName: "browser.click",
+	}
+	instance := &McpClientInstance{
+		tools: map[string]einotool.InvokableTool{
+			"browser_click": sanitizedTool,
+		},
+	}
+	instance.storeToolsSnapshot(instance.tools)
+
+	invokable, ok := instance.getToolByName("browser_click")
+	require.True(t, ok)
+	assert.Same(t, sanitizedTool, invokable)
+
+	invokable, ok = instance.getToolByName("browser.click")
+	require.True(t, ok)
+	assert.Same(t, sanitizedTool, invokable)
+}
+
 func TestFilterMCPToolsByAllowList(t *testing.T) {
 	tools := []mcp.Tool{
 		{Name: "alerts"},
@@ -1848,6 +1912,43 @@ func TestRefreshReportedToolsByAgentID_ClearsSnapshotOnFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, reportedTools)
 	assert.Empty(t, instance.loadToolsSnapshot())
+}
+
+func TestGetWsEndpointConnectionStatusRequiresInitializedClient(t *testing.T) {
+	agentID := fmt.Sprintf("ws-endpoint-status-agent-%d", time.Now().UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+
+	session := &DeviceMcpSession{
+		deviceID:              agentID,
+		Ctx:                   ctx,
+		cancel:                cancel,
+		iotOverMcpByTransport: make(map[string]*McpClientInstance),
+	}
+
+	notReady := &McpClientInstance{serverName: "ws_endpoint_mcp_not_ready"}
+	notReady.setConnected(true)
+	session.wsEndPointMcp.Store(notReady.serverName, notReady)
+
+	require.NoError(t, AddDeviceMcpClient(agentID, session))
+	t.Cleanup(func() {
+		cancel()
+		_ = RemoveDeviceMcpClient(agentID)
+	})
+
+	connected, count := GetWsEndpointConnectionStatus(agentID)
+	require.False(t, connected)
+	require.Equal(t, 0, count)
+
+	ready := &McpClientInstance{
+		serverName: "ws_endpoint_mcp_ready",
+		serverInfo: &mcp.InitializeResult{},
+	}
+	ready.setConnected(true)
+	session.wsEndPointMcp.Store(ready.serverName, ready)
+
+	connected, count = GetWsEndpointConnectionStatus(agentID)
+	require.True(t, connected)
+	require.Equal(t, 1, count)
 }
 
 func TestRawCallReportedToolByDeviceID_UsesResolvedTransport(t *testing.T) {

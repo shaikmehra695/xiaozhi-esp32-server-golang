@@ -346,8 +346,7 @@ func (dc *McpClientInstance) toolCount() int {
 
 func (dc *McpClientInstance) getToolByName(toolName string) (tool.InvokableTool, bool) {
 	tools := dc.loadToolsSnapshot()
-	invokable, ok := tools[toolName]
-	return invokable, ok
+	return findInvokableToolByName(tools, toolName)
 }
 
 func (dc *McpClientInstance) setConnected(connected bool) {
@@ -477,6 +476,16 @@ func (dc *DeviceMcpSession) snapshotWsEndpointClients() []*McpClientInstance {
 		return true
 	})
 	return clients
+}
+
+func (dc *DeviceMcpSession) GetWsEndpointConnectionStatus() (bool, int) {
+	connectedCount := 0
+	for _, mcpInstance := range dc.snapshotWsEndpointClients() {
+		if mcpInstance != nil && mcpInstance.IsConnected() && mcpInstance.IsInitialized() {
+			connectedCount++
+		}
+	}
+	return connectedCount > 0, connectedCount
 }
 
 func (dc *DeviceMcpSession) snapshotIotClients() []*McpClientInstance {
@@ -911,6 +920,9 @@ func (dc *DeviceMcpSession) RawCallIotToolByTransport(ctx context.Context, trans
 		return "", false, nil
 	}
 
+	if invokable, ok := iotClient.getToolByName(toolName); ok {
+		toolName = remoteCallNameForTool(invokable, toolName)
+	}
 	result, err := iotClient.RawCallTool(ctx, toolName, arguments)
 	return result, true, err
 }
@@ -928,6 +940,9 @@ func (dc *DeviceMcpSession) RawCallWsEndpointTool(ctx context.Context, toolName 
 		return "", false, nil
 	}
 
+	if invokable, ok := selected.getToolByName(toolName); ok {
+		toolName = remoteCallNameForTool(invokable, toolName)
+	}
 	result, err := selected.RawCallTool(ctx, toolName, arguments)
 	return result, true, err
 }

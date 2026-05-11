@@ -85,6 +85,25 @@ func llmHandleResultFromArgs(args []any) llmHandleResult {
 	return result
 }
 
+func (l *LLMManager) finishTTSTurn(ctx context.Context, stopErr error, result llmHandleResult) {
+	l.finishTTSTurnWithReason(ctx, stopErr, result, "LLMManager.finishTTSTurn")
+}
+
+func (l *LLMManager) finishTTSTurnWithReason(ctx context.Context, stopErr error, result llmHandleResult, reason string) {
+	if l == nil || l.ttsManager == nil {
+		return
+	}
+
+	if result.suppressProtocolTtsStop {
+		// 媒体工具会等待播放完成后再回到这里收尾，此时仍需补发协议级 tts_stop，
+		// 否则客户端会停留在“说话中”状态。
+		log.Debugf("媒体输出已完成，沿用常规 TTS 收尾发送 tts stop")
+	}
+
+	l.ttsManager.EnqueueTtsStopWithReason(ctx, reason)
+	l.ttsManager.RequestTurnEnd(ctx, stopErr)
+}
+
 type llmResponseChannelOptions struct {
 	disableTTSCommands bool
 	onStartFunc        func(args ...any)
@@ -669,7 +688,7 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 				l.ttsManager.ClearAudioHistory()
 				log.Debugf("onStartFunc 首次调用，已清空TTS音频缓存")
 			}
-			l.ttsManager.EnqueueTtsStart(ctx)
+			l.ttsManager.EnqueueTtsStartWithReason(ctx, "LLMManager.handleLLMResponseChannelAsync onStart")
 		}
 		onEndFunc = func(err error, args ...any) {
 			handleResult := llmHandleResultFromArgs(args)
@@ -679,12 +698,7 @@ func (l *LLMManager) handleLLMResponseChannelAsync(ctx context.Context, userMess
 			}
 			strFullText := fullText.String()
 
-			if handleResult.suppressProtocolTtsStop {
-				l.ttsManager.FinishTtsWithoutProtocolStop(ctx, err)
-			} else {
-				l.ttsManager.EnqueueTtsStop(ctx)
-			}
-			l.ttsManager.RequestTurnEnd(ctx, err)
+			l.finishTTSTurnWithReason(ctx, err, handleResult, "LLMManager.handleLLMResponseChannelAsync onEnd")
 
 			// 从 closure 中获取 fullText
 			audioData := l.ttsManager.GetAndClearAudioHistory()
@@ -774,7 +788,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 			l.ttsManager.ClearAudioHistory()
 			log.Debugf("HandleLLMResponseChannelSync 首次调用，已清空TTS音频缓存")
 		}
-		l.ttsManager.EnqueueTtsStart(ctx)
+		l.ttsManager.EnqueueTtsStartWithReason(ctx, "LLMManager.HandleLLMResponseChannelSync start")
 	}
 
 	result, err := l.handleLLMResponse(ctx, userMessage, llmResponseChannel)
@@ -788,12 +802,7 @@ func (l *LLMManager) HandleLLMResponseChannelSync(ctx context.Context, userMessa
 	strFullText := fullText.String()
 
 	if needSendTtsCmd {
-		if result.suppressProtocolTtsStop {
-			l.ttsManager.FinishTtsWithoutProtocolStop(ctx, err)
-		} else {
-			l.ttsManager.EnqueueTtsStop(ctx)
-		}
-		l.ttsManager.RequestTurnEnd(ctx, err)
+		l.finishTTSTurnWithReason(ctx, err, result, "LLMManager.HandleLLMResponseChannelSync end")
 
 		// 收集TTS音频并发送聊天历史事件
 		// 注意：工具调用后的LLM响应（nest > 1）也会累积音频到缓存中，但不会清空
@@ -913,6 +922,11 @@ func (l *LLMManager) handleLLMResponse(ctx context.Context, userMessage *schema.
 					// 通道已关闭，退出协程
 					log.Infof("LLM 响应通道已关闭，退出协程")
 					result.ok = true
+					return result, nil
+				}
+				if ctx.Err() != nil {
+					saveInterruptedAssistant()
+					log.Infof("%s LLM分片到达时上下文已取消，丢弃晚到响应并退出", state.DeviceID)
 					return result, nil
 				}
 
