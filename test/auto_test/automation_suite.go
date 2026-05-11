@@ -380,6 +380,30 @@ func drainSignal(ch chan struct{}) {
 	}
 }
 
+func drainServerMessages(ch chan ServerMessage) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+func waitForOptionalTTSPlayback(ttsStartCh, ttsStopCh chan struct{}, outputCh chan ServerMessage, startTimeout, stopTimeout time.Duration, label string) (bool, error) {
+	select {
+	case <-ttsStartCh:
+	case <-time.After(startTimeout):
+		return false, nil
+	}
+	if err := waitForSignal(ttsStopCh, stopTimeout, label+" tts stop"); err != nil {
+		return true, err
+	}
+	drainServerMessages(outputCh)
+	time.Sleep(100 * time.Millisecond)
+	return true, nil
+}
+
 func waitForSignal(ch chan struct{}, timeout time.Duration, label string) error {
 	select {
 	case <-ch:
@@ -469,7 +493,8 @@ func maxInt(a, b int) int {
 
 func buildProtocolTestCases() []protocolTestCase {
 	manualListenCount := 2 * autoTurns
-	autoListenCount := 2 + autoTurns
+	auto1ListenCount := 2 + autoTurns
+	auto2ListenCount := 3 + autoTurns
 	manualMultiTurns := 3
 	manualMultiListenCount := 2 * manualMultiTurns
 	cases := []protocolTestCase{
@@ -505,7 +530,7 @@ func buildProtocolTestCases() []protocolTestCase {
 				{State: MessageStateStart, Mode: "auto"},
 				{State: MessageStateStart, Mode: "auto"},
 			},
-			ExpectListenCount:     autoListenCount,
+			ExpectListenCount:     auto1ListenCount,
 			ExpectHelloTransport:  "websocket",
 			ExpectSTTText:         speectText,
 			ExpectOutputText:      true,
@@ -525,7 +550,7 @@ func buildProtocolTestCases() []protocolTestCase {
 				{State: MessageStateDetect, Text: defaultDetectText},
 				{State: MessageStateStart, Mode: "auto"},
 			},
-			ExpectListenCount:     autoListenCount,
+			ExpectListenCount:     auto2ListenCount,
 			ExpectHelloTransport:  "websocket",
 			ExpectSTTText:         speectText,
 			ExpectOutputText:      true,
@@ -570,6 +595,7 @@ func buildProtocolTestCases() []protocolTestCase {
 			ExpectHelloCount:     1,
 			ExpectHelloTransport: "websocket",
 			ExpectOutputText:     true,
+			ExpectListenCount:    -1,
 		},
 		{
 			Name:                 "iot_roundtrip",
@@ -851,7 +877,51 @@ func buildProtocolTestCases() []protocolTestCase {
 			Timeout:     autoCaseTimeout,
 		},
 	}
-	return append(cases, buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns, manualMultiListenCount)...)
+	return append(cases, buildMqttUDPTestCases(manualListenCount, auto1ListenCount, auto2ListenCount, manualMultiTurns, manualMultiListenCount)...)
+}
+
+func isMqttUDPCase(testCase protocolTestCase) bool {
+	return testCase.UseMqttUDP ||
+		testCase.Kind == protocolCaseMqttUDPHello ||
+		testCase.Kind == protocolCaseMqttUDPInjectedMessage
+}
+
+func deriveMqttCaseDeviceID(baseDeviceID, caseName string, caseIndex int) string {
+	base := strings.TrimSpace(baseDeviceID)
+	if base == "" {
+		base = "auto-test"
+	}
+	suffix := sanitizeDeviceIDSuffix(caseName)
+	if suffix == "" {
+		suffix = "mqtt-udp"
+	}
+	if len(suffix) > 40 {
+		suffix = suffix[:40]
+	}
+	indexPart := fmt.Sprintf("%02d", caseIndex)
+	maxBaseLen := 96 - len(indexPart) - len(suffix) - 2
+	if maxBaseLen < 1 {
+		maxBaseLen = 1
+	}
+	if len(base) > maxBaseLen {
+		base = base[:maxBaseLen]
+	}
+	return fmt.Sprintf("%s-%s-%s", base, indexPart, suffix)
+}
+
+func sanitizeDeviceIDSuffix(input string) string {
+	var builder strings.Builder
+	for _, r := range strings.ToLower(input) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '-' || r == '_':
+			builder.WriteByte('-')
+		}
+	}
+	return strings.Trim(builder.String(), "-")
 }
 
 func selectProtocolTestCases() ([]protocolTestCase, error) {
@@ -895,12 +965,17 @@ func runAutomationSuite(serverAddr, deviceID, audioFile string) error {
 	}
 
 	results := make([]protocolTestResult, 0, len(testCases))
-	for _, testCase := range testCases {
+	for i, testCase := range testCases {
 		mode = testCase.LocalMode
 		resetSignals()
 		startedAt := time.Now()
 		fmt.Printf("\n=== 开始自动化用例: %s (%s) ===\n", testCase.Name, testCase.Description)
-		err := runProtocolCase(serverAddr, deviceID, audioFile, &testCase)
+		caseDeviceID := deviceID
+		if len(testCases) > 1 && isMqttUDPCase(testCase) {
+			caseDeviceID = deriveMqttCaseDeviceID(deviceID, testCase.Name, i+1)
+			fmt.Printf("用例设备ID: %s\n", caseDeviceID)
+		}
+		err := runProtocolCase(serverAddr, caseDeviceID, audioFile, &testCase)
 		result := protocolTestResult{
 			Name:     testCase.Name,
 			Mode:     testCase.LocalMode,

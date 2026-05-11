@@ -496,6 +496,7 @@ func (a *ASRManager) ProcessVadAudio(ctx context.Context) {
 							state.Vad.GetVoiceDuration(),
 							state.Vad.GetVoiceDurationInSession(),
 							state.Asr.GetHistoryAudioLen(),
+							state.AudioIdleTimeoutPending(),
 						)
 						// 在 OnVoiceSilence 之前重置标志位，以便下次可以再次触发
 						hasTriggeredCancel = false
@@ -722,7 +723,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 
 				if recoverableErrorCount >= maxRecoverableErrorInWindow {
 					err := fmt.Errorf("ASR短时间内连续触发可恢复错误(%d次/%s)，停止重试并断开连接", recoverableErrorCount, recoverableErrorProtectWindow)
-					log.Errorf(err.Error())
+					log.Errorf("%v", err)
 					if onError != nil {
 						onError(err)
 					}
@@ -967,7 +968,7 @@ func (a *ASRManager) StartAsrRecognitionLoop(
 				emptyResultCount++
 				if emptyResultCount >= maxEmptyResultInWindow {
 					err := fmt.Errorf("ASR短时间内连续返回空结果(%d次/%s)，触发保护并断开连接", emptyResultCount, emptyResultProtectWindow)
-					log.Errorf(err.Error())
+					log.Errorf("%v", err)
 					if onError != nil {
 						onError(err)
 					}

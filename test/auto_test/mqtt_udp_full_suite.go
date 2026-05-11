@@ -10,7 +10,7 @@ import (
 	"xiaozhi-esp32-server-golang/internal/domain/tts"
 )
 
-func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns, manualMultiListenCount int) []protocolTestCase {
+func buildMqttUDPTestCases(manualListenCount, auto1ListenCount, auto2ListenCount, manualMultiTurns, manualMultiListenCount int) []protocolTestCase {
 	return []protocolTestCase{
 		{
 			Name:                 "mqtt_udp_manual_roundtrip",
@@ -47,7 +47,7 @@ func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns,
 				{State: MessageStateStart, Mode: "auto"},
 				{State: MessageStateStart, Mode: "auto"},
 			},
-			ExpectListenCount:     autoListenCount,
+			ExpectListenCount:     auto1ListenCount,
 			ExpectSTTText:         speectText,
 			ExpectOutputText:      true,
 			ExpectRestartAfterTTS: true,
@@ -68,7 +68,7 @@ func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns,
 				{State: MessageStateDetect, Text: defaultDetectText},
 				{State: MessageStateStart, Mode: "auto"},
 			},
-			ExpectListenCount:     autoListenCount,
+			ExpectListenCount:     auto2ListenCount,
 			ExpectSTTText:         speectText,
 			ExpectOutputText:      true,
 			ExpectRestartAfterTTS: true,
@@ -871,14 +871,26 @@ func sendInitialMqttListenSequence(rt *mqttProtocolRuntime) error {
 		if err := rt.publish(ClientMessage{Type: MessageTypeListen, SessionID: rt.sessionID, State: MessageStateDetect, Text: defaultDetectText}); err != nil {
 			return err
 		}
+		if _, err := waitForOptionalTTSPlayback(rt.ttsStartCh, rt.ttsStopCh, rt.outputCh, 2*time.Second, autoCaseTimeout, "mqtt auto1 welcome"); err != nil {
+			return err
+		}
 		return rt.publish(ClientMessage{Type: MessageTypeListen, SessionID: rt.sessionID, State: MessageStateStart, Mode: protocolMode()})
 	case LocalModeAuto2:
 		if err := rt.publish(ClientMessage{Type: MessageTypeListen, SessionID: rt.sessionID, State: MessageStateStart, Mode: protocolMode()}); err != nil {
 			return err
 		}
-		return rt.publish(ClientMessage{Type: MessageTypeListen, SessionID: rt.sessionID, State: MessageStateDetect, Text: defaultDetectText})
+		if err := rt.publish(ClientMessage{Type: MessageTypeListen, SessionID: rt.sessionID, State: MessageStateDetect, Text: defaultDetectText}); err != nil {
+			return err
+		}
+		if _, err := waitForOptionalTTSPlayback(rt.ttsStartCh, rt.ttsStopCh, rt.outputCh, 2*time.Second, autoCaseTimeout, "mqtt auto2 welcome"); err != nil {
+			return err
+		}
+		return rt.publish(ClientMessage{Type: MessageTypeListen, SessionID: rt.sessionID, State: MessageStateStart, Mode: protocolMode()})
 	case LocalModeRealtime:
 		if err := rt.publish(ClientMessage{Type: MessageTypeListen, SessionID: rt.sessionID, State: MessageStateDetect, Text: defaultDetectText}); err != nil {
+			return err
+		}
+		if _, err := waitForOptionalTTSPlayback(rt.ttsStartCh, rt.ttsStopCh, rt.outputCh, 2*time.Second, autoCaseTimeout, "mqtt realtime welcome"); err != nil {
 			return err
 		}
 		return rt.publish(ClientMessage{Type: MessageTypeListen, SessionID: rt.sessionID, State: MessageStateStart, Mode: protocolMode()})
@@ -944,11 +956,12 @@ func newAutoTestTTSProvider() (tts.TTSProvider, error) {
 		"receive_timeout": 60,
 	}
 	edgeOfflineConfig := map[string]interface{}{
-		"server_url":     "ws://localhost:8080/tts",
-		"timeout":        30,
-		"sample_rate":    SampleRate,
-		"channels":       1,
-		"frame_duration": FrameDurationMs,
+		"server_url":        "ws://192.168.208.214:8081/tts",
+		"timeout":           30.0,
+		"handshake_timeout": 10.0,
+		"sample_rate":       SampleRate,
+		"channels":          1,
+		"frame_duration":    FrameDurationMs,
 	}
 	providerName := strings.TrimSpace(ttsProviderName)
 	var providerConfig map[string]interface{}

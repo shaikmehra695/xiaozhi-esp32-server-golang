@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	types_conn "xiaozhi-esp32-server-golang/internal/app/server/types"
 	data_audio "xiaozhi-esp32-server-golang/internal/data/audio"
 	data_client "xiaozhi-esp32-server-golang/internal/data/client"
 	msgdata "xiaozhi-esp32-server-golang/internal/data/msg"
@@ -77,6 +78,34 @@ func TestHandleListenStartCancelsPendingDetectLLM(t *testing.T) {
 	}
 }
 
+func TestHandleListenStartIgnoresRecentDetectWhileWelcomePlaying(t *testing.T) {
+	session := newDetectDebounceTestSession(t)
+	session.clientState.IsWelcomePlaying = true
+	session.clientState.RecordCommandArrival(data_client.CommandTypeDetect, time.Now())
+
+	if err := session.HandleListenStart(&data_client.ClientMessage{
+		Type:     msgdata.MessageTypeListen,
+		DeviceID: session.clientState.DeviceID,
+		Mode:     "auto",
+	}); err != nil {
+		t.Fatalf("HandleListenStart returned error: %v", err)
+	}
+
+	if got := session.clientState.GetListenPhase(); got != data_client.ListenPhaseIdle {
+		t.Fatalf("expected welcome playback to keep listen phase idle, got %s", got)
+	}
+	if got := session.clientState.ListenMode; got != "" {
+		t.Fatalf("expected ignored listen start not to set listen mode, got %s", got)
+	}
+	history := session.clientState.GetCommandHistorySnapshot()
+	if history.LastCmdType != data_client.CommandTypeDetect {
+		t.Fatalf("expected ignored listen start to preserve detect history, got %s", history.LastCmdType)
+	}
+	if session.isRealtimeListenSessionActive() {
+		t.Fatal("expected ignored listen start not to mark realtime listen active")
+	}
+}
+
 func TestHandleListenStartIgnoresDuplicateRealtimeStart(t *testing.T) {
 	session := newDetectDebounceTestSession(t)
 	session.clientState.ListenMode = "realtime"
@@ -119,6 +148,34 @@ func TestHandleListenStartIgnoresDuplicateRealtimeStart(t *testing.T) {
 	}
 }
 
+func TestManualListenStopResetsStateForRepeatedTurns(t *testing.T) {
+	session := newDetectDebounceTestSession(t)
+	session.clientState.ListenMode = "manual"
+
+	for turn := 1; turn <= 3; turn++ {
+		session.clientState.SetStatus(data_client.ClientStatusListening)
+		session.clientState.SetListenPhase(data_client.ListenPhaseListening)
+		session.clientState.Asr.AsrAudioChannel = make(chan []float32, 1)
+
+		if err := session.HandleListenStop(); err != nil {
+			t.Fatalf("turn %d HandleListenStop returned error: %v", turn, err)
+		}
+		if got := session.clientState.GetListenPhase(); got != data_client.ListenPhaseIdle {
+			t.Fatalf("turn %d expected listen phase idle, got %s", turn, got)
+		}
+		if got := session.clientState.GetStatus(); got != data_client.ClientStatusListenStop {
+			t.Fatalf("turn %d expected status listenStop, got %s", turn, got)
+		}
+		if session.clientState.Asr.AsrAudioChannel != nil {
+			t.Fatalf("turn %d expected ASR audio channel to be closed", turn)
+		}
+		history := session.clientState.GetCommandHistorySnapshot()
+		if history.LastCmdType != data_client.CommandTypeListenStop {
+			t.Fatalf("turn %d expected last command listen_stop, got %s", turn, history.LastCmdType)
+		}
+	}
+}
+
 func TestStopSpeakingClearsRealtimeListenSessionActive(t *testing.T) {
 	session := newDetectDebounceTestSession(t)
 	session.realtimeListenSessionActive.Store(true)
@@ -148,7 +205,43 @@ func TestHandleListenStopClearsRealtimeListenSessionActive(t *testing.T) {
 	}
 }
 
+func TestListenStartSequencingIsTransportAgnosticForMqttUDP(t *testing.T) {
+	session := newDetectDebounceTestSessionWithTransport(t, types_conn.TransportTypeMqttUdp)
+	session.clientState.ListenMode = "realtime"
+
+	startSeq := session.beginListenStart()
+
+	if startSeq == 0 {
+		t.Fatal("expected non-zero listen start sequence")
+	}
+	if got := session.clientState.GetListenPhase(); got != data_client.ListenPhaseStarting {
+		t.Fatalf("expected mqtt udp listen phase starting, got %s", got)
+	}
+	if !session.isRealtimeListenSessionActive() {
+		t.Fatal("expected mqtt udp realtime listen session to be active")
+	}
+	if !session.isCurrentListenStart(startSeq) {
+		t.Fatal("expected current listen start sequence to be valid")
+	}
+
+	session.invalidateListenStart()
+
+	if session.isCurrentListenStart(startSeq) {
+		t.Fatal("expected invalidated mqtt udp listen start sequence to be stale")
+	}
+	if session.isRealtimeListenSessionActive() {
+		t.Fatal("expected invalidation to clear mqtt udp realtime listen activity")
+	}
+	if got := session.clientState.GetListenPhase(); got != data_client.ListenPhaseIdle {
+		t.Fatalf("expected mqtt udp listen phase idle after invalidation, got %s", got)
+	}
+}
+
 func newDetectDebounceTestSession(t *testing.T) *ChatSession {
+	return newDetectDebounceTestSessionWithTransport(t, types_conn.TransportTypeWebsocket)
+}
+
+func newDetectDebounceTestSessionWithTransport(t *testing.T, transportType string) *ChatSession {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -168,7 +261,7 @@ func newDetectDebounceTestSession(t *testing.T) *ChatSession {
 	}
 
 	conn := &speakRequestTestConn{
-		transportType: "websocket",
+		transportType: transportType,
 		deviceID:      clientState.DeviceID,
 	}
 	session := NewChatSession(clientState, NewServerTransport(conn, clientState), nil, nil)

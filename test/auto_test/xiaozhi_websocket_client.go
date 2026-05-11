@@ -563,24 +563,36 @@ func allowNextInput() {
 func sendInitialListenSequence(runtime *sessionRuntime) error {
 	switch mode {
 	case LocalModeAuto1:
-		fmt.Println("本地策略 auto1: 初始发送 listen detect -> listen start auto")
+		fmt.Println("本地策略 auto1: 初始发送 listen detect，等待欢迎语结束后进入 listen start auto")
 		if err := sendListenDetect(runtime, defaultDetectText); err != nil {
 			return err
 		}
-		if err := sendListenStart(runtime, protocolMode()); err != nil {
+		played, err := waitForOptionalTTSPlayback(runtime.ttsStartCh, runtime.ttsStopCh, runtime.outputCh, 2*time.Second, autoCaseTimeout, "auto1 welcome")
+		if err != nil {
 			return err
+		}
+		if !played {
+			if err := sendListenStart(runtime, protocolMode()); err != nil {
+				return err
+			}
 		}
 	case LocalModeAuto2:
-		fmt.Println("本地策略 auto2: 初始发送 listen start auto -> listen detect")
+		fmt.Println("本地策略 auto2: 初始发送 listen start auto -> listen detect，等待欢迎语结束")
 		if err := sendListenStart(runtime, protocolMode()); err != nil {
 			return err
 		}
 		if err := sendListenDetect(runtime, defaultDetectText); err != nil {
+			return err
+		}
+		if _, err := waitForOptionalTTSPlayback(runtime.ttsStartCh, runtime.ttsStopCh, runtime.outputCh, 2*time.Second, autoCaseTimeout, "auto2 welcome"); err != nil {
 			return err
 		}
 	case LocalModeRealtime:
-		fmt.Println("本地策略 realtime: 初始发送 listen detect -> listen start realtime")
+		fmt.Println("本地策略 realtime: 初始发送 listen detect，等待欢迎语结束后 listen start realtime")
 		if err := sendListenDetect(runtime, defaultDetectText); err != nil {
+			return err
+		}
+		if _, err := waitForOptionalTTSPlayback(runtime.ttsStartCh, runtime.ttsStopCh, runtime.outputCh, 2*time.Second, autoCaseTimeout, "realtime welcome"); err != nil {
 			return err
 		}
 		if err := sendListenStart(runtime, protocolMode()); err != nil {

@@ -631,6 +631,9 @@ func (rt *mqttProtocolRuntime) close() {
 }
 
 func (rt *mqttProtocolRuntime) publish(msg ClientMessage) error {
+	if msg.DeviceID == "" {
+		msg.DeviceID = rt.deviceID
+	}
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
