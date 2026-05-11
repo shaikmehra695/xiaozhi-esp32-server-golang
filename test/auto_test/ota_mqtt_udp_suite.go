@@ -280,12 +280,21 @@ func runMqttUDPInjectedMessageCase(serverAddr, deviceID string, testCase *protoc
 		return fmt.Errorf("建立 UDP addr 绑定失败: %v", err)
 	}
 
-	if err := postInjectMessage(serverAddr, deviceID, testCase.InputText, true, false); err != nil {
-		return err
-	}
-	speakRequest, err := waitForMessage(rt.speakRequestCh, testCase.Timeout, "mqtt speak_request")
-	if err != nil {
-		return err
+	injectErrCh := make(chan error, 1)
+	go func() {
+		injectErrCh <- postInjectMessage(serverAddr, deviceID, testCase.InputText, true, false)
+	}()
+
+	var speakRequest ServerMessage
+	select {
+	case speakRequest = <-rt.speakRequestCh:
+	case err := <-injectErrCh:
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("inject_msg 在收到 speak_request 前已完成")
+	case <-time.After(testCase.Timeout):
+		return fmt.Errorf("等待 mqtt speak_request 超时")
 	}
 	if speakRequest.SessionID != helloMsg.SessionID {
 		return fmt.Errorf("speak_request session_id 不匹配: got=%s want=%s", speakRequest.SessionID, helloMsg.SessionID)
@@ -304,6 +313,14 @@ func runMqttUDPInjectedMessageCase(serverAddr, deviceID string, testCase *protoc
 		},
 	}); err != nil {
 		return err
+	}
+	select {
+	case err := <-injectErrCh:
+		if err != nil {
+			return err
+		}
+	case <-time.After(testCase.Timeout):
+		return fmt.Errorf("等待 inject_msg 响应完成超时")
 	}
 
 	if err := waitForSignal(rt.ttsStartCh, testCase.Timeout, "mqtt tts start"); err != nil {
@@ -656,12 +673,12 @@ func (rt *mqttProtocolRuntime) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 		case rt.speakRequestCh <- serverMsg:
 		default:
 		}
-	case ServerMessageTypeStt:
+	case ServerMessageTypeSTT:
 		select {
 		case rt.sttCh <- serverMsg:
 		default:
 		}
-	case ServerMessageTypeIot:
+	case MessageTypeIot:
 		select {
 		case rt.iotCh <- serverMsg:
 		default:

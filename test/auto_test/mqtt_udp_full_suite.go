@@ -13,15 +13,15 @@ import (
 func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns, manualMultiListenCount int) []protocolTestCase {
 	return []protocolTestCase{
 		{
-			Name:               "mqtt_udp_manual_roundtrip",
-			Description:        "验证 MQTT/UDP manual 模式 listen/stt/tts 主链路",
-			Kind:               protocolCaseNormal,
-			UseMqttUDP:         true,
-			LocalMode:          LocalModeManual,
-			InputText:          speectText,
-			Turns:              autoTurns,
-			Timeout:            autoCaseTimeout,
-			ExpectHelloCount:   1,
+			Name:                 "mqtt_udp_manual_roundtrip",
+			Description:          "验证 MQTT/UDP manual 模式 listen/stt/tts 主链路",
+			Kind:                 protocolCaseNormal,
+			UseMqttUDP:           true,
+			LocalMode:            LocalModeManual,
+			InputText:            speectText,
+			Turns:                autoTurns,
+			Timeout:              autoCaseTimeout,
+			ExpectHelloCount:     1,
 			ExpectHelloTransport: "udp",
 			ExpectListenSequence: []listenExpectation{
 				{State: MessageStateStart, Mode: LocalModeManual},
@@ -32,15 +32,15 @@ func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns,
 			ExpectOutputText:  true,
 		},
 		{
-			Name:               "mqtt_udp_auto1_roundtrip",
-			Description:        "验证 MQTT/UDP auto1 模式 detect -> start auto -> tts stop 后重启监听",
-			Kind:               protocolCaseNormal,
-			UseMqttUDP:         true,
-			LocalMode:          LocalModeAuto1,
-			InputText:          speectText,
-			Turns:              autoTurns,
-			Timeout:            autoCaseTimeout,
-			ExpectHelloCount:   1,
+			Name:                 "mqtt_udp_auto1_roundtrip",
+			Description:          "验证 MQTT/UDP auto1 模式 detect -> start auto -> tts stop 后重启监听",
+			Kind:                 protocolCaseNormal,
+			UseMqttUDP:           true,
+			LocalMode:            LocalModeAuto1,
+			InputText:            speectText,
+			Turns:                autoTurns,
+			Timeout:              autoCaseTimeout,
+			ExpectHelloCount:     1,
 			ExpectHelloTransport: "udp",
 			ExpectListenSequence: []listenExpectation{
 				{State: MessageStateDetect, Text: defaultDetectText},
@@ -53,15 +53,15 @@ func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns,
 			ExpectRestartAfterTTS: true,
 		},
 		{
-			Name:               "mqtt_udp_auto2_roundtrip",
-			Description:        "验证 MQTT/UDP auto2 模式 start auto -> detect -> tts stop 后重启监听",
-			Kind:               protocolCaseNormal,
-			UseMqttUDP:         true,
-			LocalMode:          LocalModeAuto2,
-			InputText:          speectText,
-			Turns:              autoTurns,
-			Timeout:            autoCaseTimeout,
-			ExpectHelloCount:   1,
+			Name:                 "mqtt_udp_auto2_roundtrip",
+			Description:          "验证 MQTT/UDP auto2 模式 start auto -> detect -> tts stop 后重启监听",
+			Kind:                 protocolCaseNormal,
+			UseMqttUDP:           true,
+			LocalMode:            LocalModeAuto2,
+			InputText:            speectText,
+			Turns:                autoTurns,
+			Timeout:              autoCaseTimeout,
+			ExpectHelloCount:     1,
 			ExpectHelloTransport: "udp",
 			ExpectListenSequence: []listenExpectation{
 				{State: MessageStateStart, Mode: "auto"},
@@ -74,15 +74,15 @@ func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns,
 			ExpectRestartAfterTTS: true,
 		},
 		{
-			Name:               "mqtt_udp_realtime_roundtrip",
-			Description:        "验证 MQTT/UDP realtime 模式 detect -> start realtime",
-			Kind:               protocolCaseNormal,
-			UseMqttUDP:         true,
-			LocalMode:          LocalModeRealtime,
-			InputText:          speectText,
-			Turns:              autoTurns,
-			Timeout:            autoCaseTimeout,
-			ExpectHelloCount:   1,
+			Name:                 "mqtt_udp_realtime_roundtrip",
+			Description:          "验证 MQTT/UDP realtime 模式 detect -> start realtime",
+			Kind:                 protocolCaseNormal,
+			UseMqttUDP:           true,
+			LocalMode:            LocalModeRealtime,
+			InputText:            speectText,
+			Turns:                autoTurns,
+			Timeout:              autoCaseTimeout,
+			ExpectHelloCount:     1,
 			ExpectHelloTransport: "udp",
 			ExpectListenSequence: []listenExpectation{
 				{State: MessageStateDetect, Text: defaultDetectText},
@@ -112,19 +112,19 @@ func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns,
 			ExpectOutputText:  true,
 		},
 		{
-			Name:                 "mqtt_udp_mcp_initialize",
-			Description:          "验证 MQTT/UDP hello 启用 MCP 后 initialize/tools/list 链路",
-			Kind:                 protocolCaseMCP,
-			UseMqttUDP:           true,
-			LocalMode:            LocalModeManual,
-			EnableMCP:            true,
-			Timeout:              autoCaseTimeout,
-			ExpectHelloCount:     1,
-			ExpectHelloTransport: "udp",
-			ExpectListenCount:    0,
-			ExpectMCPInitialize:  true,
-			ExpectMCPToolsList:   true,
-			ExpectMCPResponse:    true,
+			Name:                     "mqtt_udp_mcp_initialize",
+			Description:              "验证 MQTT/UDP hello 启用 MCP 后 initialize/tools/list 链路",
+			Kind:                     protocolCaseMCP,
+			UseMqttUDP:               true,
+			LocalMode:                LocalModeManual,
+			EnableMCP:                true,
+			Timeout:                  autoCaseTimeout,
+			ExpectHelloCount:         1,
+			ExpectHelloTransport:     "udp",
+			ExpectListenCount:        0,
+			ExpectMCPInitialize:      true,
+			ExpectMCPToolsList:       true,
+			ExpectMCPResponse:        true,
 			ExpectMCPInitializeCount: 1,
 			ExpectMCPToolsListCount:  1,
 		},
@@ -232,10 +232,10 @@ func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns,
 				{State: MessageStateStart, Mode: LocalModeManual},
 				{State: MessageStateStop, Mode: LocalModeManual},
 			},
-			ExpectListenCount: 2,
-			ExpectSTTText:     speectText,
-			ExpectOutputText:  true,
-			ExpectAbortSent:   true,
+			ExpectListenCount:   2,
+			ExpectSTTText:       speectText,
+			ExpectOutputText:    true,
+			ExpectAbortSent:     true,
 			ExpectAbortStopsTTS: true,
 		},
 		{
@@ -352,16 +352,16 @@ func buildMqttUDPTestCases(manualListenCount, autoListenCount, manualMultiTurns,
 			ExpectOutputText:     true,
 		},
 		{
-			Name:                 "mqtt_udp_injected_message_auto_listen",
-			Description:          "验证 MQTT/UDP 主动播报 auto_listen=true 不会收到服务端 goodbye",
-			Kind:                 protocolCaseInjectedMessageAuto,
-			UseMqttUDP:           true,
-			LocalMode:            LocalModeManual,
-			InputText:            "MQTT主动播报自动续听",
-			Timeout:              autoCaseTimeout,
-			ExpectHelloCount:     1,
-			ExpectHelloTransport: "udp",
-			ExpectOutputText:     true,
+			Name:                  "mqtt_udp_injected_message_auto_listen",
+			Description:           "验证 MQTT/UDP 主动播报 auto_listen=true 不会收到服务端 goodbye",
+			Kind:                  protocolCaseInjectedMessageAuto,
+			UseMqttUDP:            true,
+			LocalMode:             LocalModeManual,
+			InputText:             "MQTT主动播报自动续听",
+			Timeout:               autoCaseTimeout,
+			ExpectHelloCount:      1,
+			ExpectHelloTransport:  "udp",
+			ExpectOutputText:      true,
 			ExpectNoServerGoodbye: true,
 		},
 		{
@@ -650,12 +650,21 @@ func runMqttInjectedMessageCase(serverAddr, deviceID string, testCase *protocolT
 		return err
 	}
 
-	if err := postInjectMessage(serverAddr, deviceID, testCase.InputText, true, autoListen); err != nil {
-		return err
-	}
-	speakRequest, err := waitForMessage(rt.speakRequestCh, testCase.Timeout, "mqtt speak_request")
-	if err != nil {
-		return err
+	injectErrCh := make(chan error, 1)
+	go func() {
+		injectErrCh <- postInjectMessage(serverAddr, deviceID, testCase.InputText, true, autoListen)
+	}()
+
+	var speakRequest ServerMessage
+	select {
+	case speakRequest = <-rt.speakRequestCh:
+	case err := <-injectErrCh:
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("inject_msg 在收到 speak_request 前已完成")
+	case <-time.After(testCase.Timeout):
+		return fmt.Errorf("等待 mqtt speak_request 超时")
 	}
 	if speakRequest.SessionID != helloMsg.SessionID {
 		return fmt.Errorf("speak_request session_id 不匹配: got=%s want=%s", speakRequest.SessionID, helloMsg.SessionID)
@@ -687,6 +696,14 @@ func runMqttInjectedMessageCase(serverAddr, deviceID string, testCase *protocolT
 		},
 	}); err != nil {
 		return err
+	}
+	select {
+	case err := <-injectErrCh:
+		if err != nil {
+			return err
+		}
+	case <-time.After(testCase.Timeout):
+		return fmt.Errorf("等待 inject_msg 响应完成超时")
 	}
 	if err := waitForSignal(rt.ttsStartCh, testCase.Timeout, "mqtt injected tts start"); err != nil {
 		return err
@@ -927,10 +944,10 @@ func newAutoTestTTSProvider() (tts.TTSProvider, error) {
 		"receive_timeout": 60,
 	}
 	edgeOfflineConfig := map[string]interface{}{
-		"server_url": "ws://localhost:8080/tts",
-		"timeout":    30,
-		"sample_rate": SampleRate,
-		"channels":    1,
+		"server_url":     "ws://localhost:8080/tts",
+		"timeout":        30,
+		"sample_rate":    SampleRate,
+		"channels":       1,
 		"frame_duration": FrameDurationMs,
 	}
 	providerName := strings.TrimSpace(ttsProviderName)

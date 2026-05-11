@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	neturl "net/url"
 	"strings"
@@ -1108,7 +1109,8 @@ func postInjectMessage(serverAddr, deviceID, message string, skipLlm bool, autoL
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("inject_msg 响应失败: status=%s", resp.Status)
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("inject_msg 响应失败: status=%s body=%s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 	return nil
 }
