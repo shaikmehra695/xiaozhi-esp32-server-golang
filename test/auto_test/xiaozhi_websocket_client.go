@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -29,48 +28,76 @@ const defaultDetectText = "你好小智"
 
 // 消息类型常量
 const (
-	MessageTypeHello  = "hello"
-	MessageTypeListen = "listen"
-	MessageTypeAbort  = "abort"
-	MessageTypeIot    = "iot"
-	MessageTypeMcp    = "mcp"
+	MessageTypeHello   = "hello"
+	MessageTypeListen  = "listen"
+	MessageTypeAbort   = "abort"
+	MessageTypeIot     = "iot"
+	MessageTypeMcp     = "mcp"
+	MessageTypeGoodBye = "goodbye"
+)
+
+// 服务器消息类型常量
+const (
+	ServerMessageTypeSTT  = "stt"
+	ServerMessageTypeTTS  = "tts"
+	ServerMessageTypeLLM  = "llm"
+	ServerMessageTypeText = "text"
 )
 
 // 消息状态常量
 const (
-	MessageStateStart   = "start"
-	MessageStateStop    = "stop"
-	MessageStateDetect  = "detect"
-	MessageStateSuccess = "success"
-	MessageStateError   = "error"
-	MessageStateAbort   = "abort"
+	MessageStateStart         = "start"
+	MessageStateStop          = "stop"
+	MessageStateDetect        = "detect"
+	MessageStateSuccess       = "success"
+	MessageStateError         = "error"
+	MessageStateAbort         = "abort"
+	MessageStateSentenceStart = "sentence_start"
+	MessageStateSentenceEnd   = "sentence_end"
 )
 
 // ClientMessage 表示客户端消息
 type ClientMessage struct {
-	Type        string          `json:"type"`
-	DeviceID    string          `json:"device_id"`
-	Text        string          `json:"text,omitempty"`
-	Mode        string          `json:"mode,omitempty"`
-	State       string          `json:"state,omitempty"`
-	Token       string          `json:"token,omitempty"`
-	DeviceMac   string          `json:"device_mac,omitempty"`
-	Version     int             `json:"version,omitempty"`
-	Transport   string          `json:"transport,omitempty"`
-	AudioParams *AudioFormat    `json:"audio_params,omitempty"`
-	Features    map[string]bool `json:"features,omitempty"`
-	PayLoad     json.RawMessage `json:"payload,omitempty"`
+	Type           string               `json:"type"`
+	DeviceID       string               `json:"device_id,omitempty"`
+	SessionID      string               `json:"session_id,omitempty"`
+	Text           string               `json:"text,omitempty"`
+	Mode           string               `json:"mode,omitempty"`
+	State          string               `json:"state,omitempty"`
+	Token          string               `json:"token,omitempty"`
+	DeviceMac      string               `json:"device_mac,omitempty"`
+	Version        int                  `json:"version,omitempty"`
+	Transport      string               `json:"transport,omitempty"`
+	AudioParams    *AudioFormat         `json:"audio_params,omitempty"`
+	SpeakUDPConfig *SpeakReadyUDPConfig `json:"udp_config,omitempty"`
+	Features       map[string]bool      `json:"features,omitempty"`
+	PayLoad        json.RawMessage      `json:"payload,omitempty"`
 }
 
 // ServerMessage 表示服务器消息
 type ServerMessage struct {
-	Type        string          `json:"type"`
-	Text        string          `json:"text,omitempty"`
-	State       string          `json:"state,omitempty"`
-	SessionID   string          `json:"session_id,omitempty"`
-	Transport   string          `json:"transport,omitempty"`
-	AudioFormat *AudioFormat    `json:"audio_format,omitempty"`
-	PayLoad     json.RawMessage `json:"payload,omitempty"`
+	Type        string              `json:"type"`
+	Text        string              `json:"text,omitempty"`
+	State       string              `json:"state,omitempty"`
+	SessionID   string              `json:"session_id,omitempty"`
+	Version     int                 `json:"version,omitempty"`
+	Transport   string              `json:"transport,omitempty"`
+	AudioFormat *AudioFormat        `json:"audio_params,omitempty"`
+	AutoListen  *bool               `json:"auto_listen,omitempty"`
+	Udp         *UDPTransportConfig `json:"udp,omitempty"`
+	PayLoad     json.RawMessage     `json:"payload,omitempty"`
+}
+
+type UDPTransportConfig struct {
+	Server string `json:"server"`
+	Port   int    `json:"port"`
+	Key    string `json:"key"`
+	Nonce  string `json:"nonce"`
+}
+
+type SpeakReadyUDPConfig struct {
+	Ready         bool `json:"ready"`
+	ReuseExisting bool `json:"reuse_existing,omitempty"`
 }
 
 // AudioFormat 表示音频格式
@@ -145,6 +172,13 @@ func GetServerVisionURL() string {
 	return serverVisionURL
 }
 
+func resetSignals() {
+	drainSignal(waitInput)
+	serverVisionURLMu.Lock()
+	serverVisionURL = ""
+	serverVisionURLMu.Unlock()
+}
+
 func main() {
 	// 解析命令行参数
 	serverAddr := flag.String("server", "ws://localhost:8989/xiaozhi/v1/", "服务器地址")
@@ -153,7 +187,7 @@ func main() {
 	text := flag.String("text", "你好测试", "文本")
 	runnerFlag := flag.String("runner", "manual", "运行方式(manual|auto)")
 	modeFlag := flag.String("mode", LocalModeAuto1, "本地模式(auto1|auto2|manual|realtime，auto会映射到auto1)")
-	casesFlag := flag.String("cases", "all", "自动化测试用例(all|manual_roundtrip,auto1_roundtrip,auto2_roundtrip,realtime_roundtrip)")
+	casesFlag := flag.String("cases", "all", "自动化测试用例(all|manual_roundtrip,auto1_roundtrip,auto2_roundtrip,realtime_roundtrip,hello_metadata,injected_message_skip_llm,iot_roundtrip,tts_sentence_boundaries,manual_multi_turn,mcp_initialize,hello_without_mcp_no_initialize,mcp_duplicate_hello_no_reinitialize,invalid_hello_missing_audio_params,invalid_hello_unsupported_transport,duplicate_hello_rehandshake,listen_before_hello_ignored,abort_after_listen_start,abort_during_tts,realtime_interrupt,realtime_listen_stop,realtime_duplicate_start_ignored,goodbye_then_resume,ota_metadata,ota_activate_invalid_algorithm,ota_activate_invalid_challenge_if_required,mqtt_udp_hello,mqtt_udp_injected_message)")
 	caseTimeoutFlag := flag.Duration("case_timeout", 20*time.Second, "自动化单用例超时时间")
 	turnsFlag := flag.Int("turns", 1, "自动化测试每个用例发言轮次")
 	ttsProviderFlag := flag.String("tts_provider", "edge_offline", "TTS provider (edge_offline|edge|cosyvoice)")
@@ -212,146 +246,32 @@ func runClient(serverAddr, deviceID, audioFile string, testCase *protocolTestCas
 	wsURL := serverAddr
 	fmt.Printf("正在连接服务器: %s\n", wsURL)
 
-	// 设置HTTP头
-	header := http.Header{}
-	header.Set("Device-Id", deviceID)
-	header.Set("Content-Type", "application/json")
-	header.Set("Authorization", "Bearer "+token)
-	header.Set("Protocol-Version", "1")
-	header.Set("Client-Id", clientId)
-
 	// 连接WebSocket服务器
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	conn, _, err := dialServer(wsURL, deviceID)
 	if err != nil {
-		return fmt.Errorf("连接失败: %v", err)
+		return err
 	}
 	defer conn.Close()
-	runtime := newSessionRuntime(conn, deviceID)
+	runtime := startSessionRuntime(conn, deviceID)
 
 	fmt.Println("已连接到服务器")
 
-	mcpSendMsgChan := make(chan []byte, 10)
-	mcpRecvMsgChan := make(chan []byte, 10)
-
-	go func() {
-		for msg := range mcpSendMsgChan {
-			fmt.Printf("发送mcp消息: %s\n", string(msg))
-			/*respMsg := ClientMessage{
-				Type:     MessageTypeMcp,
-				DeviceID: deviceID,
-				PayLoad:  msg,
-			}
-			jsonByte, _ := json.Marshal(respMsg)*/
-			runtime.writeText(msg)
-		}
-	}()
-
-	// 设置消息处理
-	done := make(chan struct{})
-
-	var startTs int64
-	_ = startTs
-	// 启动一个协程来处理从服务器接收的消息
-	go func() {
-		defer close(done)
-		ttsReceiving := false
-		//var recvInterval int64
-		for {
-			messageType, message, err := conn.ReadMessage()
-			if err != nil {
-				fmt.Printf("读取消息失败: %v\n", err)
-				return
-			}
-
-			if messageType == websocket.TextMessage {
-				fmt.Printf("收到服务器消息: %+v\n", string(message))
-				var serverMsg ServerMessage
-				if err := json.Unmarshal(message, &serverMsg); err != nil {
-					fmt.Printf("解析消息失败: %v\n", err)
-					continue
-				}
-				runtime.recordIncomingMessage(serverMsg)
-
-				if serverMsg.Type == "mcp" {
-					// 从 MCP initialize 消息中解析服务器下发的 vision_url
-					if len(serverMsg.PayLoad) > 0 {
-						parseAndSaveVisionURL(serverMsg.PayLoad)
-					}
-					select {
-					case mcpRecvMsgChan <- serverMsg.PayLoad:
-					default:
-						fmt.Printf("mcp消息队列已满, 丢弃消息: %s\n", string(serverMsg.PayLoad))
-					}
-				}
-
-				if serverMsg.Type == MessageTypeHello {
-					runtime.notifyHelloAck(serverMsg)
-				}
-
-				if serverMsg.Type == "tts" {
-					switch serverMsg.State {
-					case MessageStateStart:
-						ttsReceiving = true
-						OpusData = [][]byte{}
-						firstRecvFrame = false
-						runtime.notifyTTSStart()
-						fmt.Println("收到 tts start，准备接收音频")
-					case MessageStateStop:
-						ttsReceiving = false
-						runtime.notifyTTSStop()
-						fmt.Println("收到 tts stop")
-						if err := handleTTSStopForStrategy(runtime); err != nil {
-							fmt.Printf("处理 tts stop 失败: %v\n", err)
-						}
-					}
-				}
-			} else if messageType == websocket.BinaryMessage {
-				runtime.recordIncomingBinary(len(message), ttsReceiving)
-				if !ttsReceiving {
-					continue
-				}
-				if !firstRecvFrame {
-					firstRecvFrame = true
-					fmt.Printf("首帧到达时间: %d 毫秒\n", time.Now().UnixMilli()-detectStartTs)
-					//os.WriteFile("ws_output_first_frame.wav", message, 0644)
-				}
-				OpusData = append(OpusData, message)
-				//fmt.Printf("收到音频数据: %d 字节, 间隔: %d 毫秒\n", len(message), time.Now().UnixMilli()-recvInterval)
-				//recvInterval = time.Now().UnixMilli()
-			}
-		}
-	}()
-
-	go func() {
-		NewMcpServer(mcpSendMsgChan, mcpRecvMsgChan)
-	}()
-
 	// 发送hello消息
-	helloMsg := ClientMessage{
-		Type:      MessageTypeHello,
-		DeviceID:  deviceID,
-		Transport: "websocket",
-		Version:   1,
-		Features:  map[string]bool{},
-		AudioParams: &AudioFormat{
-			SampleRate:    SampleRate,
-			Channels:      Channels,
-			FrameDuration: FrameDurationMs,
-			Format:        "opus",
-		},
-	}
-
-	if addMcp {
-		helloMsg.Features["mcp"] = true
-	}
-
-	if err := sendJSONMessage(runtime, helloMsg); err != nil {
+	effectiveAddMcp := addMcp || (testCase != nil && testCase.EnableMCP)
+	if err := sendHello(runtime, deviceID, effectiveAddMcp, "websocket", defaultAudioFormat()); err != nil {
 		return fmt.Errorf("发送hello消息失败: %v", err)
 	}
 	if err := waitForHelloAck(runtime, defaultHelloTimeout); err != nil {
 		return fmt.Errorf("hello 握手失败: %v", err)
 	}
 	fmt.Println("hello 握手完成")
+
+	if testCase != nil {
+		switch testCase.Kind {
+		case protocolCaseMCP, protocolCaseNoMCP, protocolCaseMCPDuplicateHello, protocolCaseAbort, protocolCaseHelloMetadata, protocolCaseIot:
+			return runProtocolTestCase(runtime, testCase, nil)
+		}
+	}
 
 	// 如果指定了音频文件，则发送音频文件
 	if audioFile != "" {
@@ -398,6 +318,138 @@ func saveOpusData() error {
 	return nil
 }
 
+func startSessionRuntime(conn *websocket.Conn, deviceID string) *sessionRuntime {
+	runtime := newSessionRuntime(conn, deviceID)
+	mcpSendMsgChan := make(chan []byte, 10)
+	mcpRecvMsgChan := make(chan []byte, 10)
+
+	go func() {
+		for msg := range mcpSendMsgChan {
+			fmt.Printf("发送mcp消息: %s\n", string(msg))
+			runtime.recordOutgoingMCP(msg)
+			if err := runtime.writeText(msg); err != nil {
+				fmt.Printf("发送mcp消息失败: %v\n", err)
+				return
+			}
+		}
+	}()
+
+	go func() {
+		ttsReceiving := false
+		for {
+			messageType, message, err := conn.ReadMessage()
+			if err != nil {
+				fmt.Printf("读取消息失败: %v\n", err)
+				return
+			}
+
+			if messageType == websocket.TextMessage {
+				fmt.Printf("收到服务器消息: %+v\n", string(message))
+				var serverMsg ServerMessage
+				if err := json.Unmarshal(message, &serverMsg); err != nil {
+					fmt.Printf("解析消息失败: %v\n", err)
+					continue
+				}
+				runtime.recordIncomingMessage(serverMsg)
+
+				if serverMsg.Type == MessageTypeMcp {
+					if len(serverMsg.PayLoad) > 0 {
+						parseAndSaveVisionURL(serverMsg.PayLoad)
+					}
+					runtime.recordIncomingMCP(serverMsg)
+					select {
+					case mcpRecvMsgChan <- serverMsg.PayLoad:
+					default:
+						fmt.Printf("mcp消息队列已满, 丢弃消息: %s\n", string(serverMsg.PayLoad))
+					}
+				}
+
+				if serverMsg.Type == MessageTypeHello {
+					runtime.notifyHelloAck(serverMsg)
+				}
+
+				if serverMsg.Type == MessageTypeIot {
+					runtime.notifyIot(serverMsg)
+				}
+
+				if serverMsg.Type == ServerMessageTypeSTT {
+					runtime.notifySTT(serverMsg)
+				}
+
+				if serverMsg.Type == ServerMessageTypeLLM || serverMsg.Type == ServerMessageTypeText {
+					runtime.notifyOutput(serverMsg)
+				}
+
+				if serverMsg.Type == ServerMessageTypeTTS {
+					switch serverMsg.State {
+					case MessageStateStart:
+						ttsReceiving = true
+						OpusData = [][]byte{}
+						firstRecvFrame = false
+						runtime.notifyTTSStart()
+						fmt.Println("收到 tts start，准备接收音频")
+					case MessageStateStop:
+						ttsReceiving = false
+						runtime.notifyTTSStop()
+						fmt.Println("收到 tts stop")
+						if err := handleTTSStopForStrategy(runtime); err != nil {
+							fmt.Printf("处理 tts stop 失败: %v\n", err)
+						}
+					case MessageStateSentenceStart, MessageStateSentenceEnd:
+						if strings.TrimSpace(serverMsg.Text) != "" {
+							runtime.notifyOutput(serverMsg)
+						}
+					}
+				}
+			} else if messageType == websocket.BinaryMessage {
+				runtime.recordIncomingBinary(len(message), ttsReceiving)
+				if !ttsReceiving {
+					continue
+				}
+				if !firstRecvFrame {
+					firstRecvFrame = true
+					fmt.Printf("首帧到达时间: %d 毫秒\n", time.Now().UnixMilli()-detectStartTs)
+				}
+				OpusData = append(OpusData, message)
+			}
+		}
+	}()
+
+	go func() {
+		NewMcpServer(mcpSendMsgChan, mcpRecvMsgChan)
+	}()
+
+	return runtime
+}
+
+func defaultAudioFormat() *AudioFormat {
+	return &AudioFormat{
+		SampleRate:    SampleRate,
+		Channels:      Channels,
+		FrameDuration: FrameDurationMs,
+		Format:        "opus",
+	}
+}
+
+func buildHelloMessage(deviceID string, enableMCP bool, transport string, audioParams *AudioFormat) ClientMessage {
+	msg := ClientMessage{
+		Type:        MessageTypeHello,
+		DeviceID:    deviceID,
+		Transport:   transport,
+		Version:     1,
+		Features:    map[string]bool{},
+		AudioParams: audioParams,
+	}
+	if enableMCP {
+		msg.Features["mcp"] = true
+	}
+	return msg
+}
+
+func sendHello(runtime *sessionRuntime, deviceID string, enableMCP bool, transport string, audioParams *AudioFormat) error {
+	return sendJSONMessage(runtime, buildHelloMessage(deviceID, enableMCP, transport, audioParams))
+}
+
 func sendListenStart(runtime *sessionRuntime, mode string) error {
 	// 发送listen start消息
 	listenStartMsg := ClientMessage{
@@ -438,6 +490,29 @@ func sendAbort(runtime *sessionRuntime) error {
 
 	if err := sendJSONMessage(runtime, listenStartMsg); err != nil {
 		return fmt.Errorf("发送listen start消息失败: %v", err)
+	}
+	return nil
+}
+
+func sendIot(runtime *sessionRuntime, text string) error {
+	msg := ClientMessage{
+		Type:     MessageTypeIot,
+		DeviceID: runtime.deviceID,
+		Text:     text,
+	}
+	if err := sendJSONMessage(runtime, msg); err != nil {
+		return fmt.Errorf("发送iot消息失败: %v", err)
+	}
+	return nil
+}
+
+func sendGoodbye(runtime *sessionRuntime) error {
+	msg := ClientMessage{
+		Type:     MessageTypeGoodBye,
+		DeviceID: runtime.deviceID,
+	}
+	if err := sendJSONMessage(runtime, msg); err != nil {
+		return fmt.Errorf("发送goodbye消息失败: %v", err)
 	}
 	return nil
 }
