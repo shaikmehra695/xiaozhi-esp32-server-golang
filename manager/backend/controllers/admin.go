@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"xiaozhi/manager/backend/models"
+	"xiaozhi/manager/backend/services/configprovider"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gin-gonic/gin"
@@ -931,8 +932,9 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				}
 
 				// 组装成与 config.yaml 相同的格式
+				provider := configprovider.NormalizeExistingProvider("tts", config.Provider, config.ConfigID, configData)
 				configItem := gin.H{
-					"provider":   config.Provider,
+					"provider":   provider,
 					"name":       config.Name,
 					"is_default": config.IsDefault,
 				}
@@ -940,6 +942,7 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				for k, v := range configData {
 					configItem[k] = v
 				}
+				configItem["provider"] = provider
 				// 使用 config_id 作为 key
 				ttsConfigMap[config.ConfigID] = configItem
 
@@ -987,8 +990,9 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				}
 
 				// 组装成与 config.yaml 相同的格式
+				provider := configprovider.NormalizeExistingProvider("vad", config.Provider, config.ConfigID, actualConfigData)
 				configItem := gin.H{
-					"provider":   config.Provider,
+					"provider":   provider,
 					"name":       config.Name,
 					"is_default": config.IsDefault,
 				}
@@ -996,6 +1000,7 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				for k, v := range actualConfigData {
 					configItem[k] = v
 				}
+				configItem["provider"] = provider
 				// 使用 config_id 作为 key
 				vadConfigMap[config.ConfigID] = configItem
 
@@ -1021,8 +1026,9 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				}
 
 				// 组装成与 config.yaml 相同的格式
+				provider := configprovider.NormalizeExistingProvider("asr", config.Provider, config.ConfigID, configData)
 				configItem := gin.H{
-					"provider":   config.Provider,
+					"provider":   provider,
 					"name":       config.Name,
 					"is_default": config.IsDefault,
 				}
@@ -1030,6 +1036,7 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				for k, v := range configData {
 					configItem[k] = v
 				}
+				configItem["provider"] = provider
 				// 使用 config_id 作为 key
 				asrConfigMap[config.ConfigID] = configItem
 
@@ -1055,8 +1062,9 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				}
 
 				// 组装成与 config.yaml 相同的格式
+				provider := configprovider.NormalizeExistingProvider("llm", config.Provider, config.ConfigID, configData)
 				configItem := gin.H{
-					"provider":   config.Provider,
+					"provider":   provider,
 					"name":       config.Name,
 					"is_default": config.IsDefault,
 				}
@@ -1064,6 +1072,7 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				for k, v := range configData {
 					configItem[k] = v
 				}
+				configItem["provider"] = provider
 				// 使用 config_id 作为 key
 				llmConfigMap[config.ConfigID] = configItem
 
@@ -1103,7 +1112,11 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				if config.IsDefault {
 					defaultVisionConfigID = config.ConfigID
 				}
-				// 与 YAML 一致：子项只存业务配置，不含 name/provider/is_default
+				provider := configprovider.NormalizeExistingProvider("vision", config.Provider, config.ConfigID, configData)
+				if provider != "" {
+					configData["provider"] = provider
+				}
+				// 与 YAML 一致：子项只存业务配置，不含 name/is_default，provider 为真实供应商
 				vllmMap[config.ConfigID] = configData
 			}
 		}
@@ -1146,6 +1159,10 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 				if vllmConfig, ok := visionMap["vllm"].(gin.H); ok {
 					if config.IsDefault {
 						vllmConfig["provider"] = config.ConfigID
+					}
+					provider := configprovider.NormalizeExistingProvider("vision", config.Provider, config.ConfigID, configData)
+					if provider != "" {
+						configData["provider"] = provider
 					}
 					vllmConfig[config.ConfigID] = configData
 				}
@@ -4186,22 +4203,22 @@ func (ac *AdminController) ExportConfigs(c *gin.Context) {
 				exportConfig.VAD["provider"] = config.ConfigID
 			}
 			// 使用ConfigID作为key
-			exportConfig.VAD[config.ConfigID] = actualConfigData
+			exportConfig.VAD[config.ConfigID] = configprovider.ExportData(config.Type, config.ConfigID, config.Provider, actualConfigData)
 		case "asr":
 			if config.IsDefault {
 				exportConfig.ASR["provider"] = config.ConfigID
 			}
-			exportConfig.ASR[config.ConfigID] = jsonData
+			exportConfig.ASR[config.ConfigID] = configprovider.ExportData(config.Type, config.ConfigID, config.Provider, jsonData)
 		case "llm":
 			if config.IsDefault {
 				exportConfig.LLM["provider"] = config.ConfigID
 			}
-			exportConfig.LLM[config.ConfigID] = jsonData
+			exportConfig.LLM[config.ConfigID] = configprovider.ExportData(config.Type, config.ConfigID, config.Provider, jsonData)
 		case "tts":
 			if config.IsDefault {
 				exportConfig.TTS["provider"] = config.ConfigID
 			}
-			exportConfig.TTS[config.ConfigID] = jsonData
+			exportConfig.TTS[config.ConfigID] = configprovider.ExportData(config.Type, config.ConfigID, config.Provider, jsonData)
 		case "vision":
 			// 特殊处理vision配置
 			if config.ConfigID == "vision_base" {
@@ -4218,7 +4235,7 @@ func (ac *AdminController) ExportConfigs(c *gin.Context) {
 					if config.IsDefault {
 						vllmConfig["provider"] = config.ConfigID
 					}
-					vllmConfig[config.ConfigID] = jsonData
+					vllmConfig[config.ConfigID] = configprovider.ExportData(config.Type, config.ConfigID, config.Provider, jsonData)
 				}
 			}
 		case "ota":
@@ -4245,7 +4262,7 @@ func (ac *AdminController) ExportConfigs(c *gin.Context) {
 			if config.IsDefault {
 				exportConfig.Memory["provider"] = config.ConfigID
 			}
-			exportConfig.Memory[config.ConfigID] = jsonData
+			exportConfig.Memory[config.ConfigID] = configprovider.ExportData(config.Type, config.ConfigID, config.Provider, jsonData)
 		case "voice_identify":
 			if config.IsDefault {
 				exportConfig.VoiceIdentify["provider"] = config.ConfigID
@@ -4481,6 +4498,10 @@ func (ac *AdminController) ImportConfigs(c *gin.Context) {
 
 						if configMap, ok := configValue.(map[string]interface{}); ok {
 							log.Printf("处理配置项: %s", configID)
+							providerName := configprovider.NormalizeProvider(configType, configID, configMap)
+							if providerName != "" {
+								configMap["provider"] = providerName
+							}
 							jsonData, err := json.Marshal(configMap)
 							if err != nil {
 								log.Printf("序列化配置数据失败: %v", err)
@@ -4497,7 +4518,7 @@ func (ac *AdminController) ImportConfigs(c *gin.Context) {
 								Type:      configType,
 								Name:      configID,
 								ConfigID:  configID,
-								Provider:  configID,
+								Provider:  providerName,
 								JsonData:  string(jsonData),
 								Enabled:   true,
 								IsDefault: isDefault,
@@ -4699,6 +4720,10 @@ func (ac *AdminController) ImportConfigs(c *gin.Context) {
 
 						if configMap, ok := configValue.(map[string]interface{}); ok {
 							log.Printf("处理vllm配置项: %s", configID)
+							providerName := configprovider.NormalizeProvider("vision", configID, configMap)
+							if providerName != "" {
+								configMap["provider"] = providerName
+							}
 							jsonData, err := json.Marshal(configMap)
 							if err != nil {
 								log.Printf("序列化vllm配置数据失败: %v", err)
@@ -4715,7 +4740,7 @@ func (ac *AdminController) ImportConfigs(c *gin.Context) {
 								Type:      "vision",
 								Name:      configID,
 								ConfigID:  configID,
-								Provider:  configID,
+								Provider:  providerName,
 								JsonData:  string(jsonData),
 								Enabled:   true,
 								IsDefault: isDefault,
@@ -4835,6 +4860,7 @@ func (ac *AdminController) ImportConfigs(c *gin.Context) {
 	}
 
 	log.Printf("配置导入成功")
+	ac.notifySystemConfigChanged()
 	c.JSON(http.StatusOK, gin.H{"message": "Configuration imported successfully"})
 }
 
