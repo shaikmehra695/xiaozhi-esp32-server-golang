@@ -113,6 +113,8 @@ type AdminController struct {
 	EndpointAuthToken   string
 }
 
+var errDatabaseUnavailable = errors.New("database connection is unavailable")
+
 // 通用配置管理
 // GetDeviceConfigs 根据设备ID获取设备关联的配置信息
 // 如果设备不存在，则返回全局默认配置
@@ -605,6 +607,10 @@ func (ac *AdminController) GetDeviceConfigs(c *gin.Context) {
 
 // getSystemConfigsData 获取系统配置数据（与 GetSystemConfigs 返回的 data 一致），供接口与 WebSocket 推送复用
 func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
+	if ac == nil || ac.DB == nil {
+		return nil, errDatabaseUnavailable
+	}
+
 	var allConfigs []models.Config
 	if err := ac.DB.Where("type IN (?)", []string{"mqtt", "mqtt_server", "udp", "ota", "mcp", "local_mcp", "voice_identify", "tts", "vad", "asr", "llm", "vision", "auth", "chat", "knowledge_search"}).Find(&allConfigs).Error; err != nil {
 		return nil, err
@@ -1179,7 +1185,11 @@ func (ac *AdminController) getSystemConfigsData() (gin.H, error) {
 func (ac *AdminController) GetSystemConfigs(c *gin.Context) {
 	data, err := ac.getSystemConfigsData()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get system configs"})
+		status := http.StatusInternalServerError
+		if errors.Is(err, errDatabaseUnavailable) {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{"error": "Failed to get system configs"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": data})
