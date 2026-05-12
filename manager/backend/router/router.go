@@ -45,7 +45,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	speakerGroupController := controllers.NewSpeakerGroupController(db, cfg)
 	voiceCloneController := controllers.NewVoiceCloneController(db, cfg)
 	poolStatsController := controllers.NewPoolStatsController()
-	learningController := &controllers.LearningController{DB: db}
+	learningController := controllers.NewLearningController(db, cfg)
 
 	// 初始化聊天历史控制器（使用传入的 cfg，不重新 Load 避免内嵌时读错路径）
 	audioBasePath := "./storage/chat_history/audio"

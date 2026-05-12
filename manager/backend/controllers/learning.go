@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -10,14 +11,42 @@ import (
 	"strconv"
 	"time"
 
+	"xiaozhi/manager/backend/config"
 	"xiaozhi/manager/backend/models"
+	"xiaozhi/manager/backend/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type LearningController struct {
-	DB *gorm.DB
+	DB       *gorm.DB
+	Feedback *services.FeedbackService
+}
+
+// NewLearningController creates a learning controller with LLM feedback support
+func NewLearningController(db *gorm.DB, cfg *config.Config) *LearningController {
+	llmCfg := services.LLMConfig{
+		BaseURL:   cfg.LLM.BaseURL,
+		APIKey:    cfg.LLM.APIKey,
+		Model:     cfg.LLM.Model,
+		MaxTokens: cfg.LLM.MaxTokens,
+	}
+
+	// If LLM is not configured, log warning and use nil (will fall back to mock)
+	var feedbackSvc *services.FeedbackService
+	if llmCfg.BaseURL != "" && llmCfg.APIKey != "" {
+		llmSvc := services.NewLLMService(llmCfg)
+		feedbackSvc = services.NewFeedbackService(llmSvc)
+		log.Printf("LLM feedback enabled: %s (%s)", llmCfg.BaseURL, llmCfg.Model)
+	} else {
+		log.Println("LLM not configured, using mock feedback")
+	}
+
+	return &LearningController{
+		DB:       db,
+		Feedback: feedbackSvc,
+	}
 }
 
 // === Scenarios ===
@@ -91,9 +120,35 @@ func (lc *LearningController) SubmitWriting(c *gin.Context) {
 		return
 	}
 
-	// TODO: Call LLM for feedback (Phase 2+)
-	// For now, generate mock feedback
-	feedback := generateMockWritingFeedback(submission.ID, req.Text)
+	// Generate feedback — real LLM if configured, mock otherwise
+	var feedback models.WritingFeedback
+	if lc.Feedback != nil {
+		scenarioTitle := scenario.TitleEn
+		if scenarioTitle == "" {
+			scenarioTitle = "IT Writing Exercise"
+		}
+		result, err := lc.Feedback.GenerateWritingFeedback(scenarioTitle, req.Text)
+		if err != nil {
+			log.Printf("LLM feedback error, falling back to mock: %v", err)
+			feedback = generateMockWritingFeedback(submission.ID, req.Text)
+		} else {
+			corrJSON, _ := json.Marshal(result.Corrections)
+			feedback = models.WritingFeedback{
+				SubmissionID:     submission.ID,
+				OverallScore:     (result.GrammarScore + result.VocabularyScore + result.StructureScore + result.Professionalism) / 4,
+				GrammarScore:     result.GrammarScore,
+				VocabularyScore:  result.VocabularyScore,
+				ClarityScore:     result.StructureScore,
+				Corrections:      string(corrJSON),
+				SummaryZh:        result.SummaryZH,
+				SummaryEn:        result.SummaryEN,
+				SuggestedRewrite: result.SuggestedRewrite,
+				XPAwarded:        result.XPAwarded,
+			}
+		}
+	} else {
+		feedback = generateMockWritingFeedback(submission.ID, req.Text)
+	}
 	lc.DB.Create(&feedback)
 
 	// Update learner profile
@@ -210,8 +265,40 @@ func (lc *LearningController) SubmitSpeaking(c *gin.Context) {
 		return
 	}
 
-	// Mock feedback for now (Phase 4: real LLM + TTS)
-	feedback := generateMockSpeakingFeedback(submission.ID, transcriptDraft)
+	// Generate feedback — real LLM if configured, mock otherwise
+	var feedback models.SpeakingFeedback
+	if lc.Feedback != nil && transcriptDraft != "" {
+		// Look up scenario title
+		var scenario models.LearningScenario
+		lc.DB.First(&scenario, scenarioID)
+		scenarioTitle := scenario.TitleEn
+		if scenarioTitle == "" {
+			scenarioTitle = "IT Speaking Exercise"
+		}
+
+		result, err := lc.Feedback.GenerateSpeakingFeedback(scenarioTitle, transcriptDraft)
+		if err != nil {
+			log.Printf("LLM feedback error, falling back to mock: %v", err)
+			feedback = generateMockSpeakingFeedback(submission.ID, transcriptDraft)
+		} else {
+			corrJSON, _ := json.Marshal(result.Corrections)
+			feedback = models.SpeakingFeedback{
+				SubmissionID:       submission.ID,
+				TranscriptFinal:    transcriptDraft,
+				GrammarScore:       result.GrammarScore,
+				VocabularyScore:    result.VocabularyScore,
+				FluencyScore:       result.FluencyScore,
+				PronunciationScore: result.PronunciationScore,
+				Corrections:        string(corrJSON),
+				SummaryZh:          result.SummaryZH,
+				SummaryEn:          result.SummaryEN,
+				SuggestedResponse:  result.SuggestedResponse,
+				XPAwarded:          result.XPAwarded,
+			}
+		}
+	} else {
+		feedback = generateMockSpeakingFeedback(submission.ID, transcriptDraft)
+	}
 	lc.DB.Create(&feedback)
 
 	updateLearnerXP(lc.DB, userID, feedback.XPAwarded, "speaking")

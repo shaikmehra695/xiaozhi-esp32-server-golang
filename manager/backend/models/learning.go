@@ -34,17 +34,18 @@ type WritingSubmission struct {
 
 // WritingFeedback LLM 反饋結果
 type WritingFeedback struct {
-	ID              uint   `json:"id" gorm:"primarykey"`
-	SubmissionID    uint   `json:"submission_id" gorm:"uniqueIndex;not null"`
-	OverallScore    int    `json:"overall_score" gorm:"not null"`    // 0-100
-	GrammarScore    int    `json:"grammar_score" gorm:"not null"`    // 0-100
-	VocabularyScore int    `json:"vocabulary_score" gorm:"not null"` // 0-100
-	ClarityScore    int    `json:"clarity_score" gorm:"not null"`    // 0-100
-	Corrections     string `json:"corrections" gorm:"type:text"`     // JSON array of corrections
-	SummaryZh       string `json:"summary_zh" gorm:"type:text"`
-	SummaryEn       string `json:"summary_en" gorm:"type:text"`
-	XPAwarded       int    `json:"xp_awarded" gorm:"not null;default:0"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID               uint   `json:"id" gorm:"primarykey"`
+	SubmissionID     uint   `json:"submission_id" gorm:"uniqueIndex;not null"`
+	OverallScore     int    `json:"overall_score" gorm:"not null"`    // 0-100
+	GrammarScore     int    `json:"grammar_score" gorm:"not null"`    // 0-100
+	VocabularyScore  int    `json:"vocabulary_score" gorm:"not null"` // 0-100
+	ClarityScore     int    `json:"clarity_score" gorm:"not null"`    // 0-100
+	Corrections      string `json:"corrections" gorm:"type:text"`     // JSON array of corrections
+	SummaryZh        string `json:"summary_zh" gorm:"type:text"`
+	SummaryEn        string `json:"summary_en" gorm:"type:text"`
+	SuggestedRewrite string `json:"suggested_rewrite" gorm:"type:text"` // LLM polished version
+	XPAwarded        int    `json:"xp_awarded" gorm:"not null;default:0"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // SpeakingSubmission 用戶口語提交
@@ -69,6 +70,7 @@ type SpeakingFeedback struct {
 	Corrections      string `json:"corrections" gorm:"type:text"` // JSON array
 	SummaryZh        string `json:"summary_zh" gorm:"type:text"`
 	SummaryEn        string `json:"summary_en" gorm:"type:text"`
+	SuggestedResponse string `json:"suggested_response" gorm:"type:text"` // LLM model answer
 	TTSAudioPath     string `json:"tts_audio_path" gorm:"type:varchar(500)"`
 	XPAwarded        int    `json:"xp_awarded" gorm:"not null;default:0"`
 	CreatedAt        time.Time `json:"created_at"`

@@ -1,0 +1,13 @@
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates tzdata
+WORKDIR /root/
+
+COPY manager-backend .
+COPY config ./config
+
+ENV TZ=Asia/Shanghai
+
+EXPOSE 8080
+
+CMD ["./manager-backend"]

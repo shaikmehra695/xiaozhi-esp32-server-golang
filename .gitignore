@@ -7,3 +7,13 @@ node_modules/
 config_shijingbo.json
 config_shijingbo.yaml
 .idea
+
+# Compiled binaries
+manager/backend/manager-backend
+manager/backend/manager-backend-*
+
+# Runtime logs
+logs/
+
+# Docker custom compose (local only)
+docker/docker-composer/docker-compose.custom.yml

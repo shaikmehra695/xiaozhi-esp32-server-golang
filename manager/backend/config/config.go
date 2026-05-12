@@ -16,6 +16,15 @@ type Config struct {
 	SpeakerService    SpeakerServiceConfig `json:"speaker_service"`
 	Storage           StorageConfig        `json:"storage"`
 	History           HistoryConfig        `json:"history"`
+	LLM               LLMConfig            `json:"llm"`
+}
+
+// LLMConfig holds LLM provider configuration for feedback generation
+type LLMConfig struct {
+	BaseURL   string `json:"base_url"`
+	APIKey    string `json:"api_key"`
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens"`
 }
 
 type ServerConfig struct {

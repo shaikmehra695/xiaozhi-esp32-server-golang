@@ -1,0 +1,112 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: xiaozhi-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: xiaozhi_admin
+    ports:
+      - "23306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password --skip-ssl
+    networks:
+      - xiaozhi-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysql", "-h", "localhost", "-P", "3306", "-u", "root", "-ppassword", "-e", "SELECT 1"]
+      timeout: 5s
+      retries: 3
+      interval: 10s
+      start_period: 180s
+
+  main-server:
+    image: ghcr.io/hackers365/xiaozhi_server:0.6.0
+    platform: linux/amd64
+    container_name: xiaozhi-main-server
+    ports:
+      - "8989:8989"
+      - "2883:2883"
+      - "8888:8888/udp"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASSWORD=password
+      - DB_NAME=xiaozhi_admin
+      - MANAGER_BACKEND_URL=http://backend:8080
+    volumes:
+      - ../../config:/workspace/config
+      - ../../logs:/workspace/logs
+    networks:
+      - xiaozhi-network
+    restart: unless-stopped
+
+  backend:
+    image: xiaozhi-manager-custom:latest
+    platform: linux/arm64
+    container_name: xiaozhi-backend
+    ports:
+      - "8081:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASSWORD=password
+      - DB_NAME=xiaozhi_admin
+    volumes:
+      - ../../manager/backend/config:/root/config
+    networks:
+      - xiaozhi-network
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/hackers365/xiaozhi_manager_frontend:0.6.0
+    platform: linux/amd64
+    container_name: xiaozhi-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - xiaozhi-network
+    restart: unless-stopped
+
+  voice-server:
+    image: ghcr.io/hackers365/voice_server:0.1.2
+    platform: linux/amd64
+    container_name: xiaozhi-voice-server
+    ports:
+      - "9898:9898"
+    depends_on:
+      - main-server
+    environment:
+      - MAIN_SERVER_URL=http://main-server:8989
+    networks:
+      - xiaozhi-network
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: xiaozhi-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - xiaozhi-network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  qdrant_data:
+
+networks:
+  xiaozhi-network:
+    driver: bridge
