@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -150,28 +152,66 @@ func (lc *LearningController) SubmitSpeaking(c *gin.Context) {
 		return
 	}
 
-	// TODO: Handle multipart form with audio file (Phase 3)
-	var req struct {
-		ScenarioID      uint   `json:"scenario_id" binding:"required"`
-		TranscriptDraft string `json:"transcript_draft"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "scenario_id is required"})
-		return
+	// Handle multipart form with audio file
+	contentType := c.ContentType()
+
+	var scenarioID uint
+	var transcriptDraft string
+	var audioPath string
+
+	if contentType == "multipart/form-data" {
+		// Audio upload mode
+		sid := c.PostForm("scenario_id")
+		parsedID, err := strconv.ParseUint(sid, 10, 32)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid scenario_id"})
+			return
+		}
+		scenarioID = uint(parsedID)
+		transcriptDraft = c.PostForm("transcript_draft")
+
+		file, err := c.FormFile("audio")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Audio file is required"})
+			return
+		}
+
+		// Save audio file
+		filename := fmt.Sprintf("speaking_%d_%d%s", userID, time.Now().UnixNano(), filepath.Ext(file.Filename))
+		savePath := filepath.Join("uploads", "audio", filename)
+		os.MkdirAll(filepath.Dir(savePath), 0755)
+		if err := c.SaveUploadedFile(file, savePath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save audio"})
+			return
+		}
+		audioPath = savePath
+	} else {
+		// JSON mode (no audio, transcript only)
+		var req struct {
+			ScenarioID      uint   `json:"scenario_id" binding:"required"`
+			TranscriptDraft string `json:"transcript_draft"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scenario_id is required"})
+			return
+		}
+		scenarioID = req.ScenarioID
+		transcriptDraft = req.TranscriptDraft
 	}
 
 	submission := models.SpeakingSubmission{
 		UserID:          userID,
-		ScenarioID:      req.ScenarioID,
-		TranscriptDraft: req.TranscriptDraft,
+		ScenarioID:      scenarioID,
+		TranscriptDraft: transcriptDraft,
+		AudioPath:       audioPath,
 	}
 	if err := lc.DB.Create(&submission).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save submission"})
 		return
 	}
 
-	// Mock feedback for now
-	feedback := generateMockSpeakingFeedback(submission.ID, req.TranscriptDraft)
+	// Mock feedback for now (Phase 4: real LLM + TTS)
+	feedback := generateMockSpeakingFeedback(submission.ID, transcriptDraft)
 	lc.DB.Create(&feedback)
 
 	updateLearnerXP(lc.DB, userID, feedback.XPAwarded, "speaking")
