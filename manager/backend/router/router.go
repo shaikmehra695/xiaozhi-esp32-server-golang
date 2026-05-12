@@ -45,6 +45,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	speakerGroupController := controllers.NewSpeakerGroupController(db, cfg)
 	voiceCloneController := controllers.NewVoiceCloneController(db, cfg)
 	poolStatsController := controllers.NewPoolStatsController()
+	learningController := &controllers.LearningController{DB: db}
 
 	// 初始化聊天历史控制器（使用传入的 cfg，不重新 Load 避免内嵌时读错路径）
 	audioBasePath := "./storage/chat_history/audio"
@@ -99,6 +100,31 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 			auth.GET("/profile", authController.GetProfile)
 			// 通用接口，获取系统中的设备信息
 			auth.GET("/dashboard/stats", userController.GetDashboardStats)
+
+			// IT English Learning API
+			learning := auth.Group("/learning")
+			{
+				// Scenarios
+				learning.GET("/scenarios", learningController.ListScenarios)
+				learning.GET("/scenarios/:slug", learningController.GetScenario)
+
+				// Writing
+				learning.POST("/writing/submit", learningController.SubmitWriting)
+				learning.GET("/writing/history", learningController.GetWritingHistory)
+				learning.GET("/writing/:id/feedback", learningController.GetWritingFeedback)
+
+				// Speaking
+				learning.POST("/speaking/submit", learningController.SubmitSpeaking)
+				learning.GET("/speaking/history", learningController.GetSpeakingHistory)
+
+				// Phrases
+				learning.POST("/phrases", learningController.SavePhrase)
+				learning.GET("/phrases", learningController.ListPhrases)
+				learning.DELETE("/phrases/:id", learningController.DeletePhrase)
+
+				// Progress
+				learning.GET("/progress", learningController.GetProgress)
+			}
 			// 设备角色接口（管理员和普通用户均可访问，控制器内做权限校验）
 			auth.POST("/devices/:id/apply-role", adminController.ApplyRoleToDevice)
 
